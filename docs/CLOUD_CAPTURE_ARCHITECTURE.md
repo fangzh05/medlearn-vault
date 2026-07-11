@@ -27,7 +27,21 @@ The Worker exposes only `GET /`, `GET /health`, `POST /v1/captures`,
 `GET /v1/jobs/:job_id`, and `GET /v1/proposals/:proposal_id`. Public health routes are unauthenticated;
 all `/v1/*` routes use one bearer token stored as a Worker secret. It binds only the
 `medlearn-control` bucket and dispatches fixed server-side repository, workflow, and ref values.
-The exact request bytes are content-addressed and idempotency claims use conditional R2 creation.
+The exact request bytes are content-addressed as an `intake_digest` under
+`v1/intakes/sha256/<digest>.json`; this is deliberately distinct from the canonical CaptureDraft
+digest used by proposals. JobRecord 0.2.0 carries only control metadata.
+
+An idempotency claim fixes one `job_id` and intake digest. Every retry repairs a missing intake or
+job before continuing. Dispatch uses a conditional 30-second lease: one concurrent caller owns the
+attempt, expired/interrupted leases and failed attempts are retryable, and accepted handoffs advance
+to `dispatched` with compare-and-swap. This is at-least-once dispatch, not an exactly-once claim;
+the future workflow must deduplicate by `job_id`. Allowed forward status transitions are
+`received → dispatched|failed|expired`, `dispatched → running|failed|expired`, and
+`running → succeeded|blocked|failed|expired`; `failed → dispatched|expired` supports recovery.
+Terminal `succeeded`, `blocked`, and `expired` records reject stale overwrites.
+
+All `/v1/*` responses are `Cache-Control: no-store` and vary on Authorization. Missing or weak
+secrets/bindings fail closed with sanitized `503 SERVICE_MISCONFIGURED`.
 
 These services are replaceable adapters, not core dependencies. This slice intentionally contains
 no GitHub workflow implementation, approval, commit, Vault write, Obsidian integration, Skill,

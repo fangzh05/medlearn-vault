@@ -12,9 +12,11 @@ from medlearn_vault.bundle import ContractBundle
 from medlearn_vault.capture import (
     CaptureDraft,
     CaptureProposal,
+    IntakeEnvelope,
     build_capture_proposal,
     capture_proposal_digest,
     contract_bundle_digest,
+    extract_capture_draft,
     render_capture_proposal_markdown,
 )
 from medlearn_vault.domain import (
@@ -59,6 +61,7 @@ SCHEMA_MODELS: dict[str, type[BaseModel]] = {
 WORKFLOW_SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "capture_draft": CaptureDraft,
     "capture_proposal": CaptureProposal,
+    "intake_envelope": IntakeEnvelope,
 }
 
 
@@ -144,6 +147,20 @@ def validate_capture_draft(path: Path) -> None:
         _safe_error("INVALID_CAPTURE_DRAFT", "draft", type(exc).__name__)
         raise typer.Exit(1) from exc
     typer.echo(f"draft: valid ({draft.context.session_id})")
+
+
+@capture_app.command("extract-intake")
+def extract_intake(path: Path, expected_intake_digest: str, output: Path) -> None:
+    try:
+        draft_bytes, draft_digest = extract_capture_draft(
+            path.read_bytes(), expected_intake_digest
+        )
+        output.write_bytes(draft_bytes)
+    except (OSError, ValidationError, ValueError) as exc:
+        code = str(exc) if str(exc) == "INTAKE_DIGEST_MISMATCH" else "INVALID_INTAKE_ENVELOPE"
+        _safe_error(code, "intake", type(exc).__name__)
+        raise typer.Exit(1) from exc
+    typer.echo(f"draft_digest={draft_digest}")
 
 
 @capture_app.command("propose")

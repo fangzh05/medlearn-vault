@@ -1,28 +1,26 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://medlearn.local/contracts/job-record-0.1.0.schema.json",
+  "$id": "https://medlearn.local/contracts/job-record-0.2.0.schema.json",
   "title": "JobRecord",
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "job_version",
-    "job_id",
-    "status",
-    "draft_digest",
-    "draft_object_key",
-    "created_at",
-    "updated_at"
+    "job_version", "job_id", "status", "intake_digest", "intake_object_key",
+    "dispatch_attempt", "created_at", "updated_at"
   ],
   "properties": {
-    "job_version": { "const": "0.1.0" },
+    "job_version": { "const": "0.2.0" },
     "job_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$" },
     "status": {
       "enum": ["received", "dispatched", "running", "succeeded", "blocked", "failed", "expired"]
     },
-    "draft_digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
-    "draft_object_key": { "type": "string", "pattern": "^v1/drafts/sha256/[a-f0-9]{64}\\.json$" },
+    "intake_digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "intake_object_key": { "type": "string", "pattern": "^v1/intakes/sha256/[a-f0-9]{64}\\.json$" },
     "proposal_id": { "type": "string", "pattern": "^proposal_[a-f0-9]{32}$" },
     "workflow_run_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$" },
+    "dispatch_attempt": { "type": "integer", "minimum": 0 },
+    "dispatch_lease_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$" },
+    "dispatch_lease_expires_at": { "type": "string", "format": "date-time" },
     "created_at": { "type": "string", "format": "date-time" },
     "updated_at": { "type": "string", "format": "date-time" },
     "error_code": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]{0,127}$" }
