@@ -1,21 +1,21 @@
 from datetime import datetime
 from typing import Annotated
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, PlainSerializer
+from pydantic import AfterValidator, BaseModel, ConfigDict, PlainSerializer
 
 
 class DomainModel(BaseModel):
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
 
-def _aware(value: object) -> object:
-    if isinstance(value, datetime) and (value.tzinfo is None or value.utcoffset() is None):
+def _aware(value: datetime) -> datetime:
+    if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError("datetime must include a timezone offset")
     return value
 
 
 AwareDatetime = Annotated[
     datetime,
-    BeforeValidator(_aware),
+    AfterValidator(_aware),
     PlainSerializer(lambda value: value.isoformat(), return_type=str),
 ]

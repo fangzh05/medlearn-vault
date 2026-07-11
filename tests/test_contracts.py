@@ -6,13 +6,22 @@ from pydantic import ValidationError
 from medlearn_vault.domain import (
     ConceptAlias,
     ConceptEntity,
+    ConceptRelation,
     DisciplineLens,
     LearnerEvidence,
     MedicalClaim,
     SourceCitation,
 )
 from medlearn_vault.domain.chapters import ChapterDossier, ExamSummary
-from medlearn_vault.identifiers import claim_id, concept_id, knowledge_unit_id, relation_id
+from medlearn_vault.domain.learner import ConceptMention
+from medlearn_vault.identifiers import (
+    claim_id,
+    concept_fingerprint,
+    concept_id,
+    knowledge_unit_id,
+    normalize_text,
+    relation_id,
+)
 from medlearn_vault.registry import preview_merge, resolve_alias
 
 
@@ -69,14 +78,38 @@ def test_ambiguous_terms_return_candidates() -> None:
     assert len(result.candidate_concept_ids) == 2
 
 
-def test_stable_ids_are_stable() -> None:
-    functions = [
-        lambda: concept_id("胃食管反流病", "disease"),
-        lambda: claim_id("PPI improves symptoms", ["disease_gerd"]),
-        lambda: relation_id("disease_gerd", "treated_by", "drug_class_ppi"),
-        lambda: knowledge_unit_id("treatment", "治疗", ["disease_gerd"]),
-    ]
-    assert all(fn() == fn() for fn in functions)
+def test_identifier_golden_contracts() -> None:
+    assert concept_id("medlearn:concept:gerd:v1") == "concept_00ac8ecde7821a56"
+    assert (
+        concept_fingerprint("disease", "胃食管反流病", ["GERD", "  GＥＲＤ  "])
+        == "cfp_fd0e0b02b895ab53"
+    )
+    assert claim_id("PPI improves symptoms", ["drug_ppi", "disease_gerd"]) == "cl_ff821f210726c2ca"
+    assert relation_id("disease_gerd", "treated_by", "drug_ppi") == "rel_4740b55af68e31d3"
+    assert (
+        knowledge_unit_id("treatment", "治疗", ["drug_ppi", "disease_gerd"])
+        == "ku_eabb86a84df4b4bb"
+    )
+
+
+def test_identifier_inputs_are_normalized_and_order_independent() -> None:
+    assert normalize_text("  GＥＲＤ  ") == "gerd"
+    assert claim_id("ＡＢＣ", ["b", "a"]) == claim_id("abc", ["a", "b"])
+    assert knowledge_unit_id("机制", " 休克 ", ["b", "a"]) == knowledge_unit_id(
+        "机制", "休克", ["a", "b"]
+    )
+
+
+def test_canonical_name_change_does_not_change_permanent_id() -> None:
+    permanent_id = concept_id("medlearn:concept:gerd:v1")
+    before = ConceptEntity(
+        concept_id=permanent_id, canonical_name="胃食管反流病", concept_type="disease"
+    )
+    after = ConceptEntity(concept_id=permanent_id, canonical_name="GERD", concept_type="disease")
+    assert before.concept_id == after.concept_id
+    assert concept_fingerprint("disease", before.canonical_name) != concept_fingerprint(
+        "disease", after.canonical_name
+    )
 
 
 def test_chinese_round_trip_and_display_form() -> None:
@@ -110,6 +143,16 @@ def test_all_datetimes_require_timezone() -> None:
     assert LearnerEvidence(observed_at=datetime(2026, 1, 1, tzinfo=UTC), **kwargs)
 
 
+def test_json_datetime_string_requires_timezone() -> None:
+    payload = (
+        '{"evidence_id":"e1","concept_id":"disease_gerd",'
+        '"evidence_type":"incorrect","confidence":0.8,"rationale":"x",'
+        '"message_id":"m1","observed_at":"2026-01-01T08:00:00"}'
+    )
+    with pytest.raises(ValidationError):
+        LearnerEvidence.model_validate_json(payload)
+
+
 def test_learning_evidence_cannot_change_claim_truth() -> None:
     statement = "PPI treats GERD"
     claim = MedicalClaim(
@@ -117,8 +160,10 @@ def test_learning_evidence_cannot_change_claim_truth() -> None:
         claim_type="treatment",
         statement=statement,
         concept_ids=["disease_gerd"],
+        evidence_state="supported",
         verification_status="source_backed",
         medical_authority=4,
+        citations=[SourceCitation(source_id="guideline", locator="recommendation 1")],
     )
     evidence = LearnerEvidence(
         evidence_id="e1",
@@ -129,8 +174,8 @@ def test_learning_evidence_cannot_change_claim_truth() -> None:
         message_id="m1",
         observed_at=datetime.now(UTC),
     )
-    assert evidence.model_dump().keys().isdisjoint({"truth_value", "statement", "citations"})
-    assert claim.truth_value == "supported"
+    assert evidence.model_dump().keys().isdisjoint({"evidence_state", "statement", "citations"})
+    assert claim.evidence_state == "supported"
 
 
 def test_lens_must_reference_enclosing_concept() -> None:
@@ -154,3 +199,85 @@ def test_concept_merge_is_preview_only() -> None:
     assert preview.requires_confirmation is True
     assert preview.source_concept_ids == ("disease_aaa", "disease_bbb")
     assert first.status == second.status == "active"
+
+
+def test_duplicate_discipline_lens_is_rejected() -> None:
+    lens = DisciplineLens(
+        lens_id="one", concept_id="disease_gerd", discipline_id="internal_medicine"
+    )
+    with pytest.raises(ValidationError):
+        ConceptEntity(
+            concept_id="disease_gerd",
+            canonical_name="GERD",
+            concept_type="disease",
+            discipline_lenses=[
+                lens,
+                lens.model_copy(update={"lens_id": "two"}),
+            ],
+        )
+
+
+def test_duplicate_relations_are_deduplicated() -> None:
+    relation = ConceptRelation(
+        relation_id="rel_4740b55af68e31d3",
+        source_concept_id="disease_gerd",
+        relation_type="treated_by",
+        target_concept_id="drug_ppi",
+    )
+    concept = ConceptEntity(
+        concept_id="disease_gerd",
+        canonical_name="GERD",
+        concept_type="disease",
+        relations=[relation, relation],
+    )
+    assert concept.relations == [relation]
+
+
+@pytest.mark.parametrize(
+    ("status", "merged_into"),
+    [("merged", None), ("active", "disease_other"), ("deprecated", "disease_other")],
+)
+def test_concept_status_invariants(status: str, merged_into: str | None) -> None:
+    with pytest.raises(ValidationError):
+        ConceptEntity(
+            concept_id="disease_gerd",
+            canonical_name="GERD",
+            concept_type="disease",
+            status=status,
+            merged_into=merged_into,
+        )
+
+
+def test_resolved_mention_requires_one_matching_candidate() -> None:
+    valid = ConceptMention(
+        surface_text="GERD",
+        candidate_concept_ids=["disease_gerd"],
+        resolved_concept_id="disease_gerd",
+        resolution_status="resolved",
+        confidence=1,
+    )
+    assert valid.resolved_concept_id == "disease_gerd"
+    with pytest.raises(ValidationError):
+        ConceptMention(
+            surface_text="MS",
+            candidate_concept_ids=["disease_ms"],
+            resolved_concept_id="disease_ms",
+            resolution_status="ambiguous",
+            confidence=0.5,
+        )
+
+
+def test_claim_source_invariants() -> None:
+    base = dict(
+        claim_id="cl_ff821f210726c2ca",
+        claim_type="treatment",
+        statement="PPI improves symptoms",
+        concept_ids=["disease_gerd"],
+        medical_authority=4,
+    )
+    with pytest.raises(ValidationError):
+        MedicalClaim(**base, verification_status="verified_reference")
+    with pytest.raises(ValidationError):
+        MedicalClaim(**base, evidence_state="supported", verification_status="unverified_chat")
+    with pytest.raises(ValidationError):
+        MedicalClaim(**base, course_relevance={"internal_medicine": 6})

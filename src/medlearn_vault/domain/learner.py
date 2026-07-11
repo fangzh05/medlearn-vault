@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from medlearn_vault.domain.base import AwareDatetime, DomainModel
 
@@ -12,6 +12,17 @@ class ConceptMention(DomainModel):
     resolution_status: Literal["resolved", "ambiguous", "new_candidate", "rejected"]
     confidence: float = Field(ge=0, le=1)
     message_ids: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_resolution(self) -> "ConceptMention":
+        if self.resolution_status == "resolved":
+            if self.resolved_concept_id is None:
+                raise ValueError("resolved mentions require resolved_concept_id")
+            if self.candidate_concept_ids != [self.resolved_concept_id]:
+                raise ValueError("resolved mentions require exactly one matching candidate")
+        elif self.resolved_concept_id is not None:
+            raise ValueError("only resolved mentions may define resolved_concept_id")
+        return self
 
 
 class LearnerEvidence(DomainModel):
@@ -54,7 +65,7 @@ class OpenQuestion(DomainModel):
 
 
 class LearningCapture(DomainModel):
-    schema_version: Literal["1.0.0"] = "1.0.0"
+    schema_version: Literal["1.1.0"] = "1.1.0"
     session_id: str
     source_id: str
     captured_at: AwareDatetime

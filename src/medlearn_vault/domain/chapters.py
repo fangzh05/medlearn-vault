@@ -33,8 +33,15 @@ class ExamSummary(DomainModel):
     awareness_only: list[str] = Field(default_factory=list)
 
 
+class CrossDisciplineLink(DomainModel):
+    concept_id: str = Field(min_length=1)
+    discipline_id: str = Field(min_length=1)
+    chapter_ref: str = Field(min_length=1)
+    relationship: str = Field(min_length=1)
+
+
 class ChapterDossier(DomainModel):
-    schema_version: Literal["1.0.0"] = "1.0.0"
+    schema_version: Literal["1.1.0"] = "1.1.0"
     chapter_id: str
     course_id: str
     discipline_id: str
@@ -47,7 +54,7 @@ class ChapterDossier(DomainModel):
     learning_objectives: list[LearningObjective] = Field(default_factory=list)
     knowledge_units: list[KnowledgeUnit] = Field(default_factory=list)
     exam_summary: ExamSummary
-    cross_discipline_links: list[dict[str, str]] = Field(default_factory=list)
+    cross_discipline_links: list[CrossDisciplineLink] = Field(default_factory=list)
     quality_status: Literal[
         "draft", "source_gap", "conflict_review", "content_review", "publishable", "published"
     ] = "draft"

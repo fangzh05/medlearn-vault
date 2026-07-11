@@ -1,0 +1,133 @@
+{
+  "$defs": {
+    "SourceCitation": {
+      "additionalProperties": false,
+      "properties": {
+        "source_id": {
+          "title": "Source Id",
+          "type": "string"
+        },
+        "locator": {
+          "title": "Locator",
+          "type": "string"
+        },
+        "vault_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Vault Path"
+        },
+        "quotation": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Quotation"
+        }
+      },
+      "required": [
+        "source_id",
+        "locator"
+      ],
+      "title": "SourceCitation",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "claim_id": {
+      "pattern": "^cl_[a-f0-9]{12,64}$",
+      "title": "Claim Id",
+      "type": "string"
+    },
+    "claim_type": {
+      "title": "Claim Type",
+      "type": "string"
+    },
+    "statement": {
+      "minLength": 1,
+      "title": "Statement",
+      "type": "string"
+    },
+    "evidence_state": {
+      "default": "unassessed",
+      "enum": [
+        "unassessed",
+        "supported",
+        "refuted",
+        "conflicting"
+      ],
+      "title": "Evidence State",
+      "type": "string"
+    },
+    "concept_ids": {
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Concept Ids",
+      "type": "array"
+    },
+    "discipline_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Discipline Ids",
+      "type": "array"
+    },
+    "citations": {
+      "items": {
+        "$ref": "#/$defs/SourceCitation"
+      },
+      "title": "Citations",
+      "type": "array"
+    },
+    "verification_status": {
+      "default": "unverified_chat",
+      "enum": [
+        "unverified_chat",
+        "source_backed",
+        "verified_reference",
+        "conflicted",
+        "deprecated"
+      ],
+      "title": "Verification Status",
+      "type": "string"
+    },
+    "medical_authority": {
+      "maximum": 5,
+      "minimum": 0,
+      "title": "Medical Authority",
+      "type": "integer"
+    },
+    "course_relevance": {
+      "additionalProperties": {
+        "maximum": 5,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "title": "Course Relevance",
+      "type": "object"
+    }
+  },
+  "required": [
+    "claim_id",
+    "claim_type",
+    "statement",
+    "concept_ids",
+    "medical_authority"
+  ],
+  "title": "MedicalClaim",
+  "type": "object"
+}

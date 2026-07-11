@@ -1,0 +1,334 @@
+{
+  "$defs": {
+    "ConceptMention": {
+      "additionalProperties": false,
+      "properties": {
+        "surface_text": {
+          "title": "Surface Text",
+          "type": "string"
+        },
+        "candidate_concept_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Candidate Concept Ids",
+          "type": "array"
+        },
+        "resolved_concept_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Resolved Concept Id"
+        },
+        "resolution_status": {
+          "enum": [
+            "resolved",
+            "ambiguous",
+            "new_candidate",
+            "rejected"
+          ],
+          "title": "Resolution Status",
+          "type": "string"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "message_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Message Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "surface_text",
+        "resolution_status",
+        "confidence"
+      ],
+      "title": "ConceptMention",
+      "type": "object"
+    },
+    "LearnerEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "evidence_id": {
+          "title": "Evidence Id",
+          "type": "string"
+        },
+        "concept_id": {
+          "title": "Concept Id",
+          "type": "string"
+        },
+        "knowledge_unit_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Knowledge Unit Id"
+        },
+        "evidence_type": {
+          "enum": [
+            "correct_independent",
+            "correct_after_hint",
+            "guessed_correct",
+            "partial",
+            "unknown",
+            "incorrect",
+            "high_confidence_incorrect",
+            "self_report_only"
+          ],
+          "title": "Evidence Type",
+          "type": "string"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "rationale": {
+          "title": "Rationale",
+          "type": "string"
+        },
+        "message_id": {
+          "title": "Message Id",
+          "type": "string"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "evidence_id",
+        "concept_id",
+        "evidence_type",
+        "confidence",
+        "rationale",
+        "message_id",
+        "observed_at"
+      ],
+      "title": "LearnerEvidence",
+      "type": "object"
+    },
+    "Misconception": {
+      "additionalProperties": false,
+      "properties": {
+        "misconception_id": {
+          "title": "Misconception Id",
+          "type": "string"
+        },
+        "concept_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Concept Ids",
+          "type": "array"
+        },
+        "discipline_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Discipline Ids",
+          "type": "array"
+        },
+        "error_logic": {
+          "title": "Error Logic",
+          "type": "string"
+        },
+        "correct_logic": {
+          "title": "Correct Logic",
+          "type": "string"
+        },
+        "severity": {
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "title": "Severity",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "active",
+            "improving",
+            "resolved",
+            "relapsed"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "source_message_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Source Message Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "misconception_id",
+        "concept_ids",
+        "error_logic",
+        "correct_logic",
+        "severity",
+        "status",
+        "source_message_ids"
+      ],
+      "title": "Misconception",
+      "type": "object"
+    },
+    "OpenQuestion": {
+      "additionalProperties": false,
+      "properties": {
+        "question_id": {
+          "title": "Question Id",
+          "type": "string"
+        },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        },
+        "concept_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Concept Ids",
+          "type": "array"
+        },
+        "discipline_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Discipline Id"
+        },
+        "priority": {
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "title": "Priority",
+          "type": "string"
+        }
+      },
+      "required": [
+        "question_id",
+        "text",
+        "concept_ids",
+        "priority"
+      ],
+      "title": "OpenQuestion",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.1.0",
+      "default": "1.1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "session_id": {
+      "title": "Session Id",
+      "type": "string"
+    },
+    "source_id": {
+      "title": "Source Id",
+      "type": "string"
+    },
+    "captured_at": {
+      "format": "date-time",
+      "title": "Captured At",
+      "type": "string"
+    },
+    "discipline_id": {
+      "title": "Discipline Id",
+      "type": "string"
+    },
+    "course_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Course Id"
+    },
+    "chapter_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Chapter Id"
+    },
+    "concept_mentions": {
+      "items": {
+        "$ref": "#/$defs/ConceptMention"
+      },
+      "title": "Concept Mentions",
+      "type": "array"
+    },
+    "learner_evidence": {
+      "items": {
+        "$ref": "#/$defs/LearnerEvidence"
+      },
+      "title": "Learner Evidence",
+      "type": "array"
+    },
+    "misconceptions": {
+      "items": {
+        "$ref": "#/$defs/Misconception"
+      },
+      "title": "Misconceptions",
+      "type": "array"
+    },
+    "open_questions": {
+      "items": {
+        "$ref": "#/$defs/OpenQuestion"
+      },
+      "title": "Open Questions",
+      "type": "array"
+    }
+  },
+  "required": [
+    "session_id",
+    "source_id",
+    "captured_at",
+    "discipline_id"
+  ],
+  "title": "LearningCapture",
+  "type": "object"
+}

@@ -27,8 +27,18 @@ def stable_id(prefix: str, *parts: Any, length: int = 16) -> str:
     return f"{prefix}_{digest}"
 
 
-def concept_id(canonical_name: str, concept_type: str) -> str:
-    return stable_id("concept", concept_type, canonical_name)
+def concept_id(identity_key: str) -> str:
+    """Create a permanent ID from an immutable, caller-owned identity key."""
+    if not normalize_text(identity_key):
+        raise ValueError("identity_key cannot be empty")
+    return stable_id("concept", identity_key)
+
+
+def concept_fingerprint(concept_type: str, canonical_name: str, aliases: Sequence[str] = ()) -> str:
+    """Create a mutable matching fingerprint; never use this as the concept ID."""
+    return stable_id(
+        "cfp", concept_type, canonical_name, sorted(normalize_text(a) for a in aliases)
+    )
 
 
 def claim_id(statement: str, concept_ids: Sequence[str]) -> str:

@@ -15,4 +15,4 @@ jobs:
       - run: ruff check .
       - run: mypy src
       - run: pytest
-
+      - run: medlearn schema check
