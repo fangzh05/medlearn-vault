@@ -1,0 +1,64 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.1.1",
+      "default": "1.1.1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "lens_id": {
+      "pattern": "^lens_[a-f0-9]{32}$",
+      "title": "Lens Id",
+      "type": "string"
+    },
+    "concept_id": {
+      "minLength": 1,
+      "title": "Concept Id",
+      "type": "string"
+    },
+    "discipline_id": {
+      "title": "Discipline Id",
+      "type": "string"
+    },
+    "course_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Course Id"
+    },
+    "focus_questions": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Focus Questions",
+      "type": "array"
+    },
+    "discipline_summary": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Discipline Summary"
+    }
+  },
+  "required": [
+    "lens_id",
+    "concept_id",
+    "discipline_id"
+  ],
+  "title": "DisciplineLens",
+  "type": "object"
+}

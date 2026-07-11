@@ -20,8 +20,14 @@ class ConceptMention(EventModel):
                 raise ValueError("resolved mentions require resolved_concept_id")
             if self.candidate_concept_ids != (self.resolved_concept_id,):
                 raise ValueError("resolved mentions require exactly one matching candidate")
+            if self.confidence <= 0:
+                raise ValueError("resolved mentions require positive confidence")
         elif self.resolved_concept_id is not None:
             raise ValueError("only resolved mentions may define resolved_concept_id")
+        if self.resolution_status == "ambiguous" and len(self.candidate_concept_ids) < 2:
+            raise ValueError("ambiguous mentions require at least two candidates")
+        if self.resolution_status in {"new_candidate", "rejected"} and self.candidate_concept_ids:
+            raise ValueError("new or rejected mentions cannot retain existing candidates")
         return self
 
 
@@ -49,8 +55,9 @@ class MisconceptionObservation(EventModel):
     observation_id: str
     concept_ids: tuple[str, ...]
     discipline_ids: tuple[str, ...] = ()
-    error_logic: str
-    correct_logic: str
+    observed_error_logic: str
+    proposed_correction: str | None = None
+    correction_claim_ids: tuple[str, ...] = ()
     severity: Literal["low", "medium", "high"]
     evidence_message_ids: tuple[str, ...]
     observed_at: AwareDatetime
@@ -58,19 +65,19 @@ class MisconceptionObservation(EventModel):
 
 class MisconceptionState(DomainModel):
     misconception_id: str
-    concept_ids: list[str]
+    concept_ids: tuple[str, ...]
     first_seen_at: AwareDatetime
     last_seen_at: AwareDatetime
     current_status: Literal["active", "improving", "resolved", "relapsed"]
-    resolution_evidence_ids: list[str] = Field(default_factory=list)
+    resolution_evidence_ids: tuple[str, ...] = ()
     relapse_count: int = Field(default=0, ge=0)
 
 
 class LearnerState(DomainModel):
-    schema_version: Literal["1.1.0"] = "1.1.0"
+    schema_version: Literal["1.1.1"] = "1.1.1"
     learner_id: str
     computed_at: AwareDatetime
-    misconception_states: list[MisconceptionState] = Field(default_factory=list)
+    misconception_states: tuple[MisconceptionState, ...] = ()
 
 
 class OpenQuestion(EventModel):
@@ -82,7 +89,7 @@ class OpenQuestion(EventModel):
 
 
 class LearningCapture(EventModel):
-    schema_version: Literal["1.1.0"] = "1.1.0"
+    schema_version: Literal["1.1.1"] = "1.1.1"
     session_id: str
     source_id: str
     captured_at: AwareDatetime

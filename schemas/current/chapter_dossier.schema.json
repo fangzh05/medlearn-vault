@@ -4,6 +4,7 @@
       "additionalProperties": false,
       "properties": {
         "must_memorize": {
+          "default": [],
           "items": {
             "type": "string"
           },
@@ -11,6 +12,7 @@
           "type": "array"
         },
         "must_understand": {
+          "default": [],
           "items": {
             "type": "string"
           },
@@ -18,6 +20,7 @@
           "type": "array"
         },
         "case_likely": {
+          "default": [],
           "items": {
             "type": "string"
           },
@@ -25,6 +28,7 @@
           "type": "array"
         },
         "mcq_traps": {
+          "default": [],
           "items": {
             "type": "string"
           },
@@ -32,6 +36,7 @@
           "type": "array"
         },
         "awareness_only": {
+          "default": [],
           "items": {
             "type": "string"
           },
@@ -67,6 +72,7 @@
           "type": "array"
         },
         "claim_ids": {
+          "default": [],
           "items": {
             "type": "string"
           },
@@ -74,6 +80,7 @@
           "type": "array"
         },
         "source_refs": {
+          "default": [],
           "items": {
             "type": "string"
           },
@@ -84,6 +91,7 @@
           "title": "Content"
         },
         "figure_spec_refs": {
+          "default": [],
           "items": {
             "type": "string"
           },
@@ -91,16 +99,23 @@
           "type": "array"
         },
         "table_spec_refs": {
+          "default": [],
           "items": {
             "type": "string"
           },
           "title": "Table Spec Refs",
           "type": "array"
         },
-        "fingerprint": {
+        "match_fingerprint": {
           "default": "",
           "pattern": "^kufp_[a-f0-9]{16}$",
-          "title": "Fingerprint",
+          "title": "Match Fingerprint",
+          "type": "string"
+        },
+        "content_hash": {
+          "default": "",
+          "pattern": "^content_[a-f0-9]{64}$",
+          "title": "Content Hash",
           "type": "string"
         }
       },
@@ -135,6 +150,7 @@
           "type": "string"
         },
         "source_refs": {
+          "default": [],
           "items": {
             "type": "string"
           },
@@ -165,8 +181,8 @@
   "additionalProperties": false,
   "properties": {
     "schema_version": {
-      "const": "1.1.0",
-      "default": "1.1.0",
+      "const": "1.1.1",
+      "default": "1.1.1",
       "title": "Schema Version",
       "type": "string"
     },
@@ -208,6 +224,7 @@
       "type": "array"
     },
     "learning_objectives": {
+      "default": [],
       "items": {
         "$ref": "#/$defs/LearningObjective"
       },
@@ -215,6 +232,7 @@
       "type": "array"
     },
     "knowledge_units": {
+      "default": [],
       "items": {
         "$ref": "#/$defs/KnowledgeUnit"
       },

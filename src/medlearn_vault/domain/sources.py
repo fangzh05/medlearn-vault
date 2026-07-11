@@ -12,7 +12,26 @@ def _vault_path(value: object) -> str:
         raise ValueError("Vault path must be a non-empty string")
     raw = value.replace("\\", "/")
     path = PurePosixPath(raw)
-    if path.is_absolute() or PureWindowsPath(value).is_absolute() or ".." in path.parts:
+    windows_path = PureWindowsPath(value)
+    reserved = {
+        "CON",
+        "PRN",
+        "AUX",
+        "NUL",
+        *(f"COM{i}" for i in range(1, 10)),
+        *(f"LPT{i}" for i in range(1, 10)),
+    }
+    has_reserved_part = any(
+        part.split(".", 1)[0].upper() in reserved for part in windows_path.parts
+    )
+    if (
+        path.is_absolute()
+        or windows_path.is_absolute()
+        or windows_path.drive
+        or ":" in value
+        or ".." in path.parts
+        or has_reserved_part
+    ):
         raise ValueError("Vault path must be relative and cannot contain '..'")
     return path.as_posix()
 
@@ -57,7 +76,7 @@ SourceLocator = Annotated[
 
 
 class SourceDocument(DomainModel):
-    schema_version: Literal["1.1.0"] = "1.1.0"
+    schema_version: Literal["1.1.1"] = "1.1.1"
     source_id: str = Field(pattern=r"^source_[a-f0-9]{32}$")
     source_type: Literal[
         "textbook", "guideline", "course_slide", "paper", "question_bank", "learning_chat", "web"

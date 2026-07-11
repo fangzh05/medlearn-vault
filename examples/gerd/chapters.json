@@ -1,0 +1,32 @@
+[
+  {
+    "schema_version": "1.1.1",
+    "chapter_id": "chapter_internal_gerd",
+    "course_id": "internal_medicine_2026",
+    "discipline_id": "internal_medicine",
+    "title": "胃食管反流病",
+    "topic_archetype": "disease",
+    "concept_ids": ["concept_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+    "exam_summary": {}
+  },
+  {
+    "schema_version": "1.1.1",
+    "chapter_id": "chapter_surgery_antireflux",
+    "course_id": "surgery_2026",
+    "discipline_id": "surgery",
+    "title": "抗反流手术",
+    "topic_archetype": "procedure",
+    "concept_ids": ["concept_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+    "exam_summary": {}
+  },
+  {
+    "schema_version": "1.1.1",
+    "chapter_id": "chapter_pathology_esophagus",
+    "course_id": "pathology_2026",
+    "discipline_id": "pathology",
+    "title": "反流相关食管病理",
+    "topic_archetype": "disease",
+    "concept_ids": ["concept_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+    "exam_summary": {}
+  }
+]

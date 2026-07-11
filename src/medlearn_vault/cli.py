@@ -11,6 +11,8 @@ from medlearn_vault import __version__
 from medlearn_vault.domain import (
     ChapterDossier,
     ConceptEntity,
+    ConceptRelation,
+    DisciplineLens,
     LearnerState,
     LearningCapture,
     MedicalClaim,
@@ -25,6 +27,8 @@ app.add_typer(concept_app, name="concept")
 
 SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "concept_entity": ConceptEntity,
+    "concept_relation": ConceptRelation,
+    "discipline_lens": DisciplineLens,
     "medical_claim": MedicalClaim,
     "source_document": SourceDocument,
     "chapter_dossier": ChapterDossier,

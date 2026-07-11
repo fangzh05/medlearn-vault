@@ -21,6 +21,28 @@
       "title": "ChatMessageLocator",
       "type": "object"
     },
+    "CourseRelevance": {
+      "additionalProperties": false,
+      "properties": {
+        "course_id": {
+          "minLength": 1,
+          "title": "Course Id",
+          "type": "string"
+        },
+        "score": {
+          "maximum": 5,
+          "minimum": 0,
+          "title": "Score",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "course_id",
+        "score"
+      ],
+      "title": "CourseRelevance",
+      "type": "object"
+    },
     "FigureLocator": {
       "additionalProperties": false,
       "properties": {
@@ -191,6 +213,12 @@
   },
   "additionalProperties": false,
   "properties": {
+    "schema_version": {
+      "const": "1.1.1",
+      "default": "1.1.1",
+      "title": "Schema Version",
+      "type": "string"
+    },
     "claim_id": {
       "pattern": "^claim_[a-f0-9]{32}$",
       "title": "Claim Id",
@@ -246,25 +274,39 @@
         "unverified_chat",
         "source_backed",
         "verified_reference",
-        "conflicted",
-        "deprecated"
+        "conflicted"
       ],
       "title": "Verification Status",
       "type": "string"
     },
+    "claim_status": {
+      "default": "active",
+      "enum": [
+        "active",
+        "deprecated",
+        "superseded"
+      ],
+      "title": "Claim Status",
+      "type": "string"
+    },
     "course_relevance": {
-      "additionalProperties": {
-        "maximum": 5,
-        "minimum": 0,
-        "type": "integer"
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/CourseRelevance"
       },
       "title": "Course Relevance",
-      "type": "object"
+      "type": "array"
     },
-    "fingerprint": {
+    "match_fingerprint": {
       "default": "",
       "pattern": "^clfp_[a-f0-9]{16}$",
-      "title": "Fingerprint",
+      "title": "Match Fingerprint",
+      "type": "string"
+    },
+    "content_hash": {
+      "default": "",
+      "pattern": "^content_[a-f0-9]{64}$",
+      "title": "Content Hash",
       "type": "string"
     }
   },

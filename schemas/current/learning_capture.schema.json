@@ -151,13 +151,29 @@
           "title": "Discipline Ids",
           "type": "array"
         },
-        "error_logic": {
-          "title": "Error Logic",
+        "observed_error_logic": {
+          "title": "Observed Error Logic",
           "type": "string"
         },
-        "correct_logic": {
-          "title": "Correct Logic",
-          "type": "string"
+        "proposed_correction": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Proposed Correction"
+        },
+        "correction_claim_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Correction Claim Ids",
+          "type": "array"
         },
         "severity": {
           "enum": [
@@ -184,8 +200,7 @@
       "required": [
         "observation_id",
         "concept_ids",
-        "error_logic",
-        "correct_logic",
+        "observed_error_logic",
         "severity",
         "evidence_message_ids",
         "observed_at"
@@ -246,8 +261,8 @@
   "additionalProperties": false,
   "properties": {
     "schema_version": {
-      "const": "1.1.0",
-      "default": "1.1.0",
+      "const": "1.1.1",
+      "default": "1.1.1",
       "title": "Schema Version",
       "type": "string"
     },

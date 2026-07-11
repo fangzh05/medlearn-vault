@@ -1,0 +1,23 @@
+[
+  {
+    "schema_version": "1.1.1",
+    "lens_id": "lens_11111111111111111111111111111111",
+    "concept_id": "concept_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "discipline_id": "internal_medicine",
+    "focus_questions": ["如何诊断和进行药物治疗？"]
+  },
+  {
+    "schema_version": "1.1.1",
+    "lens_id": "lens_22222222222222222222222222222222",
+    "concept_id": "concept_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "discipline_id": "surgery",
+    "focus_questions": ["何时需要抗反流手术？"]
+  },
+  {
+    "schema_version": "1.1.1",
+    "lens_id": "lens_33333333333333333333333333333333",
+    "concept_id": "concept_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "discipline_id": "pathology",
+    "focus_questions": ["Barrett 食管如何发生？"]
+  }
+]

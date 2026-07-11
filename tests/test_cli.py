@@ -10,7 +10,7 @@ runner = CliRunner()
 def test_version() -> None:
     result = runner.invoke(app, ["--version"])
     assert result.exit_code == 0
-    assert result.stdout.strip() == "0.2.0"
+    assert result.stdout.strip() == "0.2.1"
 
 
 def test_schema_export(tmp_path: Path) -> None:
@@ -18,6 +18,8 @@ def test_schema_export(tmp_path: Path) -> None:
     assert result.exit_code == 0
     assert (tmp_path / "concept_entity.schema.json").exists()
     assert (tmp_path / "medical_claim.schema.json").exists()
+    assert (tmp_path / "concept_relation.schema.json").exists()
+    assert (tmp_path / "discipline_lens.schema.json").exists()
     check = runner.invoke(app, ["schema", "check", "--snapshot", str(tmp_path)])
     assert check.exit_code == 0
 

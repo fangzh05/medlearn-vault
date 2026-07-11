@@ -1,0 +1,24 @@
+[
+  {
+    "schema_version": "1.1.1",
+    "concept_id": "concept_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "canonical_name": "胃食管反流病",
+    "preferred_english": "gastroesophageal reflux disease",
+    "concept_type": "disease",
+    "scope_note": "临床诊断实体 GERD，不包含偶发性生理反流。",
+    "aliases": [
+      {"text": "GERD", "language": "en", "alias_type": "abbreviation"}
+    ]
+  },
+  {
+    "schema_version": "1.1.1",
+    "concept_id": "concept_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "canonical_name": "质子泵抑制剂",
+    "preferred_english": "proton pump inhibitor",
+    "concept_type": "drug",
+    "scope_note": "抑制胃壁细胞质子泵的一类药物。",
+    "aliases": [
+      {"text": "PPI", "language": "en", "alias_type": "abbreviation"}
+    ]
+  }
+]
