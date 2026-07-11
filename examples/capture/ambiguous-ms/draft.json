@@ -3,10 +3,11 @@
     "source_id": "source_22222222222222222222222222222222",
     "session_id": "session:ambiguous-ms",
     "discipline_id": "medicine",
+    "session_started_at": "2026-07-11T09:50:00+08:00",
     "captured_at": "2026-07-11T10:00:00+08:00"
   },
   "evidence_messages": [
-    {"message_id": "message:user-ms", "role": "user", "excerpt": "MS 应该怎么理解？"}
+    {"message_id": "message:user-ms", "role": "user", "observed_at": "2026-07-11T09:55:00+08:00", "excerpt": "MS 应该怎么理解？"}
   ],
   "concept_mentions": [
     {"surface_text": "MS", "evidence_message_ids": ["message:user-ms"]}
@@ -17,8 +18,9 @@
       "claim_type": "question",
       "concept_terms": ["MS"],
       "evidence_message_ids": ["message:user-ms"],
-      "speaker_role": "user"
+      "question_priority": "medium"
     }
   ],
-  "misconception_candidates": []
+  "misconception_candidates": [],
+  "learner_evidence_candidates": []
 }

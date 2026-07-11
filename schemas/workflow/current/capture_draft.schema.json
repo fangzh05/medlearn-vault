@@ -59,6 +59,11 @@
           "title": "Origin",
           "type": "string"
         },
+        "session_started_at": {
+          "format": "date-time",
+          "title": "Session Started At",
+          "type": "string"
+        },
         "captured_at": {
           "format": "date-time",
           "title": "Captured At",
@@ -69,6 +74,7 @@
         "source_id",
         "session_id",
         "discipline_id",
+        "session_started_at",
         "captured_at"
       ],
       "title": "CaptureContext",
@@ -90,6 +96,11 @@
           "title": "Role",
           "type": "string"
         },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        },
         "excerpt": {
           "anyOf": [
             {
@@ -106,7 +117,8 @@
       },
       "required": [
         "message_id",
-        "role"
+        "role",
+        "observed_at"
       ],
       "title": "EvidenceMessage",
       "type": "object"
@@ -141,21 +153,29 @@
           "title": "Evidence Message Ids",
           "type": "array"
         },
-        "speaker_role": {
-          "enum": [
-            "user",
-            "assistant"
+        "question_priority": {
+          "anyOf": [
+            {
+              "enum": [
+                "low",
+                "medium",
+                "high"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
           ],
-          "title": "Speaker Role",
-          "type": "string"
+          "default": null,
+          "title": "Question Priority"
         }
       },
       "required": [
         "statement",
         "claim_type",
         "concept_terms",
-        "evidence_message_ids",
-        "speaker_role"
+        "evidence_message_ids"
       ],
       "title": "ExtractedClaimCandidate",
       "type": "object"
@@ -258,6 +278,61 @@
       "title": "ExtractedConceptMention",
       "type": "object"
     },
+    "ExtractedLearnerEvidenceCandidate": {
+      "additionalProperties": false,
+      "properties": {
+        "concept_terms": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Concept Terms",
+          "type": "array"
+        },
+        "evidence_message_ids": {
+          "items": {
+            "pattern": "^[a-z][a-z0-9_:-]{2,127}$",
+            "type": "string"
+          },
+          "title": "Evidence Message Ids",
+          "type": "array"
+        },
+        "evidence_type": {
+          "enum": [
+            "correct_independent",
+            "correct_after_hint",
+            "guessed_correct",
+            "partial",
+            "unknown",
+            "incorrect",
+            "high_confidence_incorrect",
+            "self_report_only"
+          ],
+          "title": "Evidence Type",
+          "type": "string"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "rationale": {
+          "maxLength": 4000,
+          "minLength": 1,
+          "title": "Rationale",
+          "type": "string"
+        }
+      },
+      "required": [
+        "concept_terms",
+        "evidence_message_ids",
+        "evidence_type",
+        "confidence",
+        "rationale"
+      ],
+      "title": "ExtractedLearnerEvidenceCandidate",
+      "type": "object"
+    },
     "ExtractedMisconceptionCandidate": {
       "additionalProperties": false,
       "properties": {
@@ -302,12 +377,22 @@
           },
           "title": "Correction Terms",
           "type": "array"
+        },
+        "severity": {
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "title": "Severity",
+          "type": "string"
         }
       },
       "required": [
         "observed_error_logic",
         "concept_terms",
-        "evidence_message_ids"
+        "evidence_message_ids",
+        "severity"
       ],
       "title": "ExtractedMisconceptionCandidate",
       "type": "object"
@@ -316,8 +401,8 @@
   "additionalProperties": false,
   "properties": {
     "draft_version": {
-      "const": "0.1.0",
-      "default": "0.1.0",
+      "const": "0.2.0",
+      "default": "0.2.0",
       "title": "Draft Version",
       "type": "string"
     },
@@ -346,6 +431,15 @@
       },
       "maxItems": 200,
       "title": "Claim Candidates",
+      "type": "array"
+    },
+    "learner_evidence_candidates": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ExtractedLearnerEvidenceCandidate"
+      },
+      "maxItems": 200,
+      "title": "Learner Evidence Candidates",
       "type": "array"
     },
     "misconception_candidates": {

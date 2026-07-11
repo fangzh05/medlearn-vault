@@ -1,10 +1,10 @@
 {
-  "proposal_version": "0.1.0",
-  "proposal_id": "proposal_1aef8926793e2bf10c05fd344bec2ad7",
+  "proposal_version": "0.2.0",
+  "proposal_id": "proposal_0ae9436207f019363b84cefa052646a0",
   "status": "blocked",
-  "draft_digest": "sha256:dc9f5e8c0ff2f48d4803e37d21950dab160146d68743c368dd81e5978a0efbb2",
-  "base_bundle_digest": "sha256:c1329260008bedffd5af74d6f38122f09d89109453a62364239f536a2c16ce3e",
-  "proposal_digest": "sha256:fd7e05894b6499dedc59e13386a3539198a6f3cb2a4b8fe55abdc88f93499625",
+  "draft_digest": "sha256:f718b4f5466db595fede9707ed18130227e97688765126b3d5af307ee23c72cb",
+  "base_bundle_digest": "sha256:9d845a435f0b700a99be76518205c4e128f1efd27206c7e696cadece5457952f",
+  "proposal_digest": "sha256:d4cb83cd4a6a2ef9a89965a4d6a478a08a0f69c1bcf289604451a463004c1466",
   "context": {
     "source_id": "source_22222222222222222222222222222222",
     "session_id": "session:ambiguous-ms",
@@ -13,6 +13,7 @@
     "chapter_id": null,
     "locale": "zh-CN",
     "origin": "chatgpt_work",
+    "session_started_at": "2026-07-11T09:50:00+08:00",
     "captured_at": "2026-07-11T10:00:00+08:00"
   },
   "concept_resolutions": [
@@ -34,9 +35,42 @@
   "new_concept_candidates": [],
   "claim_proposals": [],
   "learning_capture_candidate": {
-    "source_id": "source_22222222222222222222222222222222",
-    "session_id": "session:ambiguous-ms",
-    "captured_at": "2026-07-11T10:00:00+08:00",
+    "capture": {
+      "schema_version": "1.2.0",
+      "session_id": "session:ambiguous-ms",
+      "source_id": "source_22222222222222222222222222222222",
+      "session_started_at": "2026-07-11T09:50:00+08:00",
+      "captured_at": "2026-07-11T10:00:00+08:00",
+      "discipline_id": "medicine",
+      "course_id": null,
+      "chapter_id": null,
+      "concept_mentions": [
+        {
+          "surface_text": "MS",
+          "candidate_concept_ids": [
+            "concept_66666666666666666666666666666666",
+            "concept_77777777777777777777777777777777"
+          ],
+          "resolved_concept_id": null,
+          "resolution_status": "ambiguous",
+          "confidence": 0.0,
+          "message_ids": [
+            "message:user-ms"
+          ]
+        }
+      ],
+      "learner_evidence": [],
+      "misconception_observations": [],
+      "open_questions": [
+        {
+          "question_id": "question_ddbb3ebc79d9e8dc0a75b7a968535b7b",
+          "text": "MS 应该怎么理解？",
+          "concept_ids": [],
+          "discipline_id": "medicine",
+          "priority": "medium"
+        }
+      ]
+    },
     "observations": [
       {
         "candidate_id": "candidate_observation_80b417f0f7e612859666971b39adc10e",

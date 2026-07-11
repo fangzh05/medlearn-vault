@@ -1,6 +1,13 @@
-# Cloud capture architecture
+# Optional cloud-assisted capture architecture
 
-Target chain:
+The MedLearn core is local-first. Its required boundary is:
+
+```text
+CaptureDraft → deterministic local reconciliation → reviewable CaptureProposal
+→ validated LearningCapture
+```
+
+One possible cloud-assisted deployment is:
 
 ```text
 Work Skill → CaptureDraft → Cloudflare Worker → GitHub Actions
@@ -17,6 +24,5 @@ resolver, reconciles it with the accepted `ContractBundle`, and emits a versione
 `CaptureProposal`. `error` and `review` issues block; warnings remain visible but permit
 `ready_for_review`. User assertions and errors become learner observations, never medical fact.
 
-This PR implements only workflow contracts 0.1.0, digests, deterministic reconciliation, CLI,
-and review Markdown. It does not implement the Work Skill, Worker, Actions, R2, Remotely Save,
-approval, commit, or any Vault writer.
+These services are replaceable adapters, not core dependencies. The current implementation contains
+no Work Skill, Worker, Actions, R2, Remotely Save, approval, commit, or Vault writer.
