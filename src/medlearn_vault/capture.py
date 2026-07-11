@@ -174,6 +174,12 @@ class CaptureDraft(DomainModel):
         return self
 
 
+class IntakeEnvelope(DomainModel):
+    intake_version: Literal["0.1.0"] = "0.1.0"
+    client_kind: Literal["chatgpt_work", "ios_shortcut", "manual"]
+    draft: CaptureDraft
+
+
 class ProposalIssue(DomainModel):
     code: str
     severity: Literal["error", "warning", "review"]
@@ -358,6 +364,18 @@ def canonical_capture_draft_json(draft: CaptureDraft) -> bytes:
 
 def capture_draft_digest(draft: CaptureDraft) -> str:
     return _digest(draft)
+
+
+def intake_envelope_digest(exact_bytes: bytes) -> str:
+    return "sha256:" + hashlib.sha256(exact_bytes).hexdigest()
+
+
+def extract_capture_draft(exact_bytes: bytes, expected_intake_digest: str) -> tuple[bytes, str]:
+    if intake_envelope_digest(exact_bytes) != expected_intake_digest:
+        raise ValueError("INTAKE_DIGEST_MISMATCH")
+    envelope = IntakeEnvelope.model_validate_json(exact_bytes)
+    draft_bytes = canonical_capture_draft_json(envelope.draft)
+    return draft_bytes, capture_draft_digest(envelope.draft)
 
 
 def contract_bundle_digest(bundle: ContractBundle) -> str:

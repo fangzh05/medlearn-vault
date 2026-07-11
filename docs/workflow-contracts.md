@@ -11,11 +11,17 @@ speaker role. Correctness is an explicit observed outcome using the existing `Le
 taxonomy; matching user and assistant text does not establish correctness.
 
 Client source metadata is not authenticated identity and no longer appears in `CaptureContext`.
-Cloud intake wraps the draft in an untrusted envelope whose `client_kind` is one of
+Cloud intake wraps the draft in versioned `IntakeEnvelope` 0.1.0 whose `client_kind` is one of
 `chatgpt_work`, `ios_shortcut`, or `manual`; it never grants permission. Misconceptions separate
 `observed_error_message_ids` from `correction_message_ids`. Observed error evidence must be
 user-owned, while correction evidence may reference assistant messages. `observed_at` derives
 only from observed error evidence.
+
+The committed `intake_envelope.schema.json` is generated from the Python model and is the shared
+Worker/Python contract. The intake digest hashes exact HTTP bytes. After verification,
+`medlearn capture extract-intake` validates the envelope and nested draft, writes canonical
+CaptureDraft JSON, and reports the canonical draft digest. `CaptureProposal.draft_digest` continues
+to mean only that canonical CaptureDraft digest.
 
 Concept terms for an observed misconception and `correction_terms` are resolved independently.
 Authoritative correction matching uses the correction terms and requires an exact statement and

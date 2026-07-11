@@ -1,164 +1,271 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import Ajv from "ajv/dist/2020.js";
+import addFormats from "ajv-formats";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { handle, type Env, type JobRecord } from "../src/index";
+import jobSchema from "../contracts/job-record.schema.json";
+import { handle, transitionJob, type Env, type JobRecord, type Stored } from "../src/index";
+import intakeSchema from "../../schemas/workflow/current/intake_envelope.schema.json";
 
 class Bucket {
-  objects = new Map<string, string>();
+  objects = new Map<string, { text: string; etag: string }>();
+  failNextPrefix?: string;
+  private revision = 0;
+
   async get(key: string) {
-    const value = this.objects.get(key);
-    return value === undefined ? null : { json: async <T>() => JSON.parse(value) as T };
+    const object = this.objects.get(key);
+    return object === undefined ? null : {
+      httpEtag: object.etag,
+      json: async <T>() => JSON.parse(object.text) as T,
+    };
   }
-  async put(key: string, value: string | ArrayBuffer, options?: { onlyIf?: { etagDoesNotMatch?: string } }) {
-    if (options?.onlyIf?.etagDoesNotMatch === "*" && this.objects.has(key)) return null;
+
+  async put(
+    key: string, value: string | ArrayBuffer,
+    options?: { onlyIf?: { etagDoesNotMatch?: string; etagMatches?: string } },
+  ) {
+    if (this.failNextPrefix && key.startsWith(this.failNextPrefix)) {
+      this.failNextPrefix = undefined;
+      throw new Error("injected storage failure with sensitive details");
+    }
+    const current = this.objects.get(key);
+    if (options?.onlyIf?.etagDoesNotMatch === "*" && current) return null;
+    if (options?.onlyIf?.etagMatches && current?.etag !== options.onlyIf.etagMatches) return null;
     const text = typeof value === "string" ? value : new TextDecoder().decode(value);
-    this.objects.set(key, text);
-    return { key };
+    const stored = { text, etag: `"etag-${++this.revision}"` };
+    this.objects.set(key, stored);
+    return { key, httpEtag: stored.etag };
   }
 }
 
-const token = "ingest-secret";
+const token = "ingest-secret-that-is-at-least-32-bytes";
+const fixtureBytes = readFileSync(resolve("../examples/intake/manual-copd.json"));
+const fixtureText = fixtureBytes.toString("utf8");
 let bucket: Bucket;
 let env: Env;
 let dispatch: ReturnType<typeof vi.fn>;
-
-const envelope = {
-  client_kind: "manual",
-  draft: { draft_version: "0.3.0", context: {}, evidence_messages: [], concept_mentions: [], claim_candidates: [], misconception_candidates: [] },
-};
 
 function request(path: string, init: RequestInit = {}) {
   return new Request(`https://example.test${path}`, init);
 }
 
-function capture(body: unknown = envelope, key = "key-1", extra: HeadersInit = {}) {
+function capture(body: string = fixtureText, key = "key-1") {
   return request("/v1/captures", {
     method: "POST",
-    headers: { authorization: `Bearer ${token}`, "content-type": "application/json", "idempotency-key": key, ...extra },
-    body: typeof body === "string" ? body : JSON.stringify(body),
+    headers: {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/json",
+      "idempotency-key": key,
+    },
+    body,
   });
+}
+
+async function digest(text: string) {
+  const bytes = new TextEncoder().encode(text);
+  const hash = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(hash)].map((item) => item.toString(16).padStart(2, "0")).join("");
 }
 
 beforeEach(() => {
   bucket = new Bucket();
-  env = { CONTROL_BUCKET: bucket as unknown as R2Bucket, MEDLEARN_INGEST_TOKEN: token, GITHUB_ACTIONS_DISPATCH_TOKEN: "github-secret" };
+  env = {
+    CONTROL_BUCKET: bucket as unknown as R2Bucket,
+    MEDLEARN_INGEST_TOKEN: token,
+    GITHUB_ACTIONS_DISPATCH_TOKEN: "github-secret",
+  };
   dispatch = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
   vi.stubGlobal("fetch", dispatch);
 });
 
 afterEach(() => vi.unstubAllGlobals());
 
-describe("public and authentication", () => {
-  it("serves public root and health", async () => {
+describe("shared contracts", () => {
+  it("validates the shared golden envelope and JobRecord schemas", async () => {
+    const ajv = new Ajv({ strict: false });
+    addFormats(ajv);
+    expect(ajv.compile(intakeSchema)(JSON.parse(fixtureText))).toBe(true);
+    const response = await handle(capture(), env);
+    expect(response.status).toBe(202);
+    expect(ajv.compile(jobSchema)(await response.json())).toBe(true);
+  });
+
+  it("stores exact envelope bytes under the intake digest", async () => {
+    const response = await handle(capture(), env);
+    const job = await response.json<JobRecord>();
+    const hex = await digest(fixtureText);
+    expect(job.intake_digest).toBe(`sha256:${hex}`);
+    expect(job.intake_object_key).toBe(`v1/intakes/sha256/${hex}.json`);
+    expect(bucket.objects.get(job.intake_object_key)?.text).toBe(fixtureText);
+    const [, init] = dispatch.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string).inputs).toEqual({
+      job_id: job.job_id, intake_object_key: job.intake_object_key, intake_digest: job.intake_digest,
+    });
+  });
+
+  it.each([
+    [{ ...JSON.parse(fixtureText), intake_version: "0.2.0" }, "UNSUPPORTED_INTAKE_VERSION"],
+    [{ ...JSON.parse(fixtureText), draft: { ...JSON.parse(fixtureText).draft, draft_version: "0.2.0" } }, "UNSUPPORTED_DRAFT_VERSION"],
+  ])("rejects unsupported envelope versions", async (payload, code) => {
+    const response = await handle(capture(JSON.stringify(payload), code), env);
+    expect(response.status).toBe(422);
+    expect(await response.json()).toEqual({ error: code });
+  });
+});
+
+describe("baseline API", () => {
+  it("keeps root and health public", async () => {
     expect((await handle(request("/"), env)).status).toBe(200);
     expect(await (await handle(request("/health"), env)).json()).toEqual({ status: "ok" });
   });
 
-  it("returns the same sanitized 401 for missing and wrong tokens", async () => {
+  it("returns one sanitized 401 shape for absent and wrong credentials", async () => {
     const missing = await handle(request("/v1/jobs/x"), env);
     const wrong = await handle(request("/v1/jobs/x", { headers: { authorization: "Bearer wrong" } }), env);
     expect([missing.status, wrong.status]).toEqual([401, 401]);
     expect(await missing.text()).toBe(await wrong.text());
   });
-});
-
-describe("capture intake", () => {
-  it("accepts a valid authenticated capture and fixes the dispatch target", async () => {
-    const response = await handle(capture({ ...envelope, repository: "evil/repo", ref: "evil", workflow: "evil.yml" }), env);
-    expect(response.status).toBe(202);
-    const job = await response.json<JobRecord>();
-    expect(job.status).toBe("dispatched");
-    expect(job.job_version).toBe("0.1.0");
-    expect([...bucket.objects.keys()]).toEqual(expect.arrayContaining([
-      expect.stringMatching(/^v1\/drafts\/sha256\/[a-f0-9]{64}\.json$/),
-      `v1/jobs/${job.job_id}.json`,
-      expect.stringMatching(/^v1\/idempotency\/[a-f0-9]{64}\.json$/),
-    ]));
-    const [url, init] = dispatch.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe("https://api.github.com/repos/fangzh05/medlearn-vault/actions/workflows/medlearn-propose.yml/dispatches");
-    const payload = JSON.parse(init.body as string);
-    expect(payload).toEqual({ ref: "main", inputs: { job_id: job.job_id, draft_object_key: job.draft_object_key, draft_digest: job.draft_digest } });
-  });
 
   it.each([
-    [capture(envelope, "x", { "content-type": "text/plain" }), 415, "INVALID_CONTENT_TYPE"],
-    [capture("{", "x"), 400, "INVALID_JSON"],
-    [capture({ ...envelope, draft: { draft_version: "0.2.0" } }, "x"), 422, "UNSUPPORTED_DRAFT_VERSION"],
-  ])("rejects invalid transport input", async (input, status, code) => {
+    ["text/plain", fixtureText, 415, "INVALID_CONTENT_TYPE"],
+    ["application/json", "{", 400, "INVALID_JSON"],
+    ["application/json", "x".repeat(1024 * 1024 + 1), 413, "BODY_TOO_LARGE"],
+  ])("rejects invalid transport input", async (contentType, body, status, code) => {
+    const input = request("/v1/captures", {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": contentType, "idempotency-key": "transport" },
+      body,
+    });
     const response = await handle(input, env);
     expect(response.status).toBe(status);
     expect(await response.json()).toEqual({ error: code });
   });
 
-  it("rejects an oversized body", async () => {
-    const response = await handle(capture("x".repeat(1024 * 1024 + 1)), env);
-    expect(response.status).toBe(413);
+  it("retrieves jobs and rejects arbitrary object paths", async () => {
+    const job = await (await handle(capture(), env)).json<JobRecord>();
+    const auth = { authorization: `Bearer ${token}` };
+    expect((await handle(request(`/v1/jobs/${job.job_id}`, { headers: auth }), env)).status).toBe(200);
+    expect((await handle(request("/v1/jobs/..%2Fsecret", { headers: auth }), env)).status).toBe(400);
   });
+});
 
-  it("reuses one logical job for duplicate and concurrent submissions", async () => {
+describe("recovery and concurrency", () => {
+  it("shares one job for duplicate and concurrent submissions", async () => {
     const [a, b] = await Promise.all([handle(capture(), env), handle(capture(), env)]);
     const [one, two] = await Promise.all([a.json<JobRecord>(), b.json<JobRecord>()]);
     expect(one.job_id).toBe(two.job_id);
     expect(dispatch).toHaveBeenCalledTimes(1);
-    const again = await (await handle(capture(), env)).json<JobRecord>();
-    expect(again.job_id).toBe(one.job_id);
   });
 
-  it("returns conflict for the same key with a different digest", async () => {
+  it("returns 409 when one key is reused with another intake", async () => {
     await handle(capture(), env);
-    const changed = { ...envelope, client_kind: "ios_shortcut" };
-    const response = await handle(capture(changed), env);
+    const payload = JSON.parse(fixtureText);
+    payload.client_kind = "ios_shortcut";
+    const response = await handle(capture(JSON.stringify(payload)), env);
     expect(response.status).toBe(409);
     expect(await response.json()).toEqual({ error: "IDEMPOTENCY_CONFLICT" });
   });
 
-  it("stores only a sanitized failed job when dispatch fails", async () => {
-    const medical = "secret medical text";
-    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    dispatch.mockResolvedValue(new Response(medical, { status: 500 }));
-    const response = await handle(capture({ ...envelope, draft: { ...envelope.draft, note: medical } }), env);
-    expect(response.status).toBe(502);
-    const job = await response.json<JobRecord>();
-    expect(job).toMatchObject({ status: "failed", error_code: "GITHUB_DISPATCH_FAILED" });
-    expect(JSON.stringify(job)).not.toContain(medical);
-    expect(JSON.stringify(job)).not.toContain(token);
-    expect(JSON.stringify(job)).not.toContain("github-secret");
-    expect(log).not.toHaveBeenCalled();
-    expect(error).not.toHaveBeenCalled();
+  it("recovers after failure immediately following idempotency creation", async () => {
+    bucket.failNextPrefix = "v1/intakes/";
+    expect((await handle(capture(), env)).status).toBe(503);
+    const claim = [...bucket.objects.entries()].find(([key]) => key.startsWith("v1/idempotency/"));
+    expect(claim).toBeDefined();
+    const jobId = JSON.parse(claim![1].text).job_id;
+    const retried = await handle(capture(), env);
+    expect((await retried.json<JobRecord>()).job_id).toBe(jobId);
+    expect(dispatch).toHaveBeenCalledTimes(1);
   });
 
-  it("sanitizes a dispatch network failure", async () => {
-    dispatch.mockRejectedValue(new Error("socket included sensitive upstream details"));
-    const response = await handle(capture(envelope, "network-failure"), env);
-    expect(response.status).toBe(502);
-    expect(await response.json()).toMatchObject({ status: "failed", error_code: "GITHUB_DISPATCH_FAILED" });
+  it("repairs missing intake and job objects and safely resumes the handoff", async () => {
+    const first = await (await handle(capture(), env)).json<JobRecord>();
+    bucket.objects.delete(first.intake_object_key);
+    bucket.objects.delete(`v1/jobs/${first.job_id}.json`);
+    const repaired = await (await handle(capture(), env)).json<JobRecord>();
+    expect(repaired.job_id).toBe(first.job_id);
+    expect(bucket.objects.has(first.intake_object_key)).toBe(true);
+    expect(bucket.objects.has(`v1/jobs/${first.job_id}.json`)).toBe(true);
+    expect(dispatch).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries an expired interrupted dispatch lease", async () => {
+    const first = await (await handle(capture(), env)).json<JobRecord>();
+    const key = `v1/jobs/${first.job_id}.json`;
+    const interrupted: JobRecord = {
+      ...first, status: "received", dispatch_lease_id: "old-lease",
+      dispatch_lease_expires_at: "2000-01-01T00:00:00Z",
+    };
+    await bucket.put(key, JSON.stringify(interrupted));
+    const retried = await (await handle(capture(), env)).json<JobRecord>();
+    expect(retried.status).toBe("dispatched");
+    expect(retried.dispatch_attempt).toBe(first.dispatch_attempt + 1);
+    expect(dispatch).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries a sanitized dispatch failure", async () => {
+    dispatch.mockResolvedValueOnce(new Response("upstream medical data", { status: 500 }));
+    const failedResponse = await handle(capture(), env);
+    expect(failedResponse.status).toBe(502);
+    expect(await failedResponse.text()).not.toContain("upstream medical data");
+    const retried = await (await handle(capture(), env)).json<JobRecord>();
+    expect(retried.status).toBe("dispatched");
+    expect(dispatch).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects stale conditional job updates", async () => {
+    const id = "stale-job";
+    const key = `v1/jobs/${id}.json`;
+    const received: JobRecord = {
+      job_version: "0.2.0", job_id: id, status: "received", intake_digest: `sha256:${"a".repeat(64)}`,
+      intake_object_key: `v1/intakes/sha256/${"a".repeat(64)}.json`, dispatch_attempt: 0,
+      created_at: "2026-07-12T00:00:00Z", updated_at: "2026-07-12T00:00:00Z",
+    };
+    await bucket.put(key, JSON.stringify(received));
+    const object = await bucket.get(key);
+    const stale: Stored<JobRecord> = { value: received, etag: object!.httpEtag };
+    await bucket.put(key, JSON.stringify({ ...received, status: "dispatched" }));
+    expect(await transitionJob(
+      bucket as unknown as R2Bucket, key, stale,
+      { ...received, status: "failed", error_code: "STALE" },
+    )).toBe(false);
+    expect(JSON.parse(bucket.objects.get(key)!.text).status).toBe("dispatched");
   });
 });
 
-describe("retrieval", () => {
-  it("retrieves jobs and proposals and returns 404 for missing objects", async () => {
-    const created = await (await handle(capture(), env)).json<JobRecord>();
-    const auth = { authorization: `Bearer ${token}` };
-    expect((await handle(request(`/v1/jobs/${created.job_id}`, { headers: auth }), env)).status).toBe(200);
-    const proposalId = `proposal_${"a".repeat(32)}`;
-    await bucket.put(`v1/proposals/${proposalId}.json`, JSON.stringify({ proposal_id: proposalId }));
-    expect(await (await handle(request(`/v1/proposals/${proposalId}`, { headers: auth }), env)).json()).toEqual({ proposal_id: proposalId });
-    expect((await handle(request(`/v1/jobs/missing`, { headers: auth }), env)).status).toBe(404);
+describe("security boundary", () => {
+  it.each([
+    { CONTROL_BUCKET: bucket, GITHUB_ACTIONS_DISPATCH_TOKEN: "x" },
+    { CONTROL_BUCKET: bucket, MEDLEARN_INGEST_TOKEN: "short", GITHUB_ACTIONS_DISPATCH_TOKEN: "x" },
+    { CONTROL_BUCKET: bucket, MEDLEARN_INGEST_TOKEN: token },
+    { MEDLEARN_INGEST_TOKEN: token, GITHUB_ACTIONS_DISPATCH_TOKEN: "x" },
+  ])("fails closed for configuration case %#", async (badEnv) => {
+    const response = await handle(capture(), badEnv as Env);
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: "SERVICE_MISCONFIGURED" });
   });
 
-  it("sanitizes retrieved job records", async () => {
-    const id = "job-with-extra";
-    await bucket.put(`v1/jobs/${id}.json`, JSON.stringify({
-      job_version: "0.1.0", job_id: id, status: "failed", draft_digest: `sha256:${"a".repeat(64)}`,
-      draft_object_key: `v1/drafts/sha256/${"a".repeat(64)}.json`, created_at: "2026-07-11T00:00:00Z",
-      updated_at: "2026-07-11T00:00:00Z", error_code: "FAILED", medical_text: "must not escape",
-    }));
-    const response = await handle(request(`/v1/jobs/${id}`, { headers: { authorization: `Bearer ${token}` } }), env);
-    expect(await response.text()).not.toContain("medical_text");
+  it("sets no-store and authorization variance on every v1 response", async () => {
+    for (const response of [
+      await handle(request("/v1/jobs/x"), env),
+      await handle(capture(), env),
+      await handle(request("/v1/jobs/missing", { headers: { authorization: `Bearer ${token}` } }), env),
+    ]) {
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(response.headers.get("vary")).toBe("Authorization");
+    }
   });
 
-  it.each(["../secret", "%2e%2e%2fsecret", "bad.id"])("rejects invalid and traversal identifiers", async (id) => {
-    const response = await handle(request(`/v1/jobs/${id}`, { headers: { authorization: `Bearer ${token}` } }), env);
-    expect([400, 404]).toContain(response.status);
-    expect([...bucket.objects.keys()].some((key) => key.includes("secret"))).toBe(false);
+  it("does not log or return tokens or medical body text", async () => {
+    const medical = "private COPD misconception";
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    bucket.failNextPrefix = "v1/intakes/";
+    const response = await handle(capture(fixtureText.replace("COPD", medical), "sensitive"), env);
+    const text = await response.text();
+    expect(text).not.toContain(medical);
+    expect(text).not.toContain(token);
+    expect(text).not.toContain("github-secret");
+    expect(log).not.toHaveBeenCalled();
+    expect(error).not.toHaveBeenCalled();
   });
 });

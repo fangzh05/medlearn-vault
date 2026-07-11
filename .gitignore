@@ -10,3 +10,8 @@ schemas/generated/
 node_modules/
 coverage/
 .wrangler/
+.runtime-test/
+.dev.vars
+.dev.vars.*
+.env
+.env.*
