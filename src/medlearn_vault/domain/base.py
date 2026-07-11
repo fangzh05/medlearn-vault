@@ -5,7 +5,7 @@ from pydantic import AfterValidator, BaseModel, ConfigDict, PlainSerializer
 
 
 class DomainModel(BaseModel):
-    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
 
 class EventModel(DomainModel):

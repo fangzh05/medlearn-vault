@@ -76,7 +76,3 @@ def knowledge_unit_id() -> str:
 
 def knowledge_unit_fingerprint(unit_type: str, title: str, concept_ids: Sequence[str]) -> str:
     return stable_id("kufp", unit_type, title, sorted(set(concept_ids)))
-
-
-def content_hash(*parts: Any) -> str:
-    return stable_id("content", *parts, length=64)

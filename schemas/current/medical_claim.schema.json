@@ -214,8 +214,8 @@
   "additionalProperties": false,
   "properties": {
     "schema_version": {
-      "const": "1.1.1",
-      "default": "1.1.1",
+      "const": "1.2.0",
+      "default": "1.2.0",
       "title": "Schema Version",
       "type": "string"
     },
@@ -246,6 +246,7 @@
     },
     "concept_ids": {
       "items": {
+        "pattern": "^concept_[a-f0-9]{32}$",
         "type": "string"
       },
       "minItems": 1,
@@ -273,8 +274,7 @@
       "enum": [
         "unverified_chat",
         "source_backed",
-        "verified_reference",
-        "conflicted"
+        "verified_reference"
       ],
       "title": "Verification Status",
       "type": "string"
@@ -289,6 +289,25 @@
       "title": "Claim Status",
       "type": "string"
     },
+    "review_status": {
+      "default": "normal",
+      "enum": [
+        "normal",
+        "conflict_review",
+        "resolved"
+      ],
+      "title": "Review Status",
+      "type": "string"
+    },
+    "superseded_by_claim_ids": {
+      "default": [],
+      "items": {
+        "pattern": "^claim_[a-f0-9]{32}$",
+        "type": "string"
+      },
+      "title": "Superseded By Claim Ids",
+      "type": "array"
+    },
     "course_relevance": {
       "default": [],
       "items": {
@@ -301,12 +320,6 @@
       "default": "",
       "pattern": "^clfp_[a-f0-9]{16}$",
       "title": "Match Fingerprint",
-      "type": "string"
-    },
-    "content_hash": {
-      "default": "",
-      "pattern": "^content_[a-f0-9]{64}$",
-      "title": "Content Hash",
       "type": "string"
     }
   },

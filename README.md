@@ -3,7 +3,7 @@
 MedLearn Vault is a local-first contract layer for canonical medical concepts,
 cross-disciplinary chapter dossiers, source-backed claims, and learner evidence.
 
-This repository currently implements **P0/P0.1 only**: hardened domain models,
+This repository currently implements **P0 through PR 2B**: hardened domain models,
 permanent identifiers, matching fingerprints, versioned JSON Schema, a small CLI,
 tests, and CI. It performs no Vault writes and contains no LLM, database, Obsidian,
 or document-ingestion integration.
@@ -27,6 +27,8 @@ medlearn doctor
 medlearn schema export
 medlearn schema check
 medlearn concept validate concept.json
+medlearn bundle validate examples/gerd
+medlearn preview render examples/gerd preview.md
 pytest
 ```
 

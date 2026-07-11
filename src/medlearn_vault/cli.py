@@ -8,6 +8,7 @@ import typer
 from pydantic import BaseModel, ValidationError
 
 from medlearn_vault import __version__
+from medlearn_vault.bundle import ContractBundle
 from medlearn_vault.domain import (
     ChapterDossier,
     ConceptEntity,
@@ -18,12 +19,17 @@ from medlearn_vault.domain import (
     MedicalClaim,
     SourceDocument,
 )
+from medlearn_vault.preview import build_preview_plan, render_markdown
 
 app = typer.Typer(no_args_is_help=True, help="MedLearn Vault contract tools")
 schema_app = typer.Typer(help="Export JSON schemas")
 concept_app = typer.Typer(help="Validate concept entities")
+bundle_app = typer.Typer(help="Validate contract bundles")
+preview_app = typer.Typer(help="Render deterministic previews")
 app.add_typer(schema_app, name="schema")
 app.add_typer(concept_app, name="concept")
+app.add_typer(bundle_app, name="bundle")
+app.add_typer(preview_app, name="preview")
 
 SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "concept_entity": ConceptEntity,
@@ -100,6 +106,32 @@ def validate_concept(path: Path) -> None:
         typer.echo(f"invalid: {exc}", err=True)
         raise typer.Exit(1) from exc
     typer.echo(f"valid: {concept.concept_id}")
+
+
+@bundle_app.command("validate")
+def validate_bundle(path: Path) -> None:
+    try:
+        bundle = ContractBundle.from_directory(path)
+    except (OSError, ValueError, ValidationError) as exc:
+        typer.echo(f"invalid: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    issues = bundle.validate_integrity()
+    if issues:
+        for issue in issues:
+            typer.echo(issue.model_dump_json(), err=True)
+        raise typer.Exit(1)
+    typer.echo("bundle: valid")
+
+
+@preview_app.command("render")
+def render_preview(path: Path, output: Path) -> None:
+    try:
+        markdown = render_markdown(build_preview_plan(ContractBundle.from_directory(path)))
+    except (OSError, ValueError, ValidationError) as exc:
+        typer.echo(f"invalid: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    output.write_text(markdown, encoding="utf-8")
+    typer.echo(output.as_posix())
 
 
 if __name__ == "__main__":

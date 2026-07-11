@@ -2,8 +2,8 @@
   "additionalProperties": false,
   "properties": {
     "schema_version": {
-      "const": "1.1.1",
-      "default": "1.1.1",
+      "const": "1.2.0",
+      "default": "1.2.0",
       "title": "Schema Version",
       "type": "string"
     },
@@ -13,7 +13,7 @@
       "type": "string"
     },
     "concept_id": {
-      "minLength": 1,
+      "pattern": "^concept_[a-f0-9]{32}$",
       "title": "Concept Id",
       "type": "string"
     },

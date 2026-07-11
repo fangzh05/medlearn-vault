@@ -9,6 +9,7 @@
         },
         "concept_ids": {
           "items": {
+            "pattern": "^concept_[a-f0-9]{32}$",
             "type": "string"
           },
           "title": "Concept Ids",
@@ -63,8 +64,8 @@
   "additionalProperties": false,
   "properties": {
     "schema_version": {
-      "const": "1.1.1",
-      "default": "1.1.1",
+      "const": "1.2.0",
+      "default": "1.2.0",
       "title": "Schema Version",
       "type": "string"
     },

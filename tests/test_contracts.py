@@ -74,13 +74,17 @@ def test_one_concept_can_have_multiple_independent_discipline_lenses() -> None:
 
 def test_chapters_share_one_forward_concept_reference() -> None:
     common = dict(
-        title="GERD", topic_archetype="disease", concept_ids=[CID], exam_summary=ExamSummary()
+        title="GERD",
+        topic_archetype="disease",
+        concept_ids=[CID],
+        anchor_concept_ids=[CID],
+        exam_summary=ExamSummary(),
     )
     internal = ChapterDossier(
-        chapter_id="chapter_i", course_id="im", discipline_id="internal", **common
+        chapter_id="chapter_i", course_id="internal_course", discipline_id="internal", **common
     )
     surgery = ChapterDossier(
-        chapter_id="chapter_s", course_id="su", discipline_id="surgery", **common
+        chapter_id="chapter_s", course_id="surgery_course", discipline_id="surgery", **common
     )
     assert internal.concept_ids == surgery.concept_ids == (CID,)
 
@@ -121,14 +125,16 @@ def test_fingerprints_normalize_unicode_and_set_order() -> None:
     )
 
 
-def test_mutation_keeps_id_and_updates_fingerprint() -> None:
+def test_replacement_keeps_id_and_updates_fingerprint() -> None:
     claim = MedicalClaim(
         claim_id=CLAIM_ID, claim_type="treatment", statement="PPI treats GERD", concept_ids=[CID]
     )
     old_id, old_fingerprint = claim.claim_id, claim.match_fingerprint
-    claim.statement = "PPI improves GERD symptoms"
-    assert claim.claim_id == old_id
-    assert claim.match_fingerprint != old_fingerprint
+    replacement = MedicalClaim.model_validate(
+        {**claim.model_dump(), "statement": "PPI improves GERD symptoms"}
+    )
+    assert replacement.claim_id == old_id
+    assert replacement.match_fingerprint != old_fingerprint
 
 
 def test_chinese_round_trip_retains_scope_and_display_form() -> None:
@@ -267,6 +273,7 @@ def test_learning_observations_are_separate_from_state() -> None:
     capture = LearningCapture(
         session_id="session_1",
         source_id=SOURCE_ID,
+        session_started_at=at,
         captured_at=at,
         discipline_id="internal",
         misconception_observations=[observation],
@@ -291,13 +298,12 @@ def test_learning_observations_are_separate_from_state() -> None:
         capture.discipline_id = "surgery"
 
 
-def test_fingerprint_inputs_cannot_mutate_in_place() -> None:
+def test_contract_records_cannot_mutate_in_place() -> None:
     concept = gerd()
     with pytest.raises(ValidationError):
         concept.aliases[0].text = "new alias"
-    old_fingerprint = concept.match_fingerprint
-    concept.canonical_name = "GERD"
-    assert concept.match_fingerprint != old_fingerprint
+    with pytest.raises(ValidationError):
+        concept.canonical_name = "GERD"
 
 
 def test_merge_preview_is_non_mutating() -> None:
@@ -318,7 +324,7 @@ def test_merge_preview_is_non_mutating() -> None:
         ("unverified_chat", "refuted"),
         ("unverified_chat", "conflicting"),
         ("verified_reference", "unassessed"),
-        ("conflicted", "supported"),
+        ("source_backed", "conflicting"),
     ],
 )
 def test_claim_state_matrix_rejects_contradictions(
@@ -352,31 +358,34 @@ def test_invariant_collections_cannot_mutate_in_place() -> None:
         title="GERD",
         topic_archetype="disease",
         concept_ids=[CID],
+        anchor_concept_ids=[CID],
         exam_summary=ExamSummary(),
     )
     with pytest.raises(TypeError):
         claim.course_relevance[0] = CourseRelevance(course_id="internal", score=4)
     with pytest.raises(AttributeError):
         chapter.concept_ids.clear()  # type: ignore[attr-defined]
-
-
-def test_match_fingerprint_and_content_hash_have_distinct_jobs() -> None:
-    concept = gerd()
-    match_before, content_before = concept.match_fingerprint, concept.content_hash
-    concept.scope_note = "新的语义边界"
-    assert concept.match_fingerprint == match_before
-    assert concept.content_hash != content_before
-
-    unit = KnowledgeUnit(
-        unit_id="unit_" + "f" * 32,
-        unit_type="definition",
-        title="定义",
+    cited_claim = MedicalClaim(
+        claim_id=CLAIM_ID,
+        claim_type="treatment",
+        statement="supported",
         concept_ids=[CID],
-        content={"text": "before"},
+        evidence_state="supported",
+        verification_status="verified_reference",
+        citations=[citation()],
     )
-    unit_hash = unit.content_hash
-    unit.content = {"text": "after"}
-    assert unit.content_hash != unit_hash
+    with pytest.raises(ValidationError):
+        cited_claim.citations[0].locator.page = 999  # type: ignore[union-attr]
+
+
+def test_match_fingerprint_does_not_replace_record_validation() -> None:
+    concept = gerd()
+    match_before = concept.match_fingerprint
+    changed_concept = ConceptEntity.model_validate(
+        {**concept.model_dump(), "scope_note": "新的语义边界"}
+    )
+    assert changed_concept.match_fingerprint == match_before
+    assert changed_concept.scope_note == "新的语义边界"
 
 
 def test_chapter_rejects_out_of_scope_unit_concept() -> None:
@@ -395,6 +404,7 @@ def test_chapter_rejects_out_of_scope_unit_concept() -> None:
             title="GERD",
             topic_archetype="disease",
             concept_ids=[CID],
+            anchor_concept_ids=[CID],
             knowledge_units=[unit],
             exam_summary=ExamSummary(),
         )
@@ -408,6 +418,19 @@ def test_alias_resolver_handles_blank_and_lifecycle() -> None:
     assert redirected.resolved_concept_id == OTHER_CID
     deprecated = gerd().model_copy(update={"status": "deprecated"})
     assert resolve_alias("GERD", [deprecated]).status == "not_found"
+
+
+def test_split_pending_resolution_keeps_active_candidates() -> None:
+    split = ConceptEntity(
+        concept_id=OTHER_CID,
+        canonical_name="胃食管反流病",
+        concept_type="disease",
+        scope_note="legacy split candidate",
+        status="split_pending",
+    )
+    result = resolve_alias("胃食管反流病", [gerd(), split])
+    assert result.status == "review_required"
+    assert result.candidate_concept_ids == (CID, OTHER_CID)
 
 
 def test_relation_sources_flow_through_claim_ids() -> None:
@@ -441,9 +464,13 @@ def test_migrated_gerd_fixture_matches_contract_boundaries() -> None:
     chapters = [ChapterDossier.model_validate(item) for item in load("chapters.json")]
     capture = LearningCapture.model_validate(load("learning_capture.json"))
 
-    assert len(sources) == 1
-    assert len(concepts) == 2
+    assert len(sources) == 2
+    assert len(concepts) == 6
     assert relations[0].supporting_claim_ids == (claims[0].claim_id,)
     assert {lens.concept_id for lens in lenses} == {concepts[0].concept_id}
     assert {chapter.concept_ids[0] for chapter in chapters} == {concepts[0].concept_id}
-    assert capture.misconception_observations[0].correction_claim_ids == (claims[0].claim_id,)
+    assert capture.misconception_observations[0].correction_claim_ids == (claims[1].claim_id,)
+    assert (
+        next(item for item in sources if item.source_id == capture.source_id).source_type
+        == "learning_chat"
+    )

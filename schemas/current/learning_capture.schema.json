@@ -10,6 +10,7 @@
         "candidate_concept_ids": {
           "default": [],
           "items": {
+            "pattern": "^concept_[a-f0-9]{32}$",
             "type": "string"
           },
           "title": "Candidate Concept Ids",
@@ -18,6 +19,7 @@
         "resolved_concept_id": {
           "anyOf": [
             {
+              "pattern": "^concept_[a-f0-9]{32}$",
               "type": "string"
             },
             {
@@ -68,12 +70,14 @@
           "type": "string"
         },
         "concept_id": {
+          "pattern": "^concept_[a-f0-9]{32}$",
           "title": "Concept Id",
           "type": "string"
         },
         "knowledge_unit_id": {
           "anyOf": [
             {
+              "pattern": "^unit_[a-f0-9]{32}$",
               "type": "string"
             },
             {
@@ -138,6 +142,7 @@
         },
         "concept_ids": {
           "items": {
+            "pattern": "^concept_[a-f0-9]{32}$",
             "type": "string"
           },
           "title": "Concept Ids",
@@ -170,6 +175,7 @@
         "correction_claim_ids": {
           "default": [],
           "items": {
+            "pattern": "^claim_[a-f0-9]{32}$",
             "type": "string"
           },
           "title": "Correction Claim Ids",
@@ -221,6 +227,7 @@
         },
         "concept_ids": {
           "items": {
+            "pattern": "^concept_[a-f0-9]{32}$",
             "type": "string"
           },
           "title": "Concept Ids",
@@ -261,17 +268,24 @@
   "additionalProperties": false,
   "properties": {
     "schema_version": {
-      "const": "1.1.1",
-      "default": "1.1.1",
+      "const": "1.2.0",
+      "default": "1.2.0",
       "title": "Schema Version",
       "type": "string"
     },
     "session_id": {
+      "pattern": "^[a-z][a-z0-9_:-]{2,127}$",
       "title": "Session Id",
       "type": "string"
     },
     "source_id": {
+      "pattern": "^source_[a-f0-9]{32}$",
       "title": "Source Id",
+      "type": "string"
+    },
+    "session_started_at": {
+      "format": "date-time",
+      "title": "Session Started At",
       "type": "string"
     },
     "captured_at": {
@@ -280,12 +294,14 @@
       "type": "string"
     },
     "discipline_id": {
+      "pattern": "^[a-z][a-z0-9_:-]{2,127}$",
       "title": "Discipline Id",
       "type": "string"
     },
     "course_id": {
       "anyOf": [
         {
+          "pattern": "^[a-z][a-z0-9_:-]{2,127}$",
           "type": "string"
         },
         {
@@ -298,6 +314,7 @@
     "chapter_id": {
       "anyOf": [
         {
+          "pattern": "^[a-z][a-z0-9_:-]{2,127}$",
           "type": "string"
         },
         {
@@ -343,6 +360,7 @@
   "required": [
     "session_id",
     "source_id",
+    "session_started_at",
     "captured_at",
     "discipline_id"
   ],

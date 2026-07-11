@@ -1,6 +1,6 @@
 # MedLearn Vault product specification
 
-Contract version: 1.1.1
+Contract version: 1.2.0
 
 ## Purpose
 
@@ -25,16 +25,19 @@ records that they point back to.
 
 ## Identity and change detection
 
-Persisted entities use opaque `<kind>_<32 hex>` IDs. Renaming content never changes an ID.
-`match_fingerprint` finds likely duplicates from normalized identifying terms.
-`content_hash` covers mutable semantic content and changes when that content changes.
+Canonical entities (`concept`, `claim`, `source`, `relation`, `lens`, `unit`) use opaque
+`<kind>_<32 hex>` IDs. Scoped external records (`chapter`, `course`, `discipline`, `session`,
+`message`) use stable readable namespaced strings. Renaming content never changes an ID.
+`match_fingerprint` only finds likely duplicate entities from normalized identifying terms.
+No record hash is persisted before repository and incremental-sync semantics exist.
 
 ## Medical evidence policy
 
 `unverified_chat` permits only `unassessed`. `source_backed` permits supported, refuted, or
 conflicting evidence and requires a citation. `verified_reference` permits supported or
-refuted evidence and requires a citation. `conflicted` requires conflicting evidence.
-Lifecycle is independent: active, deprecated, or superseded.
+refuted evidence and requires a citation. Conflict workflow belongs to `review_status`.
+Lifecycle is independent: active, deprecated, or superseded; superseded claims identify their
+replacement claims.
 
 Source authority belongs to `SourceDocument`. A future repository will resolve citation IDs
 and derive evidence quality; current contracts do not claim to perform that policy evaluation.
@@ -47,14 +50,16 @@ separate when their scopes differ.
 
 ## Learning event policy
 
-Captures and nested observations are append-only. A misconception observation records the
+All contract records are frozen and replaced as whole validated records. Captures and nested
+observations are append-only. A misconception observation records the
 observed error and a non-authoritative proposed correction. Medical correctness is referenced
 through `correction_claim_ids`. Current status lives only in rebuildable `LearnerState`.
 
 ## Chapter consistency
 
-`ChapterDossier.concept_ids` is the chapter scope. Every knowledge unit's concept IDs must be a
-subset of that scope. Reverse concept-to-chapter links are derived.
+`ChapterDossier.concept_ids` is the chapter scope and `anchor_concept_ids` identifies the
+chapter's organizing concepts. Every knowledge unit's concept IDs and every anchor must be a
+subset of the scope. Reverse concept-to-chapter links are derived.
 
 ## CLI and quality gates
 
@@ -63,6 +68,6 @@ strict mypy, pytest, and committed Schema drift checks using the pinned Pydantic
 
 ## Next vertical slice
 
-P0.1.1 is followed by a preview-only GERD flow: fixture JSON -> exact alias resolution -> claim
-candidates -> learner observations -> chapter preview -> Markdown in a temporary directory.
-It must not write to a real Vault or call an LLM.
+`ContractBundle` is the preview boundary: fixture JSON -> cross-record validation -> exact alias
+resolution -> claim selection -> learner observations -> `PreviewPlan` -> deterministic Markdown.
+It does not write to a real Vault or call an LLM.
