@@ -1,0 +1,75 @@
+{
+  "proposal_version": "0.1.0",
+  "proposal_id": "proposal_1aef8926793e2bf10c05fd344bec2ad7",
+  "status": "blocked",
+  "draft_digest": "sha256:dc9f5e8c0ff2f48d4803e37d21950dab160146d68743c368dd81e5978a0efbb2",
+  "base_bundle_digest": "sha256:c1329260008bedffd5af74d6f38122f09d89109453a62364239f536a2c16ce3e",
+  "proposal_digest": "sha256:fd7e05894b6499dedc59e13386a3539198a6f3cb2a4b8fe55abdc88f93499625",
+  "context": {
+    "source_id": "source_22222222222222222222222222222222",
+    "session_id": "session:ambiguous-ms",
+    "discipline_id": "medicine",
+    "course_id": null,
+    "chapter_id": null,
+    "locale": "zh-CN",
+    "origin": "chatgpt_work",
+    "captured_at": "2026-07-11T10:00:00+08:00"
+  },
+  "concept_resolutions": [
+    {
+      "resolution_id": "resolution_51d271de94f8f5736ac482d8fd39d4ae",
+      "surface_text": "MS",
+      "status": "ambiguous",
+      "matched_concept_id": null,
+      "candidate_concept_ids": [
+        "concept_66666666666666666666666666666666",
+        "concept_77777777777777777777777777777777"
+      ],
+      "new_candidate_id": null,
+      "evidence_message_ids": [
+        "message:user-ms"
+      ]
+    }
+  ],
+  "new_concept_candidates": [],
+  "claim_proposals": [],
+  "learning_capture_candidate": {
+    "source_id": "source_22222222222222222222222222222222",
+    "session_id": "session:ambiguous-ms",
+    "captured_at": "2026-07-11T10:00:00+08:00",
+    "observations": [
+      {
+        "candidate_id": "candidate_observation_80b417f0f7e612859666971b39adc10e",
+        "observation_type": "question",
+        "concept_refs": [],
+        "evidence_message_ids": [
+          "message:user-ms"
+        ],
+        "observed_text": "MS 应该怎么理解？",
+        "proposed_correction": null,
+        "correction_claim_ids": []
+      }
+    ]
+  },
+  "issues": [
+    {
+      "code": "AMBIGUOUS_CONCEPT",
+      "severity": "review",
+      "field": "concept_resolutions",
+      "message": "concept term has multiple active matches",
+      "candidate_id": "resolution_51d271de94f8f5736ac482d8fd39d4ae",
+      "target_ids": [
+        "concept_66666666666666666666666666666666",
+        "concept_77777777777777777777777777777777"
+      ]
+    },
+    {
+      "code": "UNRESOLVED_CONCEPT_REFERENCE",
+      "severity": "review",
+      "field": "claim_candidates.concept_terms",
+      "message": "candidate references an unresolved concept",
+      "candidate_id": null,
+      "target_ids": []
+    }
+  ]
+}

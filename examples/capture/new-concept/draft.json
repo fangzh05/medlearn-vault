@@ -1,0 +1,31 @@
+{
+  "context": {
+    "source_id": "source_22222222222222222222222222222222",
+    "session_id": "session:new-concept",
+    "discipline_id": "pharmacology",
+    "captured_at": "2026-07-11T10:00:00+08:00"
+  },
+  "evidence_messages": [
+    {"message_id": "message:assistant-new", "role": "assistant", "excerpt": "罗氟司特是一种 PDE4 抑制剂。"}
+  ],
+  "concept_mentions": [
+    {
+      "surface_text": "PDE4 抑制剂",
+      "evidence_message_ids": ["message:assistant-new"],
+      "suggested_canonical_name": "磷酸二酯酶-4抑制剂",
+      "suggested_preferred_english": "phosphodiesterase-4 inhibitor",
+      "suggested_concept_type": "drug_class",
+      "suggested_scope_note": "抑制磷酸二酯酶-4的一类药物。"
+    }
+  ],
+  "claim_candidates": [
+    {
+      "statement": "罗氟司特是一种 PDE4 抑制剂。",
+      "claim_type": "classification",
+      "concept_terms": ["PDE4 抑制剂"],
+      "evidence_message_ids": ["message:assistant-new"],
+      "speaker_role": "assistant"
+    }
+  ],
+  "misconception_candidates": []
+}

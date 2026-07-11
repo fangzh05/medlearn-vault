@@ -1,0 +1,369 @@
+{
+  "$defs": {
+    "CaptureContext": {
+      "additionalProperties": false,
+      "properties": {
+        "source_id": {
+          "pattern": "^source_[a-f0-9]{32}$",
+          "title": "Source Id",
+          "type": "string"
+        },
+        "session_id": {
+          "pattern": "^[a-z][a-z0-9_:-]{2,127}$",
+          "title": "Session Id",
+          "type": "string"
+        },
+        "discipline_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Discipline Id",
+          "type": "string"
+        },
+        "course_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Course Id"
+        },
+        "chapter_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Chapter Id"
+        },
+        "locale": {
+          "const": "zh-CN",
+          "default": "zh-CN",
+          "title": "Locale",
+          "type": "string"
+        },
+        "origin": {
+          "const": "chatgpt_work",
+          "default": "chatgpt_work",
+          "title": "Origin",
+          "type": "string"
+        },
+        "captured_at": {
+          "format": "date-time",
+          "title": "Captured At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_id",
+        "session_id",
+        "discipline_id",
+        "captured_at"
+      ],
+      "title": "CaptureContext",
+      "type": "object"
+    },
+    "EvidenceMessage": {
+      "additionalProperties": false,
+      "properties": {
+        "message_id": {
+          "pattern": "^[a-z][a-z0-9_:-]{2,127}$",
+          "title": "Message Id",
+          "type": "string"
+        },
+        "role": {
+          "enum": [
+            "user",
+            "assistant"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "excerpt": {
+          "anyOf": [
+            {
+              "maxLength": 1000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Excerpt"
+        }
+      },
+      "required": [
+        "message_id",
+        "role"
+      ],
+      "title": "EvidenceMessage",
+      "type": "object"
+    },
+    "ExtractedClaimCandidate": {
+      "additionalProperties": false,
+      "properties": {
+        "statement": {
+          "maxLength": 4000,
+          "minLength": 1,
+          "title": "Statement",
+          "type": "string"
+        },
+        "claim_type": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Claim Type",
+          "type": "string"
+        },
+        "concept_terms": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Concept Terms",
+          "type": "array"
+        },
+        "evidence_message_ids": {
+          "items": {
+            "pattern": "^[a-z][a-z0-9_:-]{2,127}$",
+            "type": "string"
+          },
+          "title": "Evidence Message Ids",
+          "type": "array"
+        },
+        "speaker_role": {
+          "enum": [
+            "user",
+            "assistant"
+          ],
+          "title": "Speaker Role",
+          "type": "string"
+        }
+      },
+      "required": [
+        "statement",
+        "claim_type",
+        "concept_terms",
+        "evidence_message_ids",
+        "speaker_role"
+      ],
+      "title": "ExtractedClaimCandidate",
+      "type": "object"
+    },
+    "ExtractedConceptMention": {
+      "additionalProperties": false,
+      "properties": {
+        "surface_text": {
+          "maxLength": 4000,
+          "minLength": 1,
+          "title": "Surface Text",
+          "type": "string"
+        },
+        "evidence_message_ids": {
+          "items": {
+            "pattern": "^[a-z][a-z0-9_:-]{2,127}$",
+            "type": "string"
+          },
+          "title": "Evidence Message Ids",
+          "type": "array"
+        },
+        "suggested_canonical_name": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Suggested Canonical Name"
+        },
+        "suggested_preferred_english": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Suggested Preferred English"
+        },
+        "suggested_concept_type": {
+          "anyOf": [
+            {
+              "enum": [
+                "disease",
+                "syndrome",
+                "symptom",
+                "sign",
+                "anatomy",
+                "physiology",
+                "pathology",
+                "mechanism",
+                "investigation",
+                "imaging_sign",
+                "drug",
+                "drug_class",
+                "procedure",
+                "complication",
+                "score",
+                "guideline",
+                "organism",
+                "gene",
+                "biomarker",
+                "other"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Suggested Concept Type"
+        },
+        "suggested_scope_note": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Suggested Scope Note"
+        }
+      },
+      "required": [
+        "surface_text",
+        "evidence_message_ids"
+      ],
+      "title": "ExtractedConceptMention",
+      "type": "object"
+    },
+    "ExtractedMisconceptionCandidate": {
+      "additionalProperties": false,
+      "properties": {
+        "observed_error_logic": {
+          "maxLength": 4000,
+          "minLength": 1,
+          "title": "Observed Error Logic",
+          "type": "string"
+        },
+        "concept_terms": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Concept Terms",
+          "type": "array"
+        },
+        "evidence_message_ids": {
+          "items": {
+            "pattern": "^[a-z][a-z0-9_:-]{2,127}$",
+            "type": "string"
+          },
+          "title": "Evidence Message Ids",
+          "type": "array"
+        },
+        "proposed_correction": {
+          "anyOf": [
+            {
+              "maxLength": 4000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Proposed Correction"
+        },
+        "correction_terms": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Correction Terms",
+          "type": "array"
+        }
+      },
+      "required": [
+        "observed_error_logic",
+        "concept_terms",
+        "evidence_message_ids"
+      ],
+      "title": "ExtractedMisconceptionCandidate",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "draft_version": {
+      "const": "0.1.0",
+      "default": "0.1.0",
+      "title": "Draft Version",
+      "type": "string"
+    },
+    "context": {
+      "$ref": "#/$defs/CaptureContext"
+    },
+    "evidence_messages": {
+      "items": {
+        "$ref": "#/$defs/EvidenceMessage"
+      },
+      "maxItems": 200,
+      "title": "Evidence Messages",
+      "type": "array"
+    },
+    "concept_mentions": {
+      "items": {
+        "$ref": "#/$defs/ExtractedConceptMention"
+      },
+      "maxItems": 200,
+      "title": "Concept Mentions",
+      "type": "array"
+    },
+    "claim_candidates": {
+      "items": {
+        "$ref": "#/$defs/ExtractedClaimCandidate"
+      },
+      "maxItems": 200,
+      "title": "Claim Candidates",
+      "type": "array"
+    },
+    "misconception_candidates": {
+      "items": {
+        "$ref": "#/$defs/ExtractedMisconceptionCandidate"
+      },
+      "maxItems": 200,
+      "title": "Misconception Candidates",
+      "type": "array"
+    }
+  },
+  "required": [
+    "context",
+    "evidence_messages",
+    "concept_mentions",
+    "claim_candidates",
+    "misconception_candidates"
+  ],
+  "title": "CaptureDraft",
+  "type": "object"
+}

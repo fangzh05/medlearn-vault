@@ -1,0 +1,38 @@
+{
+  "schema_version": "1.2.0",
+  "session_id": "session_copd_001",
+  "source_id": "source_22222222222222222222222222222222",
+  "session_started_at": "2026-07-11T14:00:00+08:00",
+  "captured_at": "2026-07-11T14:10:00+08:00",
+  "discipline_id": "internal_medicine",
+  "concept_mentions": [
+    {
+      "surface_text": "copd",
+      "candidate_concept_ids": ["concept_11111111111111111111111111111111"],
+      "resolved_concept_id": "concept_11111111111111111111111111111111",
+      "resolution_status": "resolved",
+      "confidence": 1.0,
+      "message_ids": ["message_1"]
+    },
+    {
+      "surface_text": "PFT",
+      "candidate_concept_ids": ["concept_55555555555555555555555555555555"],
+      "resolved_concept_id": "concept_55555555555555555555555555555555",
+      "resolution_status": "resolved",
+      "confidence": 1.0,
+      "message_ids": ["message_2"]
+    }
+  ],
+  "misconception_observations": [
+    {
+      "observation_id": "observation_copd_1",
+      "concept_ids": ["concept_11111111111111111111111111111111", "concept_33333333333333333333333333333333"],
+      "observed_error_logic": "COPD 与吸烟关系不大。",
+      "proposed_correction": "吸烟是重要危险因素；需由医学陈述确认。",
+      "correction_claim_ids": ["claim_22222222222222222222222222222222"],
+      "severity": "high",
+      "evidence_message_ids": ["message_3"],
+      "observed_at": "2026-07-11T14:05:00+08:00"
+    }
+  ]
+}

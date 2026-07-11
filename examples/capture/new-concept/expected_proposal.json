@@ -1,0 +1,78 @@
+{
+  "proposal_version": "0.1.0",
+  "proposal_id": "proposal_ce6bc0f11425da2cee80a93c41d60b6b",
+  "status": "ready_for_review",
+  "draft_digest": "sha256:b40a7dc7424a46cb558817a620b657afc3b8aa358e22ed55747678ca5411fcf9",
+  "base_bundle_digest": "sha256:061aa62f4699ed64dc44c68465be1e1e4c606235f0cecba77989ed4c7459eead",
+  "proposal_digest": "sha256:d5ed351015030083a0458a3dcaed604e6efaf542a1dd0b8af41c66ac633bd083",
+  "context": {
+    "source_id": "source_22222222222222222222222222222222",
+    "session_id": "session:new-concept",
+    "discipline_id": "pharmacology",
+    "course_id": null,
+    "chapter_id": null,
+    "locale": "zh-CN",
+    "origin": "chatgpt_work",
+    "captured_at": "2026-07-11T10:00:00+08:00"
+  },
+  "concept_resolutions": [
+    {
+      "resolution_id": "resolution_9575d4ba009a3bcb103dfe7a1647ba9b",
+      "surface_text": "PDE4 抑制剂",
+      "status": "new_candidate",
+      "matched_concept_id": null,
+      "candidate_concept_ids": [],
+      "new_candidate_id": "candidate_concept_f1c6cf49d62aabc9cc6c95a14cf6e614",
+      "evidence_message_ids": [
+        "message:assistant-new"
+      ]
+    }
+  ],
+  "new_concept_candidates": [
+    {
+      "candidate_id": "candidate_concept_f1c6cf49d62aabc9cc6c95a14cf6e614",
+      "canonical_name": "磷酸二酯酶-4抑制剂",
+      "preferred_english": "phosphodiesterase-4 inhibitor",
+      "concept_type": "drug_class",
+      "scope_note": "抑制磷酸二酯酶-4的一类药物。",
+      "aliases": [
+        {
+          "text": "PDE4 抑制剂",
+          "normalized": "pde4 抑制剂",
+          "language": "zh-CN",
+          "alias_type": "other",
+          "source_id": null
+        }
+      ],
+      "evidence_message_ids": [
+        "message:assistant-new"
+      ]
+    }
+  ],
+  "claim_proposals": [
+    {
+      "candidate_id": "candidate_claim_80562d71e7745a94dd00eee5c2406a94",
+      "statement": "罗氟司特是一种 PDE4 抑制剂。",
+      "claim_type": "classification",
+      "concept_refs": [
+        {
+          "concept_id": null,
+          "candidate_id": "candidate_concept_f1c6cf49d62aabc9cc6c95a14cf6e614"
+        }
+      ],
+      "evidence_message_ids": [
+        "message:assistant-new"
+      ],
+      "proposed_verification_status": "unverified_chat",
+      "proposed_evidence_state": "unassessed",
+      "matching_existing_claim_ids": []
+    }
+  ],
+  "learning_capture_candidate": {
+    "source_id": "source_22222222222222222222222222222222",
+    "session_id": "session:new-concept",
+    "captured_at": "2026-07-11T10:00:00+08:00",
+    "observations": []
+  },
+  "issues": []
+}

@@ -1,0 +1,9 @@
+[
+  {
+    "schema_version": "1.2.0",
+    "lens_id": "lens_11111111111111111111111111111111",
+    "concept_id": "concept_11111111111111111111111111111111",
+    "discipline_id": "internal_medicine",
+    "focus_questions": ["如何确认持续气流受限并进行稳定期治疗？"]
+  }
+]
