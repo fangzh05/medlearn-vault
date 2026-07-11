@@ -46,3 +46,9 @@ Learner state is computed from observations and can be rebuilt when mastery rule
 
 P0.1.1 defines JSON contracts and examples only. Repository, index, preview, and adapter behavior
 must depend on these aggregates without introducing a second persisted owner for the same fact.
+
+## Display terminology
+
+Terminology formatting is a presentation concern. Plans carry concept IDs; the renderer obtains
+English abbreviations from concept aliases and Chinese explanations from canonical names. It does
+not rewrite stored claims, citations, source titles, or learning-message text.

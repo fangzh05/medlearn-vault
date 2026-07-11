@@ -1,0 +1,18 @@
+[
+  {
+    "schema_version": "1.2.0",
+    "relation_id": "relation_11111111111111111111111111111111",
+    "source_concept_id": "concept_11111111111111111111111111111111",
+    "relation_type": "manifests_as",
+    "target_concept_id": "concept_22222222222222222222222222222222",
+    "supporting_claim_ids": ["claim_11111111111111111111111111111111"]
+  },
+  {
+    "schema_version": "1.2.0",
+    "relation_id": "relation_22222222222222222222222222222222",
+    "source_concept_id": "concept_11111111111111111111111111111111",
+    "relation_type": "treated_by",
+    "target_concept_id": "concept_44444444444444444444444444444444",
+    "supporting_claim_ids": ["claim_33333333333333333333333333333333"]
+  }
+]

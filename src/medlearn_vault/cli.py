@@ -19,7 +19,12 @@ from medlearn_vault.domain import (
     MedicalClaim,
     SourceDocument,
 )
-from medlearn_vault.preview import build_preview_plan, render_markdown
+from medlearn_vault.preview import (
+    PreviewBuildError,
+    PreviewRequest,
+    build_preview_plan,
+    render_markdown,
+)
 
 app = typer.Typer(no_args_is_help=True, help="MedLearn Vault contract tools")
 schema_app = typer.Typer(help="Export JSON schemas")
@@ -116,19 +121,22 @@ def validate_bundle(path: Path) -> None:
         typer.echo(f"invalid: {exc}", err=True)
         raise typer.Exit(1) from exc
     issues = bundle.validate_integrity()
-    if issues:
-        for issue in issues:
-            typer.echo(issue.model_dump_json(), err=True)
+    for issue in issues:
+        typer.echo(issue.model_dump_json(), err=True)
+    if any(issue.severity == "error" for issue in issues):
         raise typer.Exit(1)
-    typer.echo("bundle: valid")
+    typer.echo(f"bundle: valid ({sum(issue.severity == 'warning' for issue in issues)} warning(s))")
 
 
 @preview_app.command("render")
-def render_preview(path: Path, output: Path) -> None:
+def render_preview(path: Path, output: Path, topic: str = typer.Option(..., "--topic")) -> None:
     try:
-        markdown = render_markdown(build_preview_plan(ContractBundle.from_directory(path)))
-    except (OSError, ValueError, ValidationError) as exc:
-        typer.echo(f"invalid: {exc}", err=True)
+        markdown = render_markdown(
+            build_preview_plan(ContractBundle.from_directory(path), PreviewRequest(topic=topic))
+        )
+    except (OSError, ValueError, ValidationError, PreviewBuildError) as exc:
+        code = getattr(exc, "code", "INVALID_PREVIEW")
+        typer.echo(f"{code}: {exc}", err=True)
         raise typer.Exit(1) from exc
     output.write_text(markdown, encoding="utf-8")
     typer.echo(output.as_posix())

@@ -16,6 +16,8 @@ from medlearn_vault.domain import (
     SourceDocument,
 )
 from medlearn_vault.domain.base import DomainModel
+from medlearn_vault.identifiers import normalize_text
+from medlearn_vault.terminology import english_abbreviations, has_chinese_display_name
 
 Record = TypeVar("Record", bound=BaseModel)
 
@@ -67,6 +69,7 @@ class ContractBundle(DomainModel):
             field: str,
             target_id: str | None,
             message: str,
+            severity: Literal["error", "warning"] = "error",
         ) -> None:
             issues.append(
                 ValidationIssue(
@@ -76,6 +79,7 @@ class ContractBundle(DomainModel):
                     field=field,
                     target_id=target_id,
                     message=message,
+                    severity=severity,
                 )
             )
 
@@ -97,6 +101,35 @@ class ContractBundle(DomainModel):
         sources = {item.source_id: item for item in self.sources}
         concepts = {item.concept_id: item for item in self.concepts}
         claims = {item.claim_id: item for item in self.claims}
+
+        abbreviations: dict[str, list[ConceptEntity]] = {}
+        for concept in self.concepts:
+            for abbreviation in english_abbreviations(concept):
+                abbreviations.setdefault(normalize_text(abbreviation), []).append(concept)
+                if not has_chinese_display_name(concept) or normalize_text(
+                    concept.canonical_name
+                ) == normalize_text(abbreviation):
+                    issue(
+                        "MISSING_CHINESE_DISPLAY_NAME",
+                        "concept",
+                        concept.concept_id,
+                        "canonical_name",
+                        None,
+                        "English abbreviation requires a Chinese canonical name",
+                        "warning",
+                    )
+        for abbreviation, matched in abbreviations.items():
+            active = [concept for concept in matched if concept.status == "active"]
+            if len(active) > 1:
+                issue(
+                    "AMBIGUOUS_ABBREVIATION",
+                    "concept",
+                    active[0].concept_id,
+                    "aliases",
+                    abbreviation,
+                    "English abbreviation maps to multiple active concepts",
+                    "warning",
+                )
 
         def require(
             targets: tuple[str, ...],
