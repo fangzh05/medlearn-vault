@@ -1,10 +1,10 @@
 {
-  "proposal_version": "0.1.0",
-  "proposal_id": "proposal_ce6bc0f11425da2cee80a93c41d60b6b",
+  "proposal_version": "0.2.0",
+  "proposal_id": "proposal_31d39d773bdc046306dcff20e3405df2",
   "status": "ready_for_review",
-  "draft_digest": "sha256:b40a7dc7424a46cb558817a620b657afc3b8aa358e22ed55747678ca5411fcf9",
-  "base_bundle_digest": "sha256:061aa62f4699ed64dc44c68465be1e1e4c606235f0cecba77989ed4c7459eead",
-  "proposal_digest": "sha256:d5ed351015030083a0458a3dcaed604e6efaf542a1dd0b8af41c66ac633bd083",
+  "draft_digest": "sha256:5be8f8547273251512171d75461e7ff42477fd94f44d99dd3764d266db9d8503",
+  "base_bundle_digest": "sha256:911cca4404779e6018a32f88844e33b48dae03f86f20e7e37b7af6a20f5edd63",
+  "proposal_digest": "sha256:e1934a76d0fc40d44a4a2cbf953b75f6cfe6067d435bd11c31c58f8e96676036",
   "context": {
     "source_id": "source_22222222222222222222222222222222",
     "session_id": "session:new-concept",
@@ -13,6 +13,7 @@
     "chapter_id": null,
     "locale": "zh-CN",
     "origin": "chatgpt_work",
+    "session_started_at": "2026-07-11T09:50:00+08:00",
     "captured_at": "2026-07-11T10:00:00+08:00"
   },
   "concept_resolutions": [
@@ -22,7 +23,7 @@
       "status": "new_candidate",
       "matched_concept_id": null,
       "candidate_concept_ids": [],
-      "new_candidate_id": "candidate_concept_f1c6cf49d62aabc9cc6c95a14cf6e614",
+      "new_candidate_id": "candidate_concept_5c00f969843c767ec9a8022796806bee",
       "evidence_message_ids": [
         "message:assistant-new"
       ]
@@ -30,7 +31,7 @@
   ],
   "new_concept_candidates": [
     {
-      "candidate_id": "candidate_concept_f1c6cf49d62aabc9cc6c95a14cf6e614",
+      "candidate_id": "candidate_concept_5c00f969843c767ec9a8022796806bee",
       "canonical_name": "磷酸二酯酶-4抑制剂",
       "preferred_english": "phosphodiesterase-4 inhibitor",
       "concept_type": "drug_class",
@@ -51,13 +52,13 @@
   ],
   "claim_proposals": [
     {
-      "candidate_id": "candidate_claim_80562d71e7745a94dd00eee5c2406a94",
+      "candidate_id": "candidate_claim_4ebba121a3bb4bd1159325deb59a2be6",
       "statement": "罗氟司特是一种 PDE4 抑制剂。",
       "claim_type": "classification",
       "concept_refs": [
         {
           "concept_id": null,
-          "candidate_id": "candidate_concept_f1c6cf49d62aabc9cc6c95a14cf6e614"
+          "candidate_id": "candidate_concept_5c00f969843c767ec9a8022796806bee"
         }
       ],
       "evidence_message_ids": [
@@ -69,9 +70,31 @@
     }
   ],
   "learning_capture_candidate": {
-    "source_id": "source_22222222222222222222222222222222",
-    "session_id": "session:new-concept",
-    "captured_at": "2026-07-11T10:00:00+08:00",
+    "capture": {
+      "schema_version": "1.2.0",
+      "session_id": "session:new-concept",
+      "source_id": "source_22222222222222222222222222222222",
+      "session_started_at": "2026-07-11T09:50:00+08:00",
+      "captured_at": "2026-07-11T10:00:00+08:00",
+      "discipline_id": "pharmacology",
+      "course_id": null,
+      "chapter_id": null,
+      "concept_mentions": [
+        {
+          "surface_text": "PDE4 抑制剂",
+          "candidate_concept_ids": [],
+          "resolved_concept_id": null,
+          "resolution_status": "new_candidate",
+          "confidence": 0.0,
+          "message_ids": [
+            "message:assistant-new"
+          ]
+        }
+      ],
+      "learner_evidence": [],
+      "misconception_observations": [],
+      "open_questions": []
+    },
     "observations": []
   },
   "issues": []

@@ -1,10 +1,10 @@
 {
-  "proposal_version": "0.1.0",
-  "proposal_id": "proposal_f20088f0fa20c0427d3dee59066fc8de",
+  "proposal_version": "0.2.0",
+  "proposal_id": "proposal_0e8c8ab75c2358c0877809e23a7d3a2e",
   "status": "ready_for_review",
-  "draft_digest": "sha256:ae867d956bc076a73343de8df35462e204d90983f1218e06641e57435cef503a",
-  "base_bundle_digest": "sha256:061aa62f4699ed64dc44c68465be1e1e4c606235f0cecba77989ed4c7459eead",
-  "proposal_digest": "sha256:ac64ae7b6e14d3d822c255392a7581155df022071f2193dc06efd3d558de8857",
+  "draft_digest": "sha256:bea4d81be4332f3172b31fdab24cc44f449a43d6682700eadc6b682d9c3c4835",
+  "base_bundle_digest": "sha256:911cca4404779e6018a32f88844e33b48dae03f86f20e7e37b7af6a20f5edd63",
+  "proposal_digest": "sha256:602ff054b57acd4bfd68f279fa11dcc60ec1dbc77c4688c71448e1d7faff9626",
   "context": {
     "source_id": "source_22222222222222222222222222222222",
     "session_id": "session:copd-001",
@@ -13,38 +13,39 @@
     "chapter_id": "chapter:copd",
     "locale": "zh-CN",
     "origin": "chatgpt_work",
+    "session_started_at": "2026-07-11T09:50:00+08:00",
     "captured_at": "2026-07-11T10:00:00+08:00"
   },
   "concept_resolutions": [
     {
-      "resolution_id": "resolution_21c83082fd4cc6b767b914e76a5374a0",
+      "resolution_id": "resolution_91f8debdd2ef2abcdae7b7f76e8441fc",
       "surface_text": "COPD",
       "status": "matched",
       "matched_concept_id": "concept_11111111111111111111111111111111",
       "candidate_concept_ids": [],
       "new_candidate_id": null,
       "evidence_message_ids": [
-        "message:assistant-001",
-        "message:user-001"
+        "message:user-001",
+        "message:assistant-001"
       ]
     },
     {
-      "resolution_id": "resolution_83660ef3c3ebce2bad92796c227110cd",
+      "resolution_id": "resolution_ee993a7b7f3b678126ff1e7aa664d912",
       "surface_text": "吸烟",
       "status": "matched",
       "matched_concept_id": "concept_33333333333333333333333333333333",
       "candidate_concept_ids": [],
       "new_candidate_id": null,
       "evidence_message_ids": [
-        "message:assistant-001",
-        "message:user-001"
+        "message:user-001",
+        "message:assistant-001"
       ]
     }
   ],
   "new_concept_candidates": [],
   "claim_proposals": [
     {
-      "candidate_id": "candidate_claim_1760bccad43ecc7a6e9876b45ef05b42",
+      "candidate_id": "candidate_claim_f4e73afd609d77b1a8884174c4acf559",
       "statement": "吸烟是 COPD 的重要危险因素。",
       "claim_type": "risk_factor",
       "concept_refs": [
@@ -68,12 +69,72 @@
     }
   ],
   "learning_capture_candidate": {
-    "source_id": "source_22222222222222222222222222222222",
-    "session_id": "session:copd-001",
-    "captured_at": "2026-07-11T10:00:00+08:00",
+    "capture": {
+      "schema_version": "1.2.0",
+      "session_id": "session:copd-001",
+      "source_id": "source_22222222222222222222222222222222",
+      "session_started_at": "2026-07-11T09:50:00+08:00",
+      "captured_at": "2026-07-11T10:00:00+08:00",
+      "discipline_id": "internal_medicine",
+      "course_id": "course:internal_medicine",
+      "chapter_id": "chapter:copd",
+      "concept_mentions": [
+        {
+          "surface_text": "COPD",
+          "candidate_concept_ids": [
+            "concept_11111111111111111111111111111111"
+          ],
+          "resolved_concept_id": "concept_11111111111111111111111111111111",
+          "resolution_status": "resolved",
+          "confidence": 1.0,
+          "message_ids": [
+            "message:user-001",
+            "message:assistant-001"
+          ]
+        },
+        {
+          "surface_text": "吸烟",
+          "candidate_concept_ids": [
+            "concept_33333333333333333333333333333333"
+          ],
+          "resolved_concept_id": "concept_33333333333333333333333333333333",
+          "resolution_status": "resolved",
+          "confidence": 1.0,
+          "message_ids": [
+            "message:user-001",
+            "message:assistant-001"
+          ]
+        }
+      ],
+      "learner_evidence": [],
+      "misconception_observations": [
+        {
+          "observation_id": "observation_e86964c9125518b5a98317ed499a3d3b",
+          "concept_ids": [
+            "concept_11111111111111111111111111111111",
+            "concept_33333333333333333333333333333333"
+          ],
+          "discipline_ids": [
+            "internal_medicine"
+          ],
+          "observed_error_logic": "COPD 与吸烟关系不大",
+          "proposed_correction": "吸烟是 COPD 的重要危险因素。",
+          "correction_claim_ids": [
+            "claim_22222222222222222222222222222222"
+          ],
+          "severity": "high",
+          "evidence_message_ids": [
+            "message:user-001",
+            "message:assistant-001"
+          ],
+          "observed_at": "2026-07-11T09:56:00+08:00"
+        }
+      ],
+      "open_questions": []
+    },
     "observations": [
       {
-        "candidate_id": "candidate_observation_ce84904b574049e31b9a1c79bf2b81fb",
+        "candidate_id": "candidate_observation_613ec28567babbd0d6948be550a05acd",
         "observation_type": "misconception",
         "concept_refs": [
           {
@@ -86,8 +147,8 @@
           }
         ],
         "evidence_message_ids": [
-          "message:assistant-001",
-          "message:user-001"
+          "message:user-001",
+          "message:assistant-001"
         ],
         "observed_text": "COPD 与吸烟关系不大",
         "proposed_correction": "吸烟是 COPD 的重要危险因素。",

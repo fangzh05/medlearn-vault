@@ -2,7 +2,7 @@
 
 Contract version: 1.2.0
 
-Workflow contract version: 0.1.0
+Workflow contract version: 0.2.0
 
 ## Purpose
 
@@ -82,7 +82,10 @@ alias matching, validation, deduplication, and proposal generation without OpenA
 LLM API. A `CaptureProposal` is bound to the draft and accepted `ContractBundle` state with
 SHA-256 digests. User statements remain learner observations, never `MedicalClaim` records.
 This phase generates proposals and deterministic review Markdown only; it cannot approve,
-commit, or write Vault data.
+commit, or write Vault data. Assertion ownership is derived exclusively from referenced evidence
+message roles. Explicit learner outcomes use the persistent `LearnerEvidence` taxonomy; correctness
+is never inferred from agreement with an assistant. A complete, current, untampered and unblocked
+proposal can be deterministically materialized as a validated `LearningCapture` without I/O.
 
 ## Terminology and generic previews
 

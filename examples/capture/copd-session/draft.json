@@ -1,16 +1,17 @@
 {
-  "draft_version": "0.1.0",
+  "draft_version": "0.2.0",
   "context": {
     "source_id": "source_22222222222222222222222222222222",
     "session_id": "session:copd-001",
     "discipline_id": "internal_medicine",
     "course_id": "course:internal_medicine",
     "chapter_id": "chapter:copd",
+    "session_started_at": "2026-07-11T09:50:00+08:00",
     "captured_at": "2026-07-11T10:00:00+08:00"
   },
   "evidence_messages": [
-    {"message_id": "message:user-001", "role": "user", "excerpt": "COPD 和吸烟关系不大。"},
-    {"message_id": "message:assistant-001", "role": "assistant", "excerpt": "吸烟是 COPD 的重要危险因素。"}
+    {"message_id": "message:user-001", "role": "user", "observed_at": "2026-07-11T09:55:00+08:00", "excerpt": "COPD 和吸烟关系不大。"},
+    {"message_id": "message:assistant-001", "role": "assistant", "observed_at": "2026-07-11T09:56:00+08:00", "excerpt": "吸烟是 COPD 的重要危险因素。"}
   ],
   "concept_mentions": [
     {"surface_text": "COPD", "evidence_message_ids": ["message:user-001", "message:assistant-001"]},
@@ -21,8 +22,7 @@
       "statement": "吸烟是 COPD 的重要危险因素。",
       "claim_type": "risk_factor",
       "concept_terms": ["COPD", "吸烟"],
-      "evidence_message_ids": ["message:assistant-001"],
-      "speaker_role": "assistant"
+      "evidence_message_ids": ["message:assistant-001"]
     }
   ],
   "misconception_candidates": [
@@ -31,7 +31,9 @@
       "concept_terms": ["COPD", "吸烟"],
       "evidence_message_ids": ["message:user-001", "message:assistant-001"],
       "proposed_correction": "吸烟是 COPD 的重要危险因素。",
-      "correction_terms": ["COPD", "吸烟"]
+      "correction_terms": ["COPD", "吸烟"],
+      "severity": "high"
     }
-  ]
+  ],
+  "learner_evidence_candidates": []
 }
