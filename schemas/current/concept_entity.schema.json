@@ -108,8 +108,8 @@
   "additionalProperties": false,
   "properties": {
     "schema_version": {
-      "const": "1.1.0",
-      "default": "1.1.0",
+      "const": "1.1.1",
+      "default": "1.1.1",
       "title": "Schema Version",
       "type": "string"
     },
@@ -235,10 +235,16 @@
       "default": null,
       "title": "Merged Into"
     },
-    "fingerprint": {
+    "match_fingerprint": {
       "default": "",
       "pattern": "^cfp_[a-f0-9]{16}$",
-      "title": "Fingerprint",
+      "title": "Match Fingerprint",
+      "type": "string"
+    },
+    "content_hash": {
+      "default": "",
+      "pattern": "^content_[a-f0-9]{64}$",
+      "title": "Content Hash",
       "type": "string"
     }
   },

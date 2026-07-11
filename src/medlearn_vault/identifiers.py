@@ -39,6 +39,14 @@ def concept_id() -> str:
     return new_opaque_id("concept")
 
 
+def source_id() -> str:
+    return new_opaque_id("source")
+
+
+def lens_id() -> str:
+    return new_opaque_id("lens")
+
+
 def concept_fingerprint(concept_type: str, canonical_name: str, aliases: Sequence[str] = ()) -> str:
     """Create a mutable matching fingerprint; never use this as the concept ID."""
     return stable_id(
@@ -68,3 +76,7 @@ def knowledge_unit_id() -> str:
 
 def knowledge_unit_fingerprint(unit_type: str, title: str, concept_ids: Sequence[str]) -> str:
     return stable_id("kufp", unit_type, title, sorted(set(concept_ids)))
+
+
+def content_hash(*parts: Any) -> str:
+    return stable_id("content", *parts, length=64)
