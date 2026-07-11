@@ -9,8 +9,6 @@ class ConceptMergePreview(DomainModel):
     source_concept_ids: tuple[str, str]
     target_concept_id: str
     alias_texts_added: list[str]
-    relation_count: int
-    discipline_lens_count: int
     requires_confirmation: Literal[True] = True
 
 
@@ -25,6 +23,4 @@ def preview_merge(
         source_concept_ids=(first.concept_id, second.concept_id),
         target_concept_id=target_concept_id,
         alias_texts_added=sorted(aliases),
-        relation_count=len(first.relations) + len(second.relations),
-        discipline_lens_count=len(first.discipline_lenses) + len(second.discipline_lenses),
     )

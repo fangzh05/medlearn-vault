@@ -1,0 +1,85 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.1.0",
+      "default": "1.1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_id": {
+      "pattern": "^source_[a-f0-9]{32}$",
+      "title": "Source Id",
+      "type": "string"
+    },
+    "source_type": {
+      "enum": [
+        "textbook",
+        "guideline",
+        "course_slide",
+        "paper",
+        "question_bank",
+        "learning_chat",
+        "web"
+      ],
+      "title": "Source Type",
+      "type": "string"
+    },
+    "title": {
+      "minLength": 1,
+      "title": "Title",
+      "type": "string"
+    },
+    "authority": {
+      "maximum": 5,
+      "minimum": 0,
+      "title": "Authority",
+      "type": "integer"
+    },
+    "publication_date": {
+      "anyOf": [
+        {
+          "format": "date",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Publication Date"
+    },
+    "version": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Version"
+    },
+    "vault_path": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Vault Path"
+    }
+  },
+  "required": [
+    "source_id",
+    "source_type",
+    "title",
+    "authority"
+  ],
+  "title": "SourceDocument",
+  "type": "object"
+}

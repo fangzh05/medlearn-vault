@@ -1,38 +1,5 @@
 {
   "$defs": {
-    "CrossDisciplineLink": {
-      "additionalProperties": false,
-      "properties": {
-        "concept_id": {
-          "minLength": 1,
-          "title": "Concept Id",
-          "type": "string"
-        },
-        "discipline_id": {
-          "minLength": 1,
-          "title": "Discipline Id",
-          "type": "string"
-        },
-        "chapter_ref": {
-          "minLength": 1,
-          "title": "Chapter Ref",
-          "type": "string"
-        },
-        "relationship": {
-          "minLength": 1,
-          "title": "Relationship",
-          "type": "string"
-        }
-      },
-      "required": [
-        "concept_id",
-        "discipline_id",
-        "chapter_ref",
-        "relationship"
-      ],
-      "title": "CrossDisciplineLink",
-      "type": "object"
-    },
     "ExamSummary": {
       "additionalProperties": false,
       "properties": {
@@ -79,7 +46,7 @@
       "additionalProperties": false,
       "properties": {
         "unit_id": {
-          "pattern": "^ku_[a-f0-9]{12,64}$",
+          "pattern": "^unit_[a-f0-9]{32}$",
           "title": "Unit Id",
           "type": "string"
         },
@@ -92,6 +59,7 @@
           "type": "string"
         },
         "concept_ids": {
+          "default": [],
           "items": {
             "type": "string"
           },
@@ -128,6 +96,12 @@
           },
           "title": "Table Spec Refs",
           "type": "array"
+        },
+        "fingerprint": {
+          "default": "",
+          "pattern": "^kufp_[a-f0-9]{16}$",
+          "title": "Fingerprint",
+          "type": "string"
         }
       },
       "required": [
@@ -225,19 +199,12 @@
       "title": "Topic Archetype",
       "type": "string"
     },
-    "primary_concept_ids": {
+    "concept_ids": {
       "items": {
         "type": "string"
       },
       "minItems": 1,
-      "title": "Primary Concept Ids",
-      "type": "array"
-    },
-    "related_concept_ids": {
-      "items": {
-        "type": "string"
-      },
-      "title": "Related Concept Ids",
+      "title": "Concept Ids",
       "type": "array"
     },
     "learning_objectives": {
@@ -256,13 +223,6 @@
     },
     "exam_summary": {
       "$ref": "#/$defs/ExamSummary"
-    },
-    "cross_discipline_links": {
-      "items": {
-        "$ref": "#/$defs/CrossDisciplineLink"
-      },
-      "title": "Cross Discipline Links",
-      "type": "array"
     },
     "quality_status": {
       "default": "draft",
@@ -284,7 +244,7 @@
     "discipline_id",
     "title",
     "topic_archetype",
-    "primary_concept_ids",
+    "concept_ids",
     "exam_summary"
   ],
   "title": "ChapterDossier",

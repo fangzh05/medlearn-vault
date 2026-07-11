@@ -10,19 +10,20 @@ or document-ingestion integration.
 
 ## Contract architecture
 
-- `ConceptEntity` is one permanent medical identity with aliases, external coding-system
-  identifiers, relations, and multiple discipline lenses.
+- `ConceptEntity` is one permanent medical identity with aliases, semantic scope, and external
+  coding-system identifiers. Relations and discipline lenses are independent records.
 - `MedicalClaim` is source-governed medical evidence. An unverified chat claim cannot be
-  marked supported, and verified claims require citations and sufficient authority.
-- `ChapterDossier` references canonical concepts and uses typed cross-discipline links.
-- `LearningCapture` records learner evidence separately from medical truth.
-- `concept_id(identity_key)` uses an immutable creation key. `concept_fingerprint(...)`
-  uses mutable names and aliases only for duplicate-candidate matching.
+  marked supported, and source-backed claims require citations. Evidence quality is derived
+  from the cited source records rather than copied onto every claim.
+- `ChapterDossier` owns only forward concept references; backlinks are derived.
+- `LearningCapture` records immutable observations. `LearnerState` is a rebuildable projection.
+- IDs are opaque and permanent. Computed fingerprints use mutable content only for matching.
+- `SourceDocument` owns authority and version; citations carry typed page, slide, section,
+  chat-message, figure, or table locators.
 
 ```powershell
 python -m pip install -e ".[dev]"
 medlearn doctor
-medlearn doctor --vault C:\path\to\MedLearnVault
 medlearn schema export
 medlearn schema check
 medlearn concept validate concept.json

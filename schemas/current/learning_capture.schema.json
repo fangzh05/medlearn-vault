@@ -8,6 +8,7 @@
           "type": "string"
         },
         "candidate_concept_ids": {
+          "default": [],
           "items": {
             "type": "string"
           },
@@ -43,6 +44,7 @@
           "type": "number"
         },
         "message_ids": {
+          "default": [],
           "items": {
             "type": "string"
           },
@@ -127,11 +129,11 @@
       "title": "LearnerEvidence",
       "type": "object"
     },
-    "Misconception": {
+    "MisconceptionObservation": {
       "additionalProperties": false,
       "properties": {
-        "misconception_id": {
-          "title": "Misconception Id",
+        "observation_id": {
+          "title": "Observation Id",
           "type": "string"
         },
         "concept_ids": {
@@ -142,6 +144,7 @@
           "type": "array"
         },
         "discipline_ids": {
+          "default": [],
           "items": {
             "type": "string"
           },
@@ -165,34 +168,29 @@
           "title": "Severity",
           "type": "string"
         },
-        "status": {
-          "enum": [
-            "active",
-            "improving",
-            "resolved",
-            "relapsed"
-          ],
-          "title": "Status",
-          "type": "string"
-        },
-        "source_message_ids": {
+        "evidence_message_ids": {
           "items": {
             "type": "string"
           },
-          "title": "Source Message Ids",
+          "title": "Evidence Message Ids",
           "type": "array"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
         }
       },
       "required": [
-        "misconception_id",
+        "observation_id",
         "concept_ids",
         "error_logic",
         "correct_logic",
         "severity",
-        "status",
-        "source_message_ids"
+        "evidence_message_ids",
+        "observed_at"
       ],
-      "title": "Misconception",
+      "title": "MisconceptionObservation",
       "type": "object"
     },
     "OpenQuestion": {
@@ -295,6 +293,7 @@
       "title": "Chapter Id"
     },
     "concept_mentions": {
+      "default": [],
       "items": {
         "$ref": "#/$defs/ConceptMention"
       },
@@ -302,20 +301,23 @@
       "type": "array"
     },
     "learner_evidence": {
+      "default": [],
       "items": {
         "$ref": "#/$defs/LearnerEvidence"
       },
       "title": "Learner Evidence",
       "type": "array"
     },
-    "misconceptions": {
+    "misconception_observations": {
+      "default": [],
       "items": {
-        "$ref": "#/$defs/Misconception"
+        "$ref": "#/$defs/MisconceptionObservation"
       },
-      "title": "Misconceptions",
+      "title": "Misconception Observations",
       "type": "array"
     },
     "open_questions": {
+      "default": [],
       "items": {
         "$ref": "#/$defs/OpenQuestion"
       },

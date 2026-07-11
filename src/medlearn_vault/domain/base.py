@@ -8,6 +8,12 @@ class DomainModel(BaseModel):
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
 
+class EventModel(DomainModel):
+    """Append-only observation contract."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
 def _aware(value: datetime) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError("datetime must include a timezone offset")

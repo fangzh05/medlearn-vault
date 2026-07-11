@@ -1,8 +1,6 @@
 import json
-import os
 import platform
 import sys
-from datetime import datetime
 from pathlib import Path
 from typing import Annotated
 
@@ -10,7 +8,14 @@ import typer
 from pydantic import BaseModel, ValidationError
 
 from medlearn_vault import __version__
-from medlearn_vault.domain import ChapterDossier, ConceptEntity, LearningCapture, MedicalClaim
+from medlearn_vault.domain import (
+    ChapterDossier,
+    ConceptEntity,
+    LearnerState,
+    LearningCapture,
+    MedicalClaim,
+    SourceDocument,
+)
 
 app = typer.Typer(no_args_is_help=True, help="MedLearn Vault contract tools")
 schema_app = typer.Typer(help="Export JSON schemas")
@@ -21,8 +26,10 @@ app.add_typer(concept_app, name="concept")
 SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "concept_entity": ConceptEntity,
     "medical_claim": MedicalClaim,
+    "source_document": SourceDocument,
     "chapter_dossier": ChapterDossier,
     "learning_capture": LearningCapture,
+    "learner_state": LearnerState,
 }
 
 
@@ -42,20 +49,12 @@ def main(
 
 
 @app.command()
-def doctor(
-    vault: Annotated[Path | None, typer.Option("--vault", envvar="MEDLEARN_VAULT_PATH")] = None,
-) -> None:
+def doctor() -> None:
     python_ok = sys.version_info >= (3, 12)
-    timezone_ok = datetime.now().astimezone().utcoffset() is not None
-    target = vault or Path.cwd()
-    vault_ok = target.is_dir() and os.access(target, os.R_OK | os.W_OK)
     typer.echo(f"medlearn: {__version__}")
     typer.echo(f"python: {platform.python_version()} ({'ok' if python_ok else 'requires >=3.12'})")
-    typer.echo(f"timezone: {'ok' if timezone_ok else 'unavailable'}")
-    typer.echo(f"vault: {target.resolve()} ({'read/write' if vault_ok else 'unavailable'})")
-    typer.echo(f"configuration: {'MEDLEARN_VAULT_PATH' if vault else 'working-directory fallback'}")
     typer.echo("contracts: ok")
-    if not all((python_ok, timezone_ok, vault_ok)):
+    if not python_ok:
         raise typer.Exit(1)
 
 

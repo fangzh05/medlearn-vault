@@ -1,0 +1,93 @@
+{
+  "$defs": {
+    "MisconceptionState": {
+      "additionalProperties": false,
+      "properties": {
+        "misconception_id": {
+          "title": "Misconception Id",
+          "type": "string"
+        },
+        "concept_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Concept Ids",
+          "type": "array"
+        },
+        "first_seen_at": {
+          "format": "date-time",
+          "title": "First Seen At",
+          "type": "string"
+        },
+        "last_seen_at": {
+          "format": "date-time",
+          "title": "Last Seen At",
+          "type": "string"
+        },
+        "current_status": {
+          "enum": [
+            "active",
+            "improving",
+            "resolved",
+            "relapsed"
+          ],
+          "title": "Current Status",
+          "type": "string"
+        },
+        "resolution_evidence_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Resolution Evidence Ids",
+          "type": "array"
+        },
+        "relapse_count": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Relapse Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "misconception_id",
+        "concept_ids",
+        "first_seen_at",
+        "last_seen_at",
+        "current_status"
+      ],
+      "title": "MisconceptionState",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.1.0",
+      "default": "1.1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "learner_id": {
+      "title": "Learner Id",
+      "type": "string"
+    },
+    "computed_at": {
+      "format": "date-time",
+      "title": "Computed At",
+      "type": "string"
+    },
+    "misconception_states": {
+      "items": {
+        "$ref": "#/$defs/MisconceptionState"
+      },
+      "title": "Misconception States",
+      "type": "array"
+    }
+  },
+  "required": [
+    "learner_id",
+    "computed_at"
+  ],
+  "title": "LearnerState",
+  "type": "object"
+}

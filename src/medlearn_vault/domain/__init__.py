@@ -1,4 +1,4 @@
-from medlearn_vault.domain.chapters import ChapterDossier, CrossDisciplineLink, KnowledgeUnit
+from medlearn_vault.domain.chapters import ChapterDossier, KnowledgeUnit
 from medlearn_vault.domain.claims import MedicalClaim
 from medlearn_vault.domain.concepts import (
     ConceptAlias,
@@ -7,22 +7,31 @@ from medlearn_vault.domain.concepts import (
     DisciplineLens,
     ExternalIdentifiers,
 )
-from medlearn_vault.domain.learner import LearnerEvidence, LearningCapture, Misconception
-from medlearn_vault.domain.sources import SourceCitation, VaultPath
+from medlearn_vault.domain.learner import (
+    LearnerEvidence,
+    LearnerState,
+    LearningCapture,
+    MisconceptionObservation,
+    MisconceptionState,
+)
+from medlearn_vault.domain.sources import SourceCitation, SourceDocument, SourceLocator, VaultPath
 
 __all__ = [
     "ChapterDossier",
     "ConceptAlias",
     "ConceptEntity",
     "ConceptRelation",
-    "CrossDisciplineLink",
     "DisciplineLens",
     "ExternalIdentifiers",
     "KnowledgeUnit",
     "LearnerEvidence",
+    "LearnerState",
     "LearningCapture",
     "MedicalClaim",
-    "Misconception",
+    "MisconceptionObservation",
+    "MisconceptionState",
     "SourceCitation",
+    "SourceDocument",
+    "SourceLocator",
     "VaultPath",
 ]
