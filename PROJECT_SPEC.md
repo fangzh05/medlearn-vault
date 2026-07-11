@@ -2,6 +2,8 @@
 
 Contract version: 1.2.0
 
+Workflow contract version: 0.1.0
+
 ## Purpose
 
 MedLearn Vault compiles source-backed medical knowledge and immutable learning observations
@@ -71,6 +73,16 @@ strict mypy, pytest, and committed Schema drift checks using the pinned Pydantic
 `ContractBundle` is the preview boundary: fixture JSON -> cross-record validation -> exact alias
 resolution -> claim selection -> learner observations -> `PreviewPlan` -> deterministic Markdown.
 It does not write to a real Vault or call an LLM.
+
+## Reviewable capture proposals
+
+ChatGPT Work's built-in model performs natural-language understanding and emits an untrusted
+`CaptureDraft`; it does not export the full conversation. MedLearn performs exact parsing,
+alias matching, validation, deduplication, and proposal generation without OpenAI or another
+LLM API. A `CaptureProposal` is bound to the draft and accepted `ContractBundle` state with
+SHA-256 digests. User statements remain learner observations, never `MedicalClaim` records.
+This phase generates proposals and deterministic review Markdown only; it cannot approve,
+commit, or write Vault data.
 
 ## Terminology and generic previews
 

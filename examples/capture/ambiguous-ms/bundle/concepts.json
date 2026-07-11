@@ -1,0 +1,62 @@
+[
+  {
+    "schema_version": "1.2.0",
+    "concept_id": "concept_11111111111111111111111111111111",
+    "canonical_name": "慢性阻塞性肺疾病",
+    "preferred_english": "chronic obstructive pulmonary disease",
+    "concept_type": "disease",
+    "scope_note": "以持续气流受限为特征的慢性呼吸系统疾病。",
+    "aliases": [{"text": "COPD", "language": "en", "alias_type": "abbreviation"}]
+  },
+  {
+    "schema_version": "1.2.0",
+    "concept_id": "concept_22222222222222222222222222222222",
+    "canonical_name": "气流受限",
+    "preferred_english": "airflow limitation",
+    "concept_type": "physiology",
+    "scope_note": "呼气气流持续受限的生理状态。"
+  },
+  {
+    "schema_version": "1.2.0",
+    "concept_id": "concept_33333333333333333333333333333333",
+    "canonical_name": "吸烟",
+    "preferred_english": "smoking",
+    "concept_type": "other",
+    "scope_note": "烟草暴露行为及其疾病风险语境。"
+  },
+  {
+    "schema_version": "1.2.0",
+    "concept_id": "concept_44444444444444444444444444444444",
+    "canonical_name": "支气管扩张剂",
+    "preferred_english": "bronchodilator",
+    "concept_type": "drug_class",
+    "scope_note": "扩张支气管、改善气流的一类药物。"
+  },
+  {
+    "schema_version": "1.2.0",
+    "concept_id": "concept_55555555555555555555555555555555",
+    "canonical_name": "肺功能检查",
+    "preferred_english": "pulmonary function test",
+    "concept_type": "investigation",
+    "scope_note": "评价肺通气功能和气流受限的检查。",
+    "aliases": [{"text": "PFT", "language": "en", "alias_type": "abbreviation"}]
+  },
+  {
+    "schema_version": "1.2.0",
+    "concept_id": "concept_66666666666666666666666666666666",
+    "canonical_name": "多发性硬化",
+    "preferred_english": "multiple sclerosis",
+    "concept_type": "disease",
+    "scope_note": "中枢神经系统炎性脱髓鞘疾病。",
+    "aliases": [{"text": "MS", "language": "en", "alias_type": "abbreviation"}]
+  },
+  {
+    "schema_version": "1.2.0",
+    "concept_id": "concept_77777777777777777777777777777777",
+    "canonical_name": "二尖瓣狭窄",
+    "preferred_english": "mitral stenosis",
+    "concept_type": "disease",
+    "scope_note": "二尖瓣口狭窄的心脏瓣膜疾病。",
+    "aliases": [{"text": "MS", "language": "en", "alias_type": "abbreviation"}]
+  }
+]

@@ -9,6 +9,12 @@ permanent identifiers, matching fingerprints, versioned JSON Schema, a small CLI
 tests, and CI. It performs no Vault writes and contains no LLM, database, Obsidian,
 or document-ingestion integration.
 
+Version 0.5.0 also accepts an untrusted, structured `CaptureDraft` (workflow contract 0.1.0),
+reconciles it deterministically against a `ContractBundle`, and emits a reviewable
+`CaptureProposal`. ChatGPT Work performs language understanding; MedLearn calls no LLM API.
+Drafts contain only context, message IDs, short evidence excerpts, and extracted candidates—not
+complete chat transcripts. Proposals never write the knowledge base.
+
 ## Contract architecture
 
 - `ConceptEntity` is one permanent medical identity with aliases, semantic scope, and external
@@ -31,10 +37,14 @@ medlearn concept validate concept.json
 medlearn bundle validate examples/gerd
 medlearn preview render examples/gerd preview.md --topic GERD
 medlearn preview render examples/copd preview.md --topic COPD
+medlearn capture validate-draft examples/capture/copd-session/draft.json
+medlearn capture propose examples/copd examples/capture/copd-session/draft.json proposal.json
+medlearn capture review examples/copd proposal.json proposal.md
 pytest
 ```
 
-Committed schemas live in `schemas/current/`. CI regenerates each schema in memory and
+Persistent schemas live in `schemas/current/`; workflow schemas live in
+`schemas/workflow/current/`. CI regenerates each schema in memory and
 fails if a model changes without an intentional snapshot and migration-note update.
 
 Bundle warnings are printed but return success; integrity errors return nonzero. Preview topics

@@ -1,0 +1,101 @@
+{
+  "proposal_version": "0.1.0",
+  "proposal_id": "proposal_f20088f0fa20c0427d3dee59066fc8de",
+  "status": "ready_for_review",
+  "draft_digest": "sha256:ae867d956bc076a73343de8df35462e204d90983f1218e06641e57435cef503a",
+  "base_bundle_digest": "sha256:061aa62f4699ed64dc44c68465be1e1e4c606235f0cecba77989ed4c7459eead",
+  "proposal_digest": "sha256:ac64ae7b6e14d3d822c255392a7581155df022071f2193dc06efd3d558de8857",
+  "context": {
+    "source_id": "source_22222222222222222222222222222222",
+    "session_id": "session:copd-001",
+    "discipline_id": "internal_medicine",
+    "course_id": "course:internal_medicine",
+    "chapter_id": "chapter:copd",
+    "locale": "zh-CN",
+    "origin": "chatgpt_work",
+    "captured_at": "2026-07-11T10:00:00+08:00"
+  },
+  "concept_resolutions": [
+    {
+      "resolution_id": "resolution_21c83082fd4cc6b767b914e76a5374a0",
+      "surface_text": "COPD",
+      "status": "matched",
+      "matched_concept_id": "concept_11111111111111111111111111111111",
+      "candidate_concept_ids": [],
+      "new_candidate_id": null,
+      "evidence_message_ids": [
+        "message:assistant-001",
+        "message:user-001"
+      ]
+    },
+    {
+      "resolution_id": "resolution_83660ef3c3ebce2bad92796c227110cd",
+      "surface_text": "吸烟",
+      "status": "matched",
+      "matched_concept_id": "concept_33333333333333333333333333333333",
+      "candidate_concept_ids": [],
+      "new_candidate_id": null,
+      "evidence_message_ids": [
+        "message:assistant-001",
+        "message:user-001"
+      ]
+    }
+  ],
+  "new_concept_candidates": [],
+  "claim_proposals": [
+    {
+      "candidate_id": "candidate_claim_1760bccad43ecc7a6e9876b45ef05b42",
+      "statement": "吸烟是 COPD 的重要危险因素。",
+      "claim_type": "risk_factor",
+      "concept_refs": [
+        {
+          "concept_id": "concept_11111111111111111111111111111111",
+          "candidate_id": null
+        },
+        {
+          "concept_id": "concept_33333333333333333333333333333333",
+          "candidate_id": null
+        }
+      ],
+      "evidence_message_ids": [
+        "message:assistant-001"
+      ],
+      "proposed_verification_status": "unverified_chat",
+      "proposed_evidence_state": "unassessed",
+      "matching_existing_claim_ids": [
+        "claim_22222222222222222222222222222222"
+      ]
+    }
+  ],
+  "learning_capture_candidate": {
+    "source_id": "source_22222222222222222222222222222222",
+    "session_id": "session:copd-001",
+    "captured_at": "2026-07-11T10:00:00+08:00",
+    "observations": [
+      {
+        "candidate_id": "candidate_observation_ce84904b574049e31b9a1c79bf2b81fb",
+        "observation_type": "misconception",
+        "concept_refs": [
+          {
+            "concept_id": "concept_11111111111111111111111111111111",
+            "candidate_id": null
+          },
+          {
+            "concept_id": "concept_33333333333333333333333333333333",
+            "candidate_id": null
+          }
+        ],
+        "evidence_message_ids": [
+          "message:assistant-001",
+          "message:user-001"
+        ],
+        "observed_text": "COPD 与吸烟关系不大",
+        "proposed_correction": "吸烟是 COPD 的重要危险因素。",
+        "correction_claim_ids": [
+          "claim_22222222222222222222222222222222"
+        ]
+      }
+    ]
+  },
+  "issues": []
+}
