@@ -1,0 +1,19 @@
+[
+  {
+    "schema_version": "1.2.0",
+    "chapter_id": "chapter_internal_copd",
+    "course_id": "internal_medicine_2026",
+    "discipline_id": "internal_medicine",
+    "title": "慢性阻塞性肺疾病",
+    "topic_archetype": "disease",
+    "concept_ids": [
+      "concept_11111111111111111111111111111111",
+      "concept_22222222222222222222222222222222",
+      "concept_33333333333333333333333333333333",
+      "concept_44444444444444444444444444444444",
+      "concept_55555555555555555555555555555555"
+    ],
+    "anchor_concept_ids": ["concept_11111111111111111111111111111111"],
+    "exam_summary": {}
+  }
+]

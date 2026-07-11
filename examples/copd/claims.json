@@ -1,0 +1,42 @@
+[
+  {
+    "schema_version": "1.2.0",
+    "claim_id": "claim_11111111111111111111111111111111",
+    "claim_type": "definition",
+    "statement": "COPD 以持续气流受限为特征。",
+    "evidence_state": "supported",
+    "concept_ids": ["concept_11111111111111111111111111111111", "concept_22222222222222222222222222222222"],
+    "citations": [{"source_id": "source_11111111111111111111111111111111", "locator": {"locator_type": "page", "page": 100}}],
+    "verification_status": "verified_reference"
+  },
+  {
+    "schema_version": "1.2.0",
+    "claim_id": "claim_22222222222222222222222222222222",
+    "claim_type": "risk_factor",
+    "statement": "吸烟是 COPD 的重要危险因素。",
+    "evidence_state": "supported",
+    "concept_ids": ["concept_11111111111111111111111111111111", "concept_33333333333333333333333333333333"],
+    "citations": [{"source_id": "source_11111111111111111111111111111111", "locator": {"locator_type": "page", "page": 101}}],
+    "verification_status": "verified_reference"
+  },
+  {
+    "schema_version": "1.2.0",
+    "claim_id": "claim_33333333333333333333333333333333",
+    "claim_type": "treatment",
+    "statement": "支气管扩张剂是 COPD 稳定期治疗的重要药物。",
+    "evidence_state": "supported",
+    "concept_ids": ["concept_11111111111111111111111111111111", "concept_44444444444444444444444444444444"],
+    "citations": [{"source_id": "source_11111111111111111111111111111111", "locator": {"locator_type": "page", "page": 102}}],
+    "verification_status": "verified_reference"
+  },
+  {
+    "schema_version": "1.2.0",
+    "claim_id": "claim_44444444444444444444444444444444",
+    "claim_type": "investigation",
+    "statement": "PFT 用于确认 COPD 的持续气流受限。",
+    "evidence_state": "supported",
+    "concept_ids": ["concept_11111111111111111111111111111111", "concept_55555555555555555555555555555555"],
+    "citations": [{"source_id": "source_11111111111111111111111111111111", "locator": {"locator_type": "page", "page": 103}}],
+    "verification_status": "verified_reference"
+  }
+]

@@ -71,3 +71,14 @@ strict mypy, pytest, and committed Schema drift checks using the pinned Pydantic
 `ContractBundle` is the preview boundary: fixture JSON -> cross-record validation -> exact alias
 resolution -> claim selection -> learner observations -> `PreviewPlan` -> deterministic Markdown.
 It does not write to a real Vault or call an LLM.
+
+## Terminology and generic previews
+
+`PreviewRequest.topic` accepts a ConceptId, canonical name, preferred English term, or registered
+alias. Missing, ambiguous, deprecated, and split-pending topics fail explicitly. Preview plans
+store concept IDs and source text; the Markdown renderer alone formats user-visible labels.
+
+English abbreviations come only from English `ConceptAlias` records whose type is
+`abbreviation`; their Chinese explanation comes only from `ConceptEntity.canonical_name`.
+Abbreviations expand once per document using ASCII token boundaries and only for concepts linked
+to the displayed claim. Citations, source titles, and raw learning observations are never edited.

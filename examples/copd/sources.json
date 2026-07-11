@@ -1,0 +1,17 @@
+[
+  {
+    "schema_version": "1.2.0",
+    "source_id": "source_11111111111111111111111111111111",
+    "source_type": "textbook",
+    "title": "内科学 COPD 章节",
+    "authority": 4,
+    "version": "2026"
+  },
+  {
+    "schema_version": "1.2.0",
+    "source_id": "source_22222222222222222222222222222222",
+    "source_type": "learning_chat",
+    "title": "COPD 学习会话 001",
+    "authority": 0
+  }
+]
