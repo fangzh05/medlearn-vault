@@ -2,8 +2,8 @@
   "additionalProperties": false,
   "properties": {
     "schema_version": {
-      "const": "1.1.1",
-      "default": "1.1.1",
+      "const": "1.2.0",
+      "default": "1.2.0",
       "title": "Schema Version",
       "type": "string"
     },
@@ -13,7 +13,7 @@
       "type": "string"
     },
     "source_concept_id": {
-      "minLength": 1,
+      "pattern": "^concept_[a-f0-9]{32}$",
       "title": "Source Concept Id",
       "type": "string"
     },
@@ -23,13 +23,14 @@
       "type": "string"
     },
     "target_concept_id": {
-      "minLength": 1,
+      "pattern": "^concept_[a-f0-9]{32}$",
       "title": "Target Concept Id",
       "type": "string"
     },
     "supporting_claim_ids": {
       "default": [],
       "items": {
+        "pattern": "^claim_[a-f0-9]{32}$",
         "type": "string"
       },
       "title": "Supporting Claim Ids",
@@ -53,12 +54,6 @@
       "default": "",
       "pattern": "^relfp_[a-f0-9]{16}$",
       "title": "Match Fingerprint",
-      "type": "string"
-    },
-    "content_hash": {
-      "default": "",
-      "pattern": "^content_[a-f0-9]{64}$",
-      "title": "Content Hash",
       "type": "string"
     }
   },

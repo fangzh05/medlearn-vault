@@ -1,9 +1,9 @@
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import Field, model_validator
 
 from medlearn_vault.domain.base import DomainModel
-from medlearn_vault.identifiers import content_hash as compute_content_hash
+from medlearn_vault.domain.ids import ClaimId, ConceptId, ScopedExternalId, SourceId, UnitId
 from medlearn_vault.identifiers import knowledge_unit_fingerprint
 
 
@@ -11,22 +11,21 @@ class LearningObjective(DomainModel):
     objective_id: str
     text: str
     mastery_level: Literal["know", "understand", "apply", "reason"]
-    source_refs: tuple[str, ...] = ()
+    source_refs: tuple[SourceId, ...] = ()
     coverage_status: Literal["missing", "partial", "covered", "verified"]
 
 
 class KnowledgeUnit(DomainModel):
-    unit_id: str = Field(pattern=r"^unit_[a-f0-9]{32}$")
+    unit_id: UnitId
     unit_type: str
     title: str
-    concept_ids: tuple[str, ...] = ()
-    claim_ids: tuple[str, ...] = ()
-    source_refs: tuple[str, ...] = ()
-    content: Any
+    concept_ids: tuple[ConceptId, ...] = ()
+    claim_ids: tuple[ClaimId, ...] = ()
+    source_refs: tuple[SourceId, ...] = ()
+    content: str
     figure_spec_refs: tuple[str, ...] = ()
     table_spec_refs: tuple[str, ...] = ()
     match_fingerprint: str = Field(default="", pattern=r"^kufp_[a-f0-9]{16}$")
-    content_hash: str = Field(default="", pattern=r"^content_[a-f0-9]{64}$")
 
     @model_validator(mode="after")
     def refresh_fingerprint(self) -> "KnowledgeUnit":
@@ -34,20 +33,6 @@ class KnowledgeUnit(DomainModel):
             self,
             "match_fingerprint",
             knowledge_unit_fingerprint(self.unit_type, self.title, self.concept_ids),
-        )
-        object.__setattr__(
-            self,
-            "content_hash",
-            compute_content_hash(
-                self.unit_type,
-                self.title,
-                self.concept_ids,
-                self.claim_ids,
-                self.source_refs,
-                self.content,
-                self.figure_spec_refs,
-                self.table_spec_refs,
-            ),
         )
         return self
 
@@ -61,15 +46,16 @@ class ExamSummary(DomainModel):
 
 
 class ChapterDossier(DomainModel):
-    schema_version: Literal["1.1.1"] = "1.1.1"
-    chapter_id: str
-    course_id: str
-    discipline_id: str
+    schema_version: Literal["1.2.0"] = "1.2.0"
+    chapter_id: ScopedExternalId
+    course_id: ScopedExternalId
+    discipline_id: ScopedExternalId
     title: str
     topic_archetype: Literal[
         "disease", "procedure", "drug", "investigation", "mechanism", "syndrome", "other"
     ]
-    concept_ids: tuple[str, ...] = Field(min_length=1)
+    concept_ids: tuple[ConceptId, ...] = Field(min_length=1)
+    anchor_concept_ids: tuple[ConceptId, ...] = Field(min_length=1)
     learning_objectives: tuple[LearningObjective, ...] = ()
     knowledge_units: tuple[KnowledgeUnit, ...] = ()
     exam_summary: ExamSummary
@@ -80,6 +66,8 @@ class ChapterDossier(DomainModel):
     @model_validator(mode="after")
     def validate_unit_scope(self) -> "ChapterDossier":
         chapter_concepts = set(self.concept_ids)
+        if not set(self.anchor_concept_ids) <= chapter_concepts:
+            raise ValueError("anchor concept IDs must be within chapter concept IDs")
         if any(not set(unit.concept_ids) <= chapter_concepts for unit in self.knowledge_units):
             raise ValueError("knowledge unit concept IDs must be within chapter concept IDs")
         return self

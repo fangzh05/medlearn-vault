@@ -3,13 +3,11 @@ from typing import Literal
 from pydantic import ConfigDict, Field, model_validator
 
 from medlearn_vault.domain.base import DomainModel
+from medlearn_vault.domain.ids import ClaimId, ConceptId, LensId, RelationId
 from medlearn_vault.identifiers import (
     concept_fingerprint,
     normalize_text,
     relation_fingerprint,
-)
-from medlearn_vault.identifiers import (
-    content_hash as compute_content_hash,
 )
 
 ConceptType = Literal[
@@ -24,6 +22,7 @@ ConceptType = Literal[
     "investigation",
     "imaging_sign",
     "drug",
+    "drug_class",
     "procedure",
     "complication",
     "score",
@@ -61,15 +60,14 @@ class ConceptAlias(DomainModel):
 
 
 class ConceptRelation(DomainModel):
-    schema_version: Literal["1.1.1"] = "1.1.1"
-    relation_id: str = Field(pattern=r"^relation_[a-f0-9]{32}$")
-    source_concept_id: str = Field(min_length=1)
+    schema_version: Literal["1.2.0"] = "1.2.0"
+    relation_id: RelationId
+    source_concept_id: ConceptId
     relation_type: str = Field(min_length=1)
-    target_concept_id: str = Field(min_length=1)
-    supporting_claim_ids: tuple[str, ...] = ()
+    target_concept_id: ConceptId
+    supporting_claim_ids: tuple[ClaimId, ...] = ()
     confidence: float | None = Field(default=None, ge=0, le=1)
     match_fingerprint: str = Field(default="", pattern=r"^relfp_[a-f0-9]{16}$")
-    content_hash: str = Field(default="", pattern=r"^content_[a-f0-9]{64}$")
 
     @model_validator(mode="after")
     def refresh_fingerprint(self) -> "ConceptRelation":
@@ -80,24 +78,13 @@ class ConceptRelation(DomainModel):
                 self.source_concept_id, self.relation_type, self.target_concept_id
             ),
         )
-        object.__setattr__(
-            self,
-            "content_hash",
-            compute_content_hash(
-                self.source_concept_id,
-                self.relation_type,
-                self.target_concept_id,
-                self.supporting_claim_ids,
-                self.confidence,
-            ),
-        )
         return self
 
 
 class DisciplineLens(DomainModel):
-    schema_version: Literal["1.1.1"] = "1.1.1"
-    lens_id: str = Field(pattern=r"^lens_[a-f0-9]{32}$")
-    concept_id: str = Field(min_length=1)
+    schema_version: Literal["1.2.0"] = "1.2.0"
+    lens_id: LensId
+    concept_id: ConceptId
     discipline_id: str
     course_id: str | None = None
     focus_questions: tuple[str, ...] = ()
@@ -105,8 +92,8 @@ class DisciplineLens(DomainModel):
 
 
 class ConceptEntity(DomainModel):
-    schema_version: Literal["1.1.1"] = "1.1.1"
-    concept_id: str = Field(pattern=r"^concept_[a-f0-9]{32}$")
+    schema_version: Literal["1.2.0"] = "1.2.0"
+    concept_id: ConceptId
     canonical_name: str = Field(min_length=1)
     preferred_english: str | None = None
     concept_type: ConceptType
@@ -114,13 +101,12 @@ class ConceptEntity(DomainModel):
     definition: str | None = None
     inclusion_terms: tuple[str, ...] = ()
     exclusion_terms: tuple[str, ...] = ()
-    broader_concept_ids: tuple[str, ...] = ()
+    broader_concept_ids: tuple[ConceptId, ...] = ()
     external_identifiers: ExternalIdentifiers = Field(default_factory=ExternalIdentifiers)
     aliases: tuple[ConceptAlias, ...] = ()
     status: Literal["active", "deprecated", "merged", "split_pending"] = "active"
-    merged_into: str | None = None
+    merged_into: ConceptId | None = None
     match_fingerprint: str = Field(default="", pattern=r"^cfp_[a-f0-9]{16}$")
-    content_hash: str = Field(default="", pattern=r"^content_[a-f0-9]{64}$")
 
     @model_validator(mode="after")
     def validate_references(self) -> "ConceptEntity":
@@ -129,22 +115,6 @@ class ConceptEntity(DomainModel):
             "match_fingerprint",
             concept_fingerprint(
                 self.concept_type, self.canonical_name, [alias.text for alias in self.aliases]
-            ),
-        )
-        object.__setattr__(
-            self,
-            "content_hash",
-            compute_content_hash(
-                self.canonical_name,
-                self.preferred_english,
-                self.concept_type,
-                self.scope_note,
-                self.definition,
-                self.inclusion_terms,
-                self.exclusion_terms,
-                self.broader_concept_ids,
-                self.external_identifiers.model_dump(mode="json"),
-                [alias.model_dump(mode="json") for alias in self.aliases],
             ),
         )
         if self.status == "merged" and not self.merged_into:

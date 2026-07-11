@@ -1,6 +1,6 @@
 [
   {
-    "schema_version": "1.1.1",
+    "schema_version": "1.2.0",
     "concept_id": "concept_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "canonical_name": "胃食管反流病",
     "preferred_english": "gastroesophageal reflux disease",
@@ -11,14 +11,46 @@
     ]
   },
   {
-    "schema_version": "1.1.1",
+    "schema_version": "1.2.0",
     "concept_id": "concept_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     "canonical_name": "质子泵抑制剂",
     "preferred_english": "proton pump inhibitor",
-    "concept_type": "drug",
+    "concept_type": "drug_class",
     "scope_note": "抑制胃壁细胞质子泵的一类药物。",
     "aliases": [
       {"text": "PPI", "language": "en", "alias_type": "abbreviation"}
     ]
+  },
+  {
+    "schema_version": "1.2.0",
+    "concept_id": "concept_cccccccccccccccccccccccccccccccc",
+    "canonical_name": "胃底折叠术",
+    "preferred_english": "fundoplication",
+    "concept_type": "procedure",
+    "scope_note": "用于抗反流治疗的胃底折叠手术。"
+  },
+  {
+    "schema_version": "1.2.0",
+    "concept_id": "concept_dddddddddddddddddddddddddddddddd",
+    "canonical_name": "Barrett 食管",
+    "preferred_english": "Barrett esophagus",
+    "concept_type": "pathology",
+    "scope_note": "食管远端鳞状上皮被柱状上皮替代的病理实体。"
+  },
+  {
+    "schema_version": "1.2.0",
+    "concept_id": "concept_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "canonical_name": "食管下括约肌",
+    "preferred_english": "lower esophageal sphincter",
+    "concept_type": "anatomy",
+    "scope_note": "食管胃连接部的功能性高压区。"
+  },
+  {
+    "schema_version": "1.2.0",
+    "concept_id": "concept_ffffffffffffffffffffffffffffffff",
+    "canonical_name": "一过性食管下括约肌松弛",
+    "preferred_english": "transient lower esophageal sphincter relaxation",
+    "concept_type": "mechanism",
+    "scope_note": "非吞咽诱发的一过性食管下括约肌松弛机制。"
   }
 ]

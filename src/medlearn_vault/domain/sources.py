@@ -5,6 +5,7 @@ from typing import Annotated, Literal
 from pydantic import BeforeValidator, Field
 
 from medlearn_vault.domain.base import DomainModel
+from medlearn_vault.domain.ids import SourceId
 
 
 def _vault_path(value: object) -> str:
@@ -76,8 +77,8 @@ SourceLocator = Annotated[
 
 
 class SourceDocument(DomainModel):
-    schema_version: Literal["1.1.1"] = "1.1.1"
-    source_id: str = Field(pattern=r"^source_[a-f0-9]{32}$")
+    schema_version: Literal["1.2.0"] = "1.2.0"
+    source_id: SourceId
     source_type: Literal[
         "textbook", "guideline", "course_slide", "paper", "question_bank", "learning_chat", "web"
     ]
@@ -89,6 +90,6 @@ class SourceDocument(DomainModel):
 
 
 class SourceCitation(DomainModel):
-    source_id: str = Field(pattern=r"^source_[a-f0-9]{32}$")
+    source_id: SourceId
     locator: SourceLocator
     quotation: str | None = None

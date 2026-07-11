@@ -3,12 +3,13 @@ from typing import Literal
 from pydantic import Field, model_validator
 
 from medlearn_vault.domain.base import AwareDatetime, DomainModel, EventModel
+from medlearn_vault.domain.ids import ClaimId, ConceptId, ScopedExternalId, SourceId, UnitId
 
 
 class ConceptMention(EventModel):
     surface_text: str
-    candidate_concept_ids: tuple[str, ...] = ()
-    resolved_concept_id: str | None = None
+    candidate_concept_ids: tuple[ConceptId, ...] = ()
+    resolved_concept_id: ConceptId | None = None
     resolution_status: Literal["resolved", "ambiguous", "new_candidate", "rejected"]
     confidence: float = Field(ge=0, le=1)
     message_ids: tuple[str, ...] = ()
@@ -33,8 +34,8 @@ class ConceptMention(EventModel):
 
 class LearnerEvidence(EventModel):
     evidence_id: str
-    concept_id: str
-    knowledge_unit_id: str | None = None
+    concept_id: ConceptId
+    knowledge_unit_id: UnitId | None = None
     evidence_type: Literal[
         "correct_independent",
         "correct_after_hint",
@@ -53,11 +54,11 @@ class LearnerEvidence(EventModel):
 
 class MisconceptionObservation(EventModel):
     observation_id: str
-    concept_ids: tuple[str, ...]
+    concept_ids: tuple[ConceptId, ...]
     discipline_ids: tuple[str, ...] = ()
     observed_error_logic: str
     proposed_correction: str | None = None
-    correction_claim_ids: tuple[str, ...] = ()
+    correction_claim_ids: tuple[ClaimId, ...] = ()
     severity: Literal["low", "medium", "high"]
     evidence_message_ids: tuple[str, ...]
     observed_at: AwareDatetime
@@ -65,7 +66,7 @@ class MisconceptionObservation(EventModel):
 
 class MisconceptionState(DomainModel):
     misconception_id: str
-    concept_ids: tuple[str, ...]
+    concept_ids: tuple[ConceptId, ...]
     first_seen_at: AwareDatetime
     last_seen_at: AwareDatetime
     current_status: Literal["active", "improving", "resolved", "relapsed"]
@@ -74,7 +75,7 @@ class MisconceptionState(DomainModel):
 
 
 class LearnerState(DomainModel):
-    schema_version: Literal["1.1.1"] = "1.1.1"
+    schema_version: Literal["1.2.0"] = "1.2.0"
     learner_id: str
     computed_at: AwareDatetime
     misconception_states: tuple[MisconceptionState, ...] = ()
@@ -83,20 +84,31 @@ class LearnerState(DomainModel):
 class OpenQuestion(EventModel):
     question_id: str
     text: str
-    concept_ids: tuple[str, ...]
+    concept_ids: tuple[ConceptId, ...]
     discipline_id: str | None = None
     priority: Literal["low", "medium", "high"]
 
 
 class LearningCapture(EventModel):
-    schema_version: Literal["1.1.1"] = "1.1.1"
-    session_id: str
-    source_id: str
+    schema_version: Literal["1.2.0"] = "1.2.0"
+    session_id: ScopedExternalId
+    source_id: SourceId
+    session_started_at: AwareDatetime
     captured_at: AwareDatetime
-    discipline_id: str
-    course_id: str | None = None
-    chapter_id: str | None = None
+    discipline_id: ScopedExternalId
+    course_id: ScopedExternalId | None = None
+    chapter_id: ScopedExternalId | None = None
     concept_mentions: tuple[ConceptMention, ...] = ()
     learner_evidence: tuple[LearnerEvidence, ...] = ()
     misconception_observations: tuple[MisconceptionObservation, ...] = ()
     open_questions: tuple[OpenQuestion, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_timeline(self) -> "LearningCapture":
+        if self.session_started_at > self.captured_at:
+            raise ValueError("session_started_at must not be after captured_at")
+        observed = [item.observed_at for item in self.learner_evidence]
+        observed.extend(item.observed_at for item in self.misconception_observations)
+        if any(item < self.session_started_at or item > self.captured_at for item in observed):
+            raise ValueError("nested observation times must fall within the capture interval")
+        return self

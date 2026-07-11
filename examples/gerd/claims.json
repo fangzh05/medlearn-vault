@@ -1,6 +1,6 @@
 [
   {
-    "schema_version": "1.1.1",
+    "schema_version": "1.2.0",
     "claim_id": "claim_cccccccccccccccccccccccccccccccc",
     "claim_type": "treatment",
     "statement": "PPI 是 GERD 的主要药物治疗之一。",
@@ -9,6 +9,22 @@
       "concept_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "concept_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     ],
+    "citations": [
+      {
+        "source_id": "source_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "locator": {"locator_type": "page", "page": 321}
+      }
+    ],
+    "verification_status": "verified_reference",
+    "claim_status": "active"
+  },
+  {
+    "schema_version": "1.2.0",
+    "claim_id": "claim_dddddddddddddddddddddddddddddddd",
+    "claim_type": "mechanism",
+    "statement": "质子泵抑制剂通过抑制胃壁细胞 H+/K+-ATPase 减少胃酸分泌。",
+    "evidence_state": "supported",
+    "concept_ids": ["concept_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],
     "citations": [
       {
         "source_id": "source_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",

@@ -11,6 +11,7 @@ class AliasResolution(DomainModel):
     status: Literal["resolved", "redirected", "ambiguous", "review_required", "not_found"]
     candidate_concept_ids: tuple[str, ...] = ()
     resolved_concept_id: str | None = None
+    lifecycle_reasons: tuple[str, ...] = ()
 
 
 def resolve_alias(term: str, concepts: Sequence[ConceptEntity]) -> AliasResolution:
@@ -27,10 +28,17 @@ def resolve_alias(term: str, concepts: Sequence[ConceptEntity]) -> AliasResoluti
         )
         or any(needle == alias.normalized for alias in concept.aliases)
     ]
-    review = {concept.concept_id for concept in matches if concept.status == "split_pending"}
+    non_deprecated = [concept for concept in matches if concept.status != "deprecated"]
+    review = {concept.concept_id for concept in non_deprecated if concept.status == "split_pending"}
     if review:
         return AliasResolution(
-            term=term, status="review_required", candidate_concept_ids=tuple(sorted(review))
+            term=term,
+            status="review_required",
+            candidate_concept_ids=tuple(sorted(concept.concept_id for concept in non_deprecated)),
+            lifecycle_reasons=tuple(
+                f"{concept.concept_id}:{concept.status}"
+                for concept in sorted(non_deprecated, key=lambda item: item.concept_id)
+            ),
         )
     active = {concept.concept_id for concept in matches if concept.status == "active"}
     redirects = {
