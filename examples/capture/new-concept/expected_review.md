@@ -4,10 +4,10 @@
 ✅ READY_FOR_REVIEW
 
 ## 提案身份
-- Proposal ID: `proposal_31d39d773bdc046306dcff20e3405df2`
-- Draft digest: `sha256:5be8f8547273251512171d75461e7ff42477fd94f44d99dd3764d266db9d8503`
+- Proposal ID: `proposal_adb6dbc090f75e94fa91e705932022fe`
+- Draft digest: `sha256:d27709c2c4f7ea186b4dd03656b7d8dec96d79aa236d07599145320bd8c93867`
 - Base bundle digest: `sha256:911cca4404779e6018a32f88844e33b48dae03f86f20e7e37b7af6a20f5edd63`
-- Proposal digest: `sha256:e1934a76d0fc40d44a4a2cbf953b75f6cfe6067d435bd11c31c58f8e96676036`
+- Proposal digest: `sha256:45a4ae5a7975c8681297a7f289fa0b4977f197a73f06c56428ef08441b66e990`
 
 ## 已匹配概念
 - 无
