@@ -15,26 +15,28 @@ class Bucket {
   async get(key: string) {
     const object = this.objects.get(key);
     return object === undefined ? null : {
-      httpEtag: object.etag,
+      etag: object.etag,
+      httpEtag: `"${object.etag}"`,
       json: async <T>() => JSON.parse(object.text) as T,
     };
   }
 
   async put(
     key: string, value: string | ArrayBuffer,
-    options?: { onlyIf?: { etagDoesNotMatch?: string; etagMatches?: string } },
+    options?: { onlyIf?: { etagMatches?: string } | Headers },
   ) {
     if (this.failNextPrefix && key.startsWith(this.failNextPrefix)) {
       this.failNextPrefix = undefined;
       throw new Error("injected storage failure with sensitive details");
     }
     const current = this.objects.get(key);
-    if (options?.onlyIf?.etagDoesNotMatch === "*" && current) return null;
-    if (options?.onlyIf?.etagMatches && current?.etag !== options.onlyIf.etagMatches) return null;
+    const condition = options?.onlyIf;
+    if (condition instanceof Headers && condition.get("If-None-Match") === "*" && current) return null;
+    if (!(condition instanceof Headers) && condition?.etagMatches && current?.etag !== condition.etagMatches) return null;
     const text = typeof value === "string" ? value : new TextDecoder().decode(value);
     const stored = { text, etag: `"etag-${++this.revision}"` };
     this.objects.set(key, stored);
-    return { key, httpEtag: stored.etag };
+    return { key, etag: stored.etag, httpEtag: `"${stored.etag}"` };
   }
 }
 
@@ -222,7 +224,7 @@ describe("recovery and concurrency", () => {
     };
     await bucket.put(key, JSON.stringify(received));
     const object = await bucket.get(key);
-    const stale: Stored<JobRecord> = { value: received, etag: object!.httpEtag };
+    const stale: Stored<JobRecord> = { value: received, etag: object!.etag };
     await bucket.put(key, JSON.stringify({ ...received, status: "dispatched" }));
     expect(await transitionJob(
       bucket as unknown as R2Bucket, key, stale,
@@ -266,6 +268,6 @@ describe("security boundary", () => {
     expect(text).not.toContain(token);
     expect(text).not.toContain("github-secret");
     expect(log).not.toHaveBeenCalled();
-    expect(error).not.toHaveBeenCalled();
+    expect(error).toHaveBeenCalledWith(JSON.stringify({ stage: "v1_route", error_code: "CONTROL_STORAGE_FAILURE" }));
   });
 });
