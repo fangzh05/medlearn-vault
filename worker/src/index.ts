@@ -82,11 +82,11 @@ async function authorized(request: Request, secret: string): Promise<boolean> {
 
 async function readStored<T>(bucket: R2Bucket, key: string): Promise<Stored<T> | null> {
   const object = await bucket.get(key);
-  return object ? { value: await object.json<T>(), etag: object.httpEtag } : null;
+  return object ? { value: await object.json<T>(), etag: object.etag } : null;
 }
 
 async function putNew(bucket: R2Bucket, key: string, value: string | ArrayBuffer): Promise<boolean> {
-  return (await bucket.put(key, value, { onlyIf: { etagDoesNotMatch: "*" } })) !== null;
+  return (await bucket.put(key, value, { onlyIf: new Headers({ "If-None-Match": "*" }) })) !== null;
 }
 
 async function putCas(bucket: R2Bucket, key: string, value: unknown, etag: string): Promise<boolean> {
@@ -290,6 +290,7 @@ export async function handle(request: Request, env: Env): Promise<Response> {
   try {
     return secure(await routeV1(request, configured, url));
   } catch {
+    console.error(JSON.stringify({ stage: "v1_route", error_code: "CONTROL_STORAGE_FAILURE" }));
     return secure(reply(503, { error: "CONTROL_STORAGE_UNAVAILABLE" }));
   }
 }
