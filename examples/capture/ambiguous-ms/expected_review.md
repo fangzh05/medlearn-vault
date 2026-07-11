@@ -4,10 +4,10 @@
 ⛔ BLOCKED（必须消歧或修正后才能继续）
 
 ## 提案身份
-- Proposal ID: `proposal_0ae9436207f019363b84cefa052646a0`
-- Draft digest: `sha256:f718b4f5466db595fede9707ed18130227e97688765126b3d5af307ee23c72cb`
+- Proposal ID: `proposal_69ffa65560f18710c0394010a7966c85`
+- Draft digest: `sha256:ef9dd4ac842a7f30af14af2f606c6f274d5ccb33d5da1b59df4db87910071260`
 - Base bundle digest: `sha256:9d845a435f0b700a99be76518205c4e128f1efd27206c7e696cadece5457952f`
-- Proposal digest: `sha256:d4cb83cd4a6a2ef9a89965a4d6a478a08a0f69c1bcf289604451a463004c1466`
+- Proposal digest: `sha256:8022834011620956b4a400b1380e03a88015e33d063857ed0716e038cefb6819`
 
 ## 已匹配概念
 - 无

@@ -1,5 +1,5 @@
 {
-  "draft_version": "0.2.0",
+  "draft_version": "0.3.0",
   "context": {
     "source_id": "source_22222222222222222222222222222222",
     "session_id": "session:copd-001",
@@ -29,7 +29,8 @@
     {
       "observed_error_logic": "COPD 与吸烟关系不大",
       "concept_terms": ["COPD", "吸烟"],
-      "evidence_message_ids": ["message:user-001", "message:assistant-001"],
+      "observed_error_message_ids": ["message:user-001"],
+      "correction_message_ids": ["message:assistant-001"],
       "proposed_correction": "吸烟是 COPD 的重要危险因素。",
       "correction_terms": ["COPD", "吸烟"],
       "severity": "high"

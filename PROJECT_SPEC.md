@@ -2,14 +2,14 @@
 
 Contract version: 1.2.0
 
-Workflow contract version: 0.2.0
+Workflow contract version: 0.3.0
 
 ## Purpose
 
 MedLearn Vault compiles source-backed medical knowledge and immutable learning observations
 into cross-disciplinary chapter previews. It is local-first and preview-first. The current
-phase defines contracts only: no LLM, database, PDF ingestion, Obsidian adapter, or real Vault
-write is implemented.
+phase defines contracts plus one replaceable single-user transport adapter: no LLM, database, PDF
+ingestion, Obsidian adapter, or real Vault write is implemented.
 
 ## Single sources of truth
 

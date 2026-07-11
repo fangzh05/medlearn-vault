@@ -25,7 +25,7 @@ from medlearn_vault.identifiers import normalize_text
 from medlearn_vault.registry import resolve_alias
 from medlearn_vault.terminology import english_abbreviations, format_concept_label
 
-WORKFLOW_VERSION: Literal["0.2.0"] = "0.2.0"
+WORKFLOW_VERSION: Literal["0.3.0"] = "0.3.0"
 MAX_EVIDENCE_MESSAGES = 200
 MAX_CANDIDATES_PER_KIND = 200
 MAX_EXCERPT_LENGTH = 1000
@@ -39,7 +39,6 @@ class CaptureContext(DomainModel):
     course_id: str | None = Field(default=None, min_length=1, max_length=128)
     chapter_id: str | None = Field(default=None, min_length=1, max_length=128)
     locale: Literal["zh-CN"] = "zh-CN"
-    origin: Literal["chatgpt_work"] = "chatgpt_work"
     session_started_at: AwareDatetime
     captured_at: AwareDatetime
 
@@ -102,14 +101,15 @@ class ExtractedLearnerEvidenceCandidate(DomainModel):
 class ExtractedMisconceptionCandidate(DomainModel):
     observed_error_logic: str = Field(min_length=1, max_length=MAX_STATEMENT_LENGTH)
     concept_terms: tuple[str, ...]
-    evidence_message_ids: tuple[ScopedExternalId, ...]
+    observed_error_message_ids: tuple[ScopedExternalId, ...]
+    correction_message_ids: tuple[ScopedExternalId, ...] = ()
     proposed_correction: str | None = Field(default=None, max_length=MAX_STATEMENT_LENGTH)
     correction_terms: tuple[str, ...] = ()
     severity: Literal["low", "medium", "high"]
 
 
 class CaptureDraft(DomainModel):
-    draft_version: Literal["0.2.0"] = WORKFLOW_VERSION
+    draft_version: Literal["0.3.0"] = WORKFLOW_VERSION
     context: CaptureContext
     evidence_messages: tuple[EvidenceMessage, ...] = Field(max_length=MAX_EVIDENCE_MESSAGES)
     concept_mentions: tuple[ExtractedConceptMention, ...] = Field(
@@ -135,11 +135,18 @@ class CaptureDraft(DomainModel):
             *(item.evidence_message_ids for item in self.concept_mentions),
             *(item.evidence_message_ids for item in self.claim_candidates),
             *(item.evidence_message_ids for item in self.learner_evidence_candidates),
-            *(item.evidence_message_ids for item in self.misconception_candidates),
+            *(item.observed_error_message_ids for item in self.misconception_candidates),
+            *(item.correction_message_ids for item in self.misconception_candidates),
         )
         if any(not set(group) <= known for group in references):
             raise ValueError("all evidence_message_ids must exist in evidence_messages")
-        if any(not group for group in references):
+        required_references = (
+            *(item.evidence_message_ids for item in self.concept_mentions),
+            *(item.evidence_message_ids for item in self.claim_candidates),
+            *(item.evidence_message_ids for item in self.learner_evidence_candidates),
+            *(item.observed_error_message_ids for item in self.misconception_candidates),
+        )
+        if any(not group for group in required_references):
             raise ValueError("all extracted candidates require evidence_message_ids")
         roles = {item.message_id: item.role for item in self.evidence_messages}
         assertion_groups = (
@@ -153,6 +160,11 @@ class CaptureDraft(DomainModel):
             for item in self.learner_evidence_candidates
         ):
             raise ValueError("learner evidence must be owned by user evidence messages")
+        if any(
+            {roles[mid] for mid in item.observed_error_message_ids} != {"user"}
+            for item in self.misconception_candidates
+        ):
+            raise ValueError("observed errors must be owned by user evidence messages")
         if any(
             item.observed_at < self.context.session_started_at
             or item.observed_at > self.context.captured_at
@@ -245,7 +257,7 @@ class LearningCaptureCandidate(DomainModel):
 
 
 class CaptureProposal(DomainModel):
-    proposal_version: Literal["0.2.0"] = WORKFLOW_VERSION
+    proposal_version: Literal["0.3.0"] = WORKFLOW_VERSION
     proposal_id: str = Field(pattern=r"^proposal_[a-f0-9]{32}$")
     status: Literal["ready_for_review", "blocked"]
     draft_digest: str = Field(pattern=r"^sha256:[a-f0-9]{64}$")
@@ -747,11 +759,14 @@ def build_capture_proposal(bundle: ContractBundle, draft: CaptureDraft) -> Captu
                 candidate_id=_id(
                     "candidate_observation",
                     misconception.observed_error_logic,
-                    misconception.evidence_message_ids,
+                    misconception.observed_error_message_ids,
                 ),
                 observation_type="misconception",
                 concept_refs=item_refs,
-                evidence_message_ids=_ordered_unique(misconception.evidence_message_ids),
+                evidence_message_ids=_ordered_unique(
+                    misconception.observed_error_message_ids
+                    + misconception.correction_message_ids
+                ),
                 observed_text=misconception.observed_error_logic,
                 proposed_correction=misconception.proposed_correction,
                 correction_claim_ids=corrections,
@@ -763,7 +778,7 @@ def build_capture_proposal(bundle: ContractBundle, draft: CaptureDraft) -> Captu
                     "observation",
                     draft.context.session_id,
                     misconception.observed_error_logic,
-                    misconception.evidence_message_ids,
+                    misconception.observed_error_message_ids,
                 ),
                 concept_ids=existing_ids,
                 discipline_ids=(draft.context.discipline_id,),
@@ -771,8 +786,11 @@ def build_capture_proposal(bundle: ContractBundle, draft: CaptureDraft) -> Captu
                 proposed_correction=misconception.proposed_correction,
                 correction_claim_ids=corrections,
                 severity=misconception.severity,
-                evidence_message_ids=_ordered_unique(misconception.evidence_message_ids),
-                observed_at=observed_at(misconception.evidence_message_ids),
+                evidence_message_ids=_ordered_unique(
+                    misconception.observed_error_message_ids
+                    + misconception.correction_message_ids
+                ),
+                observed_at=observed_at(misconception.observed_error_message_ids),
             )
         )
 

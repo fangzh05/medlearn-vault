@@ -1,7 +1,7 @@
 # Workflow contracts
 
 Persistent domain records remain at contract 1.2.0. Temporary capture workflow records have an
-independent 0.2.0 version under `schemas/workflow/current/`; they are not a ninth persistent domain
+independent 0.3.0 version under `schemas/workflow/current/`; they are not a ninth persistent domain
 aggregate.
 
 `CaptureDraft` is untrusted structured extraction. Every assertion references one or more existing
@@ -9,6 +9,13 @@ aggregate.
 evidence is invalid, and learner evidence must be user-owned. A draft cannot declare or override a
 speaker role. Correctness is an explicit observed outcome using the existing `LearnerEvidence`
 taxonomy; matching user and assistant text does not establish correctness.
+
+Client source metadata is not authenticated identity and no longer appears in `CaptureContext`.
+Cloud intake wraps the draft in an untrusted envelope whose `client_kind` is one of
+`chatgpt_work`, `ios_shortcut`, or `manual`; it never grants permission. Misconceptions separate
+`observed_error_message_ids` from `correction_message_ids`. Observed error evidence must be
+user-owned, while correction evidence may reference assistant messages. `observed_at` derives
+only from observed error evidence.
 
 Concept terms for an observed misconception and `correction_terms` are resolved independently.
 Authoritative correction matching uses the correction terms and requires an exact statement and

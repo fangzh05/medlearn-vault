@@ -53,12 +53,6 @@
           "title": "Locale",
           "type": "string"
         },
-        "origin": {
-          "const": "chatgpt_work",
-          "default": "chatgpt_work",
-          "title": "Origin",
-          "type": "string"
-        },
         "session_started_at": {
           "format": "date-time",
           "title": "Session Started At",
@@ -349,12 +343,21 @@
           "title": "Concept Terms",
           "type": "array"
         },
-        "evidence_message_ids": {
+        "observed_error_message_ids": {
           "items": {
             "pattern": "^[a-z][a-z0-9_:-]{2,127}$",
             "type": "string"
           },
-          "title": "Evidence Message Ids",
+          "title": "Observed Error Message Ids",
+          "type": "array"
+        },
+        "correction_message_ids": {
+          "default": [],
+          "items": {
+            "pattern": "^[a-z][a-z0-9_:-]{2,127}$",
+            "type": "string"
+          },
+          "title": "Correction Message Ids",
           "type": "array"
         },
         "proposed_correction": {
@@ -391,7 +394,7 @@
       "required": [
         "observed_error_logic",
         "concept_terms",
-        "evidence_message_ids",
+        "observed_error_message_ids",
         "severity"
       ],
       "title": "ExtractedMisconceptionCandidate",
@@ -401,8 +404,8 @@
   "additionalProperties": false,
   "properties": {
     "draft_version": {
-      "const": "0.2.0",
-      "default": "0.2.0",
+      "const": "0.3.0",
+      "default": "0.3.0",
       "title": "Draft Version",
       "type": "string"
     },

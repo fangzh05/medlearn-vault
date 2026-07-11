@@ -53,12 +53,6 @@
           "title": "Locale",
           "type": "string"
         },
-        "origin": {
-          "const": "chatgpt_work",
-          "default": "chatgpt_work",
-          "title": "Origin",
-          "type": "string"
-        },
         "session_started_at": {
           "format": "date-time",
           "title": "Session Started At",
@@ -905,8 +899,8 @@
   "additionalProperties": false,
   "properties": {
     "proposal_version": {
-      "const": "0.2.0",
-      "default": "0.2.0",
+      "const": "0.3.0",
+      "default": "0.3.0",
       "title": "Proposal Version",
       "type": "string"
     },

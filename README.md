@@ -9,7 +9,7 @@ permanent identifiers, matching fingerprints, versioned JSON Schema, a small CLI
 tests, and CI. It performs no Vault writes and contains no LLM, database, Obsidian,
 or document-ingestion integration.
 
-Version 0.5.1 accepts an untrusted, structured `CaptureDraft` (workflow contract 0.2.0),
+Version 0.5.1 accepts an untrusted, structured `CaptureDraft` (workflow contract 0.3.0),
 reconciles it deterministically against a `ContractBundle`, and emits a reviewable
 `CaptureProposal`. ChatGPT Work performs language understanding; MedLearn calls no LLM API.
 Drafts contain only context, message IDs, short evidence excerpts, and extracted candidates—not
@@ -17,6 +17,19 @@ complete chat transcripts. Assertion ownership comes only from referenced messag
 learning outcomes map to the persistent learner-evidence taxonomy, and complete proposals can be
 materialized deterministically as validated `LearningCapture` records. Proposals never write the
 knowledge base.
+
+An isolated TypeScript Worker in `worker/` provides the first single-user cloud intake adapter.
+It stores immutable intake bytes, jobs, and idempotency records only in the `medlearn-control` R2
+bucket, then dispatches a fixed GitHub workflow target. It does not contain medical reasoning,
+approval, Vault writing, or the workflow itself.
+
+```powershell
+cd worker
+npm install
+npm run lint
+npm run typecheck
+npm test
+```
 
 ## Contract architecture
 

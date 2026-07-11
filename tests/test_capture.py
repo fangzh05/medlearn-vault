@@ -45,7 +45,7 @@ def test_capture_golden_is_deterministic_review_only_and_materializable() -> Non
     assert isinstance(materialized, LearningCapture)
     assert materialized == first.learning_capture_candidate.capture
     misconception = materialized.misconception_observations[0]
-    assert misconception.observed_at.isoformat() == "2026-07-11T09:56:00+08:00"
+    assert misconception.observed_at.isoformat() == "2026-07-11T09:55:00+08:00"
     assert misconception.severity == "high"
     assert misconception.concept_ids
     assert misconception.correction_claim_ids
@@ -99,6 +99,18 @@ def test_missing_assertion_evidence_and_assistant_owned_learner_evidence_are_rej
         }
     ]
     with pytest.raises(ValidationError, match="owned by user"):
+        CaptureDraft.model_validate(payload)
+
+
+def test_origin_is_not_identity_and_misconception_error_evidence_is_user_owned() -> None:
+    payload = draft_payload()
+    payload["context"]["origin"] = "chatgpt_work"  # type: ignore[index]
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        CaptureDraft.model_validate(payload)
+    payload = draft_payload()
+    misconception = payload["misconception_candidates"][0]  # type: ignore[index]
+    misconception["observed_error_message_ids"] = ["message:assistant-001"]  # type: ignore[index]
+    with pytest.raises(ValidationError, match="observed errors must be owned by user"):
         CaptureDraft.model_validate(payload)
 
 
@@ -304,7 +316,7 @@ def test_capture_cli_rejects_tampering_and_stale_bundle(tmp_path: Path) -> None:
 
 def test_workflow_schema_is_independent() -> None:
     restored = CaptureDraft.model_validate_json(draft().model_dump_json())
-    assert restored.draft_version == "0.2.0"
+    assert restored.draft_version == "0.3.0"
     assert "schema_version" not in CaptureProposal.model_fields
 
 

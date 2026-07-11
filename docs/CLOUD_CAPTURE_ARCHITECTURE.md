@@ -7,12 +7,11 @@ CaptureDraft → deterministic local reconciliation → reviewable CapturePropos
 → validated LearningCapture
 ```
 
-One possible cloud-assisted deployment is:
+The first replaceable, single-user intake adapter is:
 
 ```text
-Work Skill → CaptureDraft → Cloudflare Worker → GitHub Actions
-→ MedLearn CaptureProposal → user confirmation → R2 Vault writer
-→ Remotely Save → Obsidian Mobile
+IntakeEnvelope → Cloudflare Worker → medlearn-control R2
+→ fixed GitHub workflow dispatch → future proposal producer
 ```
 
 ChatGPT Work's built-in model owns language understanding and structured extraction. Its
@@ -24,5 +23,13 @@ resolver, reconciles it with the accepted `ContractBundle`, and emits a versione
 `CaptureProposal`. `error` and `review` issues block; warnings remain visible but permit
 `ready_for_review`. User assertions and errors become learner observations, never medical fact.
 
-These services are replaceable adapters, not core dependencies. The current implementation contains
-no Work Skill, Worker, Actions, R2, Remotely Save, approval, commit, or Vault writer.
+The Worker exposes only `GET /`, `GET /health`, `POST /v1/captures`,
+`GET /v1/jobs/:job_id`, and `GET /v1/proposals/:proposal_id`. Public health routes are unauthenticated;
+all `/v1/*` routes use one bearer token stored as a Worker secret. It binds only the
+`medlearn-control` bucket and dispatches fixed server-side repository, workflow, and ref values.
+The exact request bytes are content-addressed and idempotency claims use conditional R2 creation.
+
+These services are replaceable adapters, not core dependencies. This slice intentionally contains
+no GitHub workflow implementation, approval, commit, Vault write, Obsidian integration, Skill,
+iOS Shortcut, MCP, user accounts, tenants, D1, or Durable Objects. The `medlearn-vault` bucket is
+not bound or accessed.
