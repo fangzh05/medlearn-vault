@@ -1,0 +1,279 @@
+{
+  "$defs": {
+    "ChatMessageLocator": {
+      "additionalProperties": false,
+      "properties": {
+        "locator_type": {
+          "const": "chat_message",
+          "default": "chat_message",
+          "title": "Locator Type",
+          "type": "string"
+        },
+        "message_id": {
+          "minLength": 1,
+          "title": "Message Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "message_id"
+      ],
+      "title": "ChatMessageLocator",
+      "type": "object"
+    },
+    "FigureLocator": {
+      "additionalProperties": false,
+      "properties": {
+        "locator_type": {
+          "const": "figure",
+          "default": "figure",
+          "title": "Locator Type",
+          "type": "string"
+        },
+        "label": {
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        }
+      },
+      "required": [
+        "label"
+      ],
+      "title": "FigureLocator",
+      "type": "object"
+    },
+    "PageLocator": {
+      "additionalProperties": false,
+      "properties": {
+        "locator_type": {
+          "const": "page",
+          "default": "page",
+          "title": "Locator Type",
+          "type": "string"
+        },
+        "page": {
+          "minimum": 1,
+          "title": "Page",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "page"
+      ],
+      "title": "PageLocator",
+      "type": "object"
+    },
+    "SectionLocator": {
+      "additionalProperties": false,
+      "properties": {
+        "locator_type": {
+          "const": "section",
+          "default": "section",
+          "title": "Locator Type",
+          "type": "string"
+        },
+        "heading": {
+          "minLength": 1,
+          "title": "Heading",
+          "type": "string"
+        }
+      },
+      "required": [
+        "heading"
+      ],
+      "title": "SectionLocator",
+      "type": "object"
+    },
+    "SlideLocator": {
+      "additionalProperties": false,
+      "properties": {
+        "locator_type": {
+          "const": "slide",
+          "default": "slide",
+          "title": "Locator Type",
+          "type": "string"
+        },
+        "slide": {
+          "minimum": 1,
+          "title": "Slide",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "slide"
+      ],
+      "title": "SlideLocator",
+      "type": "object"
+    },
+    "SourceCitation": {
+      "additionalProperties": false,
+      "properties": {
+        "source_id": {
+          "pattern": "^source_[a-f0-9]{32}$",
+          "title": "Source Id",
+          "type": "string"
+        },
+        "locator": {
+          "discriminator": {
+            "mapping": {
+              "chat_message": "#/$defs/ChatMessageLocator",
+              "figure": "#/$defs/FigureLocator",
+              "page": "#/$defs/PageLocator",
+              "section": "#/$defs/SectionLocator",
+              "slide": "#/$defs/SlideLocator",
+              "table": "#/$defs/TableLocator"
+            },
+            "propertyName": "locator_type"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/PageLocator"
+            },
+            {
+              "$ref": "#/$defs/SlideLocator"
+            },
+            {
+              "$ref": "#/$defs/SectionLocator"
+            },
+            {
+              "$ref": "#/$defs/ChatMessageLocator"
+            },
+            {
+              "$ref": "#/$defs/FigureLocator"
+            },
+            {
+              "$ref": "#/$defs/TableLocator"
+            }
+          ],
+          "title": "Locator"
+        },
+        "quotation": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Quotation"
+        }
+      },
+      "required": [
+        "source_id",
+        "locator"
+      ],
+      "title": "SourceCitation",
+      "type": "object"
+    },
+    "TableLocator": {
+      "additionalProperties": false,
+      "properties": {
+        "locator_type": {
+          "const": "table",
+          "default": "table",
+          "title": "Locator Type",
+          "type": "string"
+        },
+        "label": {
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        }
+      },
+      "required": [
+        "label"
+      ],
+      "title": "TableLocator",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "claim_id": {
+      "pattern": "^claim_[a-f0-9]{32}$",
+      "title": "Claim Id",
+      "type": "string"
+    },
+    "claim_type": {
+      "title": "Claim Type",
+      "type": "string"
+    },
+    "statement": {
+      "minLength": 1,
+      "title": "Statement",
+      "type": "string"
+    },
+    "evidence_state": {
+      "default": "unassessed",
+      "enum": [
+        "unassessed",
+        "supported",
+        "refuted",
+        "conflicting"
+      ],
+      "title": "Evidence State",
+      "type": "string"
+    },
+    "concept_ids": {
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Concept Ids",
+      "type": "array"
+    },
+    "discipline_ids": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Discipline Ids",
+      "type": "array"
+    },
+    "citations": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/SourceCitation"
+      },
+      "title": "Citations",
+      "type": "array"
+    },
+    "verification_status": {
+      "default": "unverified_chat",
+      "enum": [
+        "unverified_chat",
+        "source_backed",
+        "verified_reference",
+        "conflicted",
+        "deprecated"
+      ],
+      "title": "Verification Status",
+      "type": "string"
+    },
+    "course_relevance": {
+      "additionalProperties": {
+        "maximum": 5,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "title": "Course Relevance",
+      "type": "object"
+    },
+    "fingerprint": {
+      "default": "",
+      "pattern": "^clfp_[a-f0-9]{16}$",
+      "title": "Fingerprint",
+      "type": "string"
+    }
+  },
+  "required": [
+    "claim_id",
+    "claim_type",
+    "statement",
+    "concept_ids"
+  ],
+  "title": "MedicalClaim",
+  "type": "object"
+}

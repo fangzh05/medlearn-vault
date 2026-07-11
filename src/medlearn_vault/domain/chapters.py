@@ -1,8 +1,9 @@
 from typing import Any, Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from medlearn_vault.domain.base import DomainModel
+from medlearn_vault.identifiers import knowledge_unit_fingerprint
 
 
 class LearningObjective(DomainModel):
@@ -14,15 +15,25 @@ class LearningObjective(DomainModel):
 
 
 class KnowledgeUnit(DomainModel):
-    unit_id: str = Field(pattern=r"^ku_[a-f0-9]{12,64}$")
+    unit_id: str = Field(pattern=r"^unit_[a-f0-9]{32}$")
     unit_type: str
     title: str
-    concept_ids: list[str] = Field(default_factory=list)
+    concept_ids: tuple[str, ...] = ()
     claim_ids: list[str] = Field(default_factory=list)
     source_refs: list[str] = Field(default_factory=list)
     content: Any
     figure_spec_refs: list[str] = Field(default_factory=list)
     table_spec_refs: list[str] = Field(default_factory=list)
+    fingerprint: str = Field(default="", pattern=r"^kufp_[a-f0-9]{16}$")
+
+    @model_validator(mode="after")
+    def refresh_fingerprint(self) -> "KnowledgeUnit":
+        object.__setattr__(
+            self,
+            "fingerprint",
+            knowledge_unit_fingerprint(self.unit_type, self.title, self.concept_ids),
+        )
+        return self
 
 
 class ExamSummary(DomainModel):
@@ -34,7 +45,7 @@ class ExamSummary(DomainModel):
 
 
 class ChapterDossier(DomainModel):
-    schema_version: Literal["1.0.0"] = "1.0.0"
+    schema_version: Literal["1.1.0"] = "1.1.0"
     chapter_id: str
     course_id: str
     discipline_id: str
@@ -42,12 +53,10 @@ class ChapterDossier(DomainModel):
     topic_archetype: Literal[
         "disease", "procedure", "drug", "investigation", "mechanism", "syndrome", "other"
     ]
-    primary_concept_ids: list[str] = Field(min_length=1)
-    related_concept_ids: list[str] = Field(default_factory=list)
+    concept_ids: list[str] = Field(min_length=1)
     learning_objectives: list[LearningObjective] = Field(default_factory=list)
     knowledge_units: list[KnowledgeUnit] = Field(default_factory=list)
     exam_summary: ExamSummary
-    cross_discipline_links: list[dict[str, str]] = Field(default_factory=list)
     quality_status: Literal[
         "draft", "source_gap", "conflict_review", "content_review", "publishable", "published"
     ] = "draft"

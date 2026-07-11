@@ -5,9 +5,16 @@ from medlearn_vault.domain.concepts import (
     ConceptEntity,
     ConceptRelation,
     DisciplineLens,
+    ExternalIdentifiers,
 )
-from medlearn_vault.domain.learner import LearnerEvidence, LearningCapture, Misconception
-from medlearn_vault.domain.sources import SourceCitation, VaultPath
+from medlearn_vault.domain.learner import (
+    LearnerEvidence,
+    LearnerState,
+    LearningCapture,
+    MisconceptionObservation,
+    MisconceptionState,
+)
+from medlearn_vault.domain.sources import SourceCitation, SourceDocument, SourceLocator, VaultPath
 
 __all__ = [
     "ChapterDossier",
@@ -15,11 +22,16 @@ __all__ = [
     "ConceptEntity",
     "ConceptRelation",
     "DisciplineLens",
+    "ExternalIdentifiers",
     "KnowledgeUnit",
     "LearnerEvidence",
+    "LearnerState",
     "LearningCapture",
     "MedicalClaim",
-    "Misconception",
+    "MisconceptionObservation",
+    "MisconceptionState",
     "SourceCitation",
+    "SourceDocument",
+    "SourceLocator",
     "VaultPath",
 ]

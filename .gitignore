@@ -7,4 +7,3 @@ __pycache__/
 dist/
 build/
 schemas/generated/
-

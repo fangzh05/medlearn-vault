@@ -1,0 +1,252 @@
+{
+  "$defs": {
+    "ExamSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "must_memorize": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Must Memorize",
+          "type": "array"
+        },
+        "must_understand": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Must Understand",
+          "type": "array"
+        },
+        "case_likely": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Case Likely",
+          "type": "array"
+        },
+        "mcq_traps": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Mcq Traps",
+          "type": "array"
+        },
+        "awareness_only": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Awareness Only",
+          "type": "array"
+        }
+      },
+      "title": "ExamSummary",
+      "type": "object"
+    },
+    "KnowledgeUnit": {
+      "additionalProperties": false,
+      "properties": {
+        "unit_id": {
+          "pattern": "^unit_[a-f0-9]{32}$",
+          "title": "Unit Id",
+          "type": "string"
+        },
+        "unit_type": {
+          "title": "Unit Type",
+          "type": "string"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        },
+        "concept_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Concept Ids",
+          "type": "array"
+        },
+        "claim_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Claim Ids",
+          "type": "array"
+        },
+        "source_refs": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Source Refs",
+          "type": "array"
+        },
+        "content": {
+          "title": "Content"
+        },
+        "figure_spec_refs": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Figure Spec Refs",
+          "type": "array"
+        },
+        "table_spec_refs": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Table Spec Refs",
+          "type": "array"
+        },
+        "fingerprint": {
+          "default": "",
+          "pattern": "^kufp_[a-f0-9]{16}$",
+          "title": "Fingerprint",
+          "type": "string"
+        }
+      },
+      "required": [
+        "unit_id",
+        "unit_type",
+        "title",
+        "content"
+      ],
+      "title": "KnowledgeUnit",
+      "type": "object"
+    },
+    "LearningObjective": {
+      "additionalProperties": false,
+      "properties": {
+        "objective_id": {
+          "title": "Objective Id",
+          "type": "string"
+        },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        },
+        "mastery_level": {
+          "enum": [
+            "know",
+            "understand",
+            "apply",
+            "reason"
+          ],
+          "title": "Mastery Level",
+          "type": "string"
+        },
+        "source_refs": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Source Refs",
+          "type": "array"
+        },
+        "coverage_status": {
+          "enum": [
+            "missing",
+            "partial",
+            "covered",
+            "verified"
+          ],
+          "title": "Coverage Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "objective_id",
+        "text",
+        "mastery_level",
+        "coverage_status"
+      ],
+      "title": "LearningObjective",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.1.0",
+      "default": "1.1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "chapter_id": {
+      "title": "Chapter Id",
+      "type": "string"
+    },
+    "course_id": {
+      "title": "Course Id",
+      "type": "string"
+    },
+    "discipline_id": {
+      "title": "Discipline Id",
+      "type": "string"
+    },
+    "title": {
+      "title": "Title",
+      "type": "string"
+    },
+    "topic_archetype": {
+      "enum": [
+        "disease",
+        "procedure",
+        "drug",
+        "investigation",
+        "mechanism",
+        "syndrome",
+        "other"
+      ],
+      "title": "Topic Archetype",
+      "type": "string"
+    },
+    "concept_ids": {
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Concept Ids",
+      "type": "array"
+    },
+    "learning_objectives": {
+      "items": {
+        "$ref": "#/$defs/LearningObjective"
+      },
+      "title": "Learning Objectives",
+      "type": "array"
+    },
+    "knowledge_units": {
+      "items": {
+        "$ref": "#/$defs/KnowledgeUnit"
+      },
+      "title": "Knowledge Units",
+      "type": "array"
+    },
+    "exam_summary": {
+      "$ref": "#/$defs/ExamSummary"
+    },
+    "quality_status": {
+      "default": "draft",
+      "enum": [
+        "draft",
+        "source_gap",
+        "conflict_review",
+        "content_review",
+        "publishable",
+        "published"
+      ],
+      "title": "Quality Status",
+      "type": "string"
+    }
+  },
+  "required": [
+    "chapter_id",
+    "course_id",
+    "discipline_id",
+    "title",
+    "topic_archetype",
+    "concept_ids",
+    "exam_summary"
+  ],
+  "title": "ChapterDossier",
+  "type": "object"
+}

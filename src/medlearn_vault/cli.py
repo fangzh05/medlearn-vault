@@ -8,13 +8,29 @@ import typer
 from pydantic import BaseModel, ValidationError
 
 from medlearn_vault import __version__
-from medlearn_vault.domain import ChapterDossier, ConceptEntity, LearningCapture
+from medlearn_vault.domain import (
+    ChapterDossier,
+    ConceptEntity,
+    LearnerState,
+    LearningCapture,
+    MedicalClaim,
+    SourceDocument,
+)
 
 app = typer.Typer(no_args_is_help=True, help="MedLearn Vault contract tools")
 schema_app = typer.Typer(help="Export JSON schemas")
 concept_app = typer.Typer(help="Validate concept entities")
 app.add_typer(schema_app, name="schema")
 app.add_typer(concept_app, name="concept")
+
+SCHEMA_MODELS: dict[str, type[BaseModel]] = {
+    "concept_entity": ConceptEntity,
+    "medical_claim": MedicalClaim,
+    "source_document": SourceDocument,
+    "chapter_dossier": ChapterDossier,
+    "learning_capture": LearningCapture,
+    "learner_state": LearnerState,
+}
 
 
 def version_callback(value: bool) -> None:
@@ -34,11 +50,11 @@ def main(
 
 @app.command()
 def doctor() -> None:
-    ok = sys.version_info >= (3, 12)
+    python_ok = sys.version_info >= (3, 12)
     typer.echo(f"medlearn: {__version__}")
-    typer.echo(f"python: {platform.python_version()} ({'ok' if ok else 'requires >=3.12'})")
+    typer.echo(f"python: {platform.python_version()} ({'ok' if python_ok else 'requires >=3.12'})")
     typer.echo("contracts: ok")
-    if not ok:
+    if not python_ok:
         raise typer.Exit(1)
 
 
@@ -47,17 +63,29 @@ def export_schema(
     output: Annotated[Path, typer.Option("--output", "-o")] = Path("schemas/generated"),
 ) -> None:
     output.mkdir(parents=True, exist_ok=True)
-    models: dict[str, type[BaseModel]] = {
-        "concept_entity": ConceptEntity,
-        "chapter_dossier": ChapterDossier,
-        "learning_capture": LearningCapture,
-    }
-    for name, model in models.items():
+    for name, model in SCHEMA_MODELS.items():
         path = output / f"{name}.schema.json"
         path.write_text(
-            json.dumps(model.model_json_schema(), ensure_ascii=False, indent=2), encoding="utf-8"
+            json.dumps(model.model_json_schema(), ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
         )
         typer.echo(path.as_posix())
+
+
+@schema_app.command("check")
+def check_schema(
+    snapshot: Annotated[Path, typer.Option("--snapshot")] = Path("schemas/current"),
+) -> None:
+    mismatches: list[str] = []
+    for name, model in SCHEMA_MODELS.items():
+        expected = json.dumps(model.model_json_schema(), ensure_ascii=False, indent=2) + "\n"
+        path = snapshot / f"{name}.schema.json"
+        if not path.exists() or path.read_text(encoding="utf-8") != expected:
+            mismatches.append(path.as_posix())
+    if mismatches:
+        typer.echo("schema snapshots differ: " + ", ".join(mismatches), err=True)
+        raise typer.Exit(1)
+    typer.echo(f"schema snapshots: ok ({len(SCHEMA_MODELS)})")
 
 
 @concept_app.command("validate")

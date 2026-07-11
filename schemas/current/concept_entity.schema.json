@@ -1,0 +1,253 @@
+{
+  "$defs": {
+    "ConceptAlias": {
+      "additionalProperties": false,
+      "properties": {
+        "text": {
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        },
+        "normalized": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Normalized"
+        },
+        "language": {
+          "title": "Language",
+          "type": "string"
+        },
+        "alias_type": {
+          "enum": [
+            "abbreviation",
+            "translation",
+            "synonym",
+            "legacy",
+            "trade_name",
+            "other"
+          ],
+          "title": "Alias Type",
+          "type": "string"
+        },
+        "source_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Id"
+        }
+      },
+      "required": [
+        "text",
+        "language",
+        "alias_type"
+      ],
+      "title": "ConceptAlias",
+      "type": "object"
+    },
+    "ExternalIdentifiers": {
+      "additionalProperties": false,
+      "properties": {
+        "mesh": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Mesh",
+          "type": "array"
+        },
+        "snomed_ct": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Snomed Ct",
+          "type": "array"
+        },
+        "icd10": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Icd10",
+          "type": "array"
+        },
+        "loinc": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Loinc",
+          "type": "array"
+        },
+        "rxnorm": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Rxnorm",
+          "type": "array"
+        }
+      },
+      "title": "ExternalIdentifiers",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.1.0",
+      "default": "1.1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "concept_id": {
+      "pattern": "^concept_[a-f0-9]{32}$",
+      "title": "Concept Id",
+      "type": "string"
+    },
+    "canonical_name": {
+      "minLength": 1,
+      "title": "Canonical Name",
+      "type": "string"
+    },
+    "preferred_english": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Preferred English"
+    },
+    "concept_type": {
+      "enum": [
+        "disease",
+        "syndrome",
+        "symptom",
+        "sign",
+        "anatomy",
+        "physiology",
+        "pathology",
+        "mechanism",
+        "investigation",
+        "imaging_sign",
+        "drug",
+        "procedure",
+        "complication",
+        "score",
+        "guideline",
+        "organism",
+        "gene",
+        "biomarker",
+        "other"
+      ],
+      "title": "Concept Type",
+      "type": "string"
+    },
+    "scope_note": {
+      "minLength": 1,
+      "title": "Scope Note",
+      "type": "string"
+    },
+    "definition": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Definition"
+    },
+    "inclusion_terms": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Inclusion Terms",
+      "type": "array"
+    },
+    "exclusion_terms": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Exclusion Terms",
+      "type": "array"
+    },
+    "broader_concept_ids": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Broader Concept Ids",
+      "type": "array"
+    },
+    "external_identifiers": {
+      "$ref": "#/$defs/ExternalIdentifiers"
+    },
+    "aliases": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ConceptAlias"
+      },
+      "title": "Aliases",
+      "type": "array"
+    },
+    "status": {
+      "default": "active",
+      "enum": [
+        "active",
+        "deprecated",
+        "merged",
+        "split_pending"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "merged_into": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Merged Into"
+    },
+    "fingerprint": {
+      "default": "",
+      "pattern": "^cfp_[a-f0-9]{16}$",
+      "title": "Fingerprint",
+      "type": "string"
+    }
+  },
+  "required": [
+    "concept_id",
+    "canonical_name",
+    "concept_type",
+    "scope_note"
+  ],
+  "title": "ConceptEntity",
+  "type": "object"
+}

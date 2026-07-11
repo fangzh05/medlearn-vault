@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "medlearn-vault"
-version = "0.1.0"
+version = "0.2.0"
 description = "Local-first contracts for a cross-disciplinary medical learning vault"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -33,4 +33,3 @@ select = ["E", "F", "I", "UP", "B"]
 python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
-
