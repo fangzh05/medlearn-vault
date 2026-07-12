@@ -266,6 +266,17 @@ class ApprovalAttestationResult(DomainModel):
     verified: Literal[True] = True
 
 
+class PublicationPlanResult(DomainModel):
+    """Sanitized result of a create-only publication-plan operation."""
+
+    publication_plan_id: str = Field(pattern=r"^publication_plan_[a-f0-9]{32}$")
+    publication_plan_object_digest: str = Field(pattern=DIGEST_PATTERN)
+    capture_id: str = Field(pattern=r"^capture_[a-f0-9]{32}$")
+    capture_object_digest: str = Field(pattern=DIGEST_PATTERN)
+    markdown_digest: str = Field(pattern=DIGEST_PATTERN)
+    reused: bool = False
+
+
 class ProposalInspectionResult(DomainModel):
     """Sanitized, non-persistent identities for one completed Proposal job."""
 
@@ -570,6 +581,92 @@ class ApprovalAttestor:
         if stored is None:
             raise WorkflowError(missing_code)
         return stored
+
+
+class PublicationPlanOrchestrator:
+    """Freshly attest an approved subject, then create exactly one control-plane plan."""
+
+    def __init__(self, store: ObjectStore, repository_root: Path) -> None:
+        self.store = store
+        self.repository_root = repository_root.resolve()
+
+    def run(
+        self,
+        approval_id: str,
+        approval_object_digest: str,
+        source_job_id: str,
+        proposal_id: str,
+        proposal_object_digest: str,
+        expected_base_bundle_digest: str,
+        *,
+        bundle_path: str,
+    ) -> PublicationPlanResult:
+        from medlearn_vault.publication import (
+            VaultPublicationPlan,
+            build_vault_publication_plan,
+            canonical_publication_plan_json,
+            publication_plan_object_digest,
+        )
+
+        attestation = ApprovalAttestor(self.store).run(
+            approval_id,
+            source_job_id,
+            proposal_id,
+            proposal_object_digest,
+            expected_base_bundle_digest,
+            expected_decision="approved",
+            expected_approval_object_digest=approval_object_digest,
+        )
+        try:
+            approval = self.store.get(f"v1/approvals/{approval_id}.json")
+            proposal = self.store.get(f"v1/proposals/{proposal_id}.json")
+            if approval is None or proposal is None:
+                raise WorkflowError("CONTROL_STORE_FAILURE")
+            bundle = ContractBundle.from_directory(
+                resolve_bundle_path(self.repository_root, bundle_path)
+            )
+            plan = build_vault_publication_plan(
+                bundle, proposal.body, approval.body, attestation.review_digest
+            )
+        except WorkflowError:
+            raise
+        except ValueError as exc:
+            code = str(exc)
+            if code == "PUBLICATION_NOT_APPROVED":
+                raise WorkflowError(code) from exc
+            raise WorkflowError("INVALID_PUBLICATION_INPUT") from exc
+        except Exception as exc:
+            raise WorkflowError("CONTROL_STORE_FAILURE") from exc
+        body = canonical_publication_plan_json(plan)
+        key = f"v1/publication-plans/{plan.publication_plan_id}.json"
+        try:
+            created = self.store.create(key, body, content_type="application/json")
+            winner = None if created else self.store.get(key)
+        except WorkflowError:
+            raise
+        except Exception as exc:
+            raise WorkflowError("CONTROL_STORE_FAILURE") from exc
+        if not created:
+            if winner is None:
+                raise WorkflowError("CONTROL_STORE_FAILURE")
+            try:
+                existing = VaultPublicationPlan.model_validate_json(winner.body)
+            except ValueError as exc:
+                raise WorkflowError("PUBLICATION_PLAN_CONFLICT") from exc
+            if canonical_publication_plan_json(existing) != winner.body or winner.body != body:
+                raise WorkflowError("PUBLICATION_PLAN_CONFLICT")
+            plan = existing
+        markdown = next(
+            item for item in plan.artifacts if item.media_type == "text/markdown; charset=utf-8"
+        )
+        return PublicationPlanResult(
+            publication_plan_id=plan.publication_plan_id,
+            publication_plan_object_digest=publication_plan_object_digest(plan),
+            capture_id=plan.capture_id,
+            capture_object_digest=plan.capture_object_digest,
+            markdown_digest=markdown.content_digest,
+            reused=not created,
+        )
 
 
 class ProposalOutputInspector:

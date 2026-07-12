@@ -17,6 +17,10 @@ Their control-plane R2 credentials are scoped only to the final business step; s
 installation receive no control credentials. Approval also requires an explicit decision and exact
 proposal ID confirmation before its credential-bearing step runs.
 
+`medlearn-plan-publication.yml` likewise runs only from `main`. It requires exact `approval_id`
+confirmation before exposing the same control-only credentials, then creates or verifies only the
+immutable plan under `medlearn-control`. It has no Vault credential, bucket, or write.
+
 For the permanent synthetic intake workflow, configure Actions secret `MEDLEARN_INGEST_TOKEN` to
 the same value held by the Worker and set repository variable `MEDLEARN_INGEST_URL` to the fixed
 HTTPS Worker endpoint ending in `/v1/captures`. Neither value is a workflow-dispatch input.
