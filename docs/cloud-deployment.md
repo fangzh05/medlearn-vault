@@ -12,6 +12,10 @@ credentials for `medlearn-vault`.
 Set repository variable `MEDLEARN_PROPOSE_BUNDLE_PATH` to one validated, repository-relative bundle
 directory. It has no default and cannot be supplied by workflow dispatch clients.
 
+For the permanent synthetic intake workflow, configure Actions secret `MEDLEARN_INGEST_TOKEN` to
+the same value held by the Worker and set repository variable `MEDLEARN_INGEST_URL` to the fixed
+HTTPS Worker endpoint ending in `/v1/captures`. Neither value is a workflow-dispatch input.
+
 After merging, deploy the updated Worker so its fixed dispatch target can invoke
 `medlearn-propose.yml`. Confirm the dispatch token can invoke Actions but has no content-write
 permission. Submit a synthetic intake and verify the job, execution, proposal, and review keys in

@@ -102,6 +102,13 @@ manually retain the synthetic Job as `dispatched`, `running`, and stale `failed`
 and verify repair without Proposal/Review writes. Finally verify that expired and conflicting
 terminal Jobs are rejected and delete the synthetic control objects.
 
+`medlearn-synthetic-intake.yml` is the fixed operational path for this check. It accepts no
+dispatch inputs, runs only from `main`, derives a unique session and idempotency key from GitHub run
+identity, and sends the committed excerpt-free fixture through `POST /v1/captures`. The ingest
+token is scoped only to submission and polling; control-plane credentials are scoped only to the
+final read-only `medlearn workflow inspect-proposal` step. Checkout and installation receive no
+credentials. Logs contain only sanitized IDs, digests, status, and workflow run ID.
+
 Concept terms for an observed misconception and `correction_terms` are resolved independently.
 Authoritative correction matching uses the correction terms and requires an exact statement and
 concept-set match to an active supported source-backed or verified-reference claim.

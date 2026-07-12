@@ -266,6 +266,19 @@ class ApprovalAttestationResult(DomainModel):
     verified: Literal[True] = True
 
 
+class ProposalInspectionResult(DomainModel):
+    """Sanitized, non-persistent identities for one completed Proposal job."""
+
+    source_job_id: str = Field(pattern=JOB_ID_PATTERN)
+    proposal_id: str = Field(pattern=PROPOSAL_ID_PATTERN)
+    proposal_object_digest: str = Field(pattern=DIGEST_PATTERN)
+    proposal_semantic_digest: str = Field(pattern=DIGEST_PATTERN)
+    expected_base_bundle_digest: str = Field(pattern=DIGEST_PATTERN)
+    review_digest: str = Field(pattern=DIGEST_PATTERN)
+    workflow_run_id: str = Field(pattern=JOB_ID_PATTERN)
+    verified: Literal[True] = True
+
+
 class OrchestrationResult(DomainModel):
     status: Literal["succeeded", "blocked", "lease_held"]
     proposal_id: str | None = None
@@ -545,6 +558,97 @@ class ApprovalAttestor:
             workflow_run_id=job.workflow_run_id,
             review_digest=review_digest,
             decision=approval.decision,
+        )
+
+    def _read(self, key: str, missing_code: str) -> StoredObject:
+        try:
+            stored = self.store.get(key)
+        except WorkflowError:
+            raise
+        except Exception as exc:
+            raise WorkflowError("CONTROL_STORE_FAILURE") from exc
+        if stored is None:
+            raise WorkflowError(missing_code)
+        return stored
+
+
+class ProposalOutputInspector:
+    """Read-only verification of one completed Proposal, Execution, and Review."""
+
+    def __init__(self, store: ReadOnlyObjectStore) -> None:
+        self.store = store
+
+    def run(self, source_job_id: str) -> ProposalInspectionResult:
+        if re.fullmatch(JOB_ID_PATTERN, source_job_id) is None:
+            raise WorkflowError("INVALID_ATTESTATION_INPUT")
+
+        job_stored = self._read(f"v1/jobs/{source_job_id}.json", "JOB_NOT_FOUND")
+        try:
+            job = JobRecord.model_validate_json(job_stored.body)
+        except (ValueError, TypeError) as exc:
+            raise WorkflowError("INVALID_JOB") from exc
+        if (
+            job.job_id != source_job_id
+            or job.intake_object_key != f"v1/intakes/sha256/{job.intake_digest[7:]}.json"
+            or job.status != "succeeded"
+            or job.proposal_id is None
+            or job.workflow_run_id is None
+        ):
+            raise WorkflowError("INVALID_JOB")
+
+        execution_stored = self._read(
+            f"v1/executions/{source_job_id}.json", "EXECUTION_NOT_FOUND"
+        )
+        try:
+            execution = ProposalExecutionRecord.model_validate_json(execution_stored.body)
+        except (ValueError, TypeError) as exc:
+            raise WorkflowError("INVALID_EXECUTION") from exc
+        if (
+            execution.job_id != source_job_id
+            or execution.status != "succeeded"
+            or execution.proposal_id is None
+            or execution.proposal_digest is None
+            or execution.review_digest is None
+            or execution.workflow_run_id is None
+        ):
+            raise WorkflowError("INVALID_EXECUTION")
+        if (
+            execution.proposal_id != job.proposal_id
+            or execution.workflow_run_id != job.workflow_run_id
+        ):
+            raise WorkflowError("CONTROL_OUTPUT_MISMATCH")
+
+        proposal_stored = self._read(
+            f"v1/proposals/{job.proposal_id}.json", "PROPOSAL_NOT_FOUND"
+        )
+        try:
+            proposal = CaptureProposal.model_validate_json(proposal_stored.body)
+        except (ValueError, TypeError) as exc:
+            raise WorkflowError("INVALID_PROPOSAL") from exc
+        proposal_object_digest = _digest(proposal_stored.body)
+        if (
+            proposal.proposal_id != job.proposal_id
+            or capture_proposal_digest(proposal) != proposal.proposal_digest
+            or proposal.status != "ready_for_review"
+        ):
+            raise WorkflowError("INVALID_PROPOSAL")
+        if proposal_object_digest != execution.proposal_digest:
+            raise WorkflowError("CONTROL_OUTPUT_MISMATCH")
+
+        review_stored = self._read(
+            f"v1/reviews/{job.proposal_id}.md", "REVIEW_NOT_FOUND"
+        )
+        review_digest = _digest(review_stored.body)
+        if review_digest != execution.review_digest:
+            raise WorkflowError("REVIEW_DIGEST_MISMATCH")
+        return ProposalInspectionResult(
+            source_job_id=source_job_id,
+            proposal_id=job.proposal_id,
+            proposal_object_digest=proposal_object_digest,
+            proposal_semantic_digest=proposal.proposal_digest,
+            expected_base_bundle_digest=proposal.base_bundle_digest,
+            review_digest=review_digest,
+            workflow_run_id=job.workflow_run_id,
         )
 
     def _read(self, key: str, missing_code: str) -> StoredObject:
