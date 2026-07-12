@@ -1082,6 +1082,94 @@ def test_workflow_yaml_has_fixed_minimal_authority() -> None:
     assert not re.search(r"run:\s*.*\$\{\{\s*inputs\.", text)
 
 
+def test_approval_workflow_yaml_is_control_only_and_argument_safe() -> None:
+    path = Path(".github/workflows/medlearn-approve.yml")
+    text = path.read_text(encoding="utf-8")
+    data = yaml.load(text, Loader=yaml.BaseLoader)
+    dispatch = data["on"]["workflow_dispatch"]
+    assert set(dispatch["inputs"]) == {
+        "proposal_id",
+        "proposal_object_digest",
+        "expected_base_bundle_digest",
+        "decision",
+        "rejection_code",
+    }
+    assert data["permissions"] == {"contents": "read"}
+    assert data["concurrency"] == {
+        "group": "medlearn-approve-${{ inputs.proposal_id }}",
+        "cancel-in-progress": "false",
+    }
+    approve_job = data["jobs"]["approve"]
+    assert approve_job["timeout-minutes"] == "15"
+    assert set(approve_job["env"]) == {
+        "CONTROL_R2_ENDPOINT",
+        "CONTROL_R2_ACCESS_KEY_ID",
+        "CONTROL_R2_SECRET_ACCESS_KEY",
+    }
+    action_steps = [step for step in approve_job["steps"] if "uses" in step]
+    assert action_steps
+    assert all(re.fullmatch(r"[^@]+@[0-9a-f]{40}", step["uses"]) for step in action_steps)
+    checkout = next(step for step in action_steps if step["uses"].startswith("actions/checkout@"))
+    assert checkout["with"]["persist-credentials"] == "false"
+    install_step = next(
+        step for step in approve_job["steps"] if "--require-hashes" in step.get("run", "")
+    )
+    assert install_step["run"].splitlines() == [
+        "python -m pip install --require-hashes -r requirements/workflow.txt",
+        "python -m pip install --no-build-isolation --no-deps .",
+    ]
+    run_step = next(
+        step
+        for step in approve_job["steps"]
+        if step.get("name") == "Validate and record approval"
+    )
+    assert "args=(" in run_step["run"]
+    assert 'medlearn "${args[@]}"' in run_step["run"]
+    assert "${{ inputs." not in run_step["run"]
+    assert "actions/upload-artifact" not in text
+    assert "GITHUB_STEP_SUMMARY" not in text
+    assert not re.search(r"run:\s*.*\$\{\{\s*inputs\.", text)
+    for forbidden in ("medlearn-vault", "obsidian", "remotely save", "d1", "vps", "git commit"):
+        assert forbidden not in text.lower()
+
+
+@pytest.mark.parametrize(
+    ("decision", "rejection_code", "expected_exit", "expected_output"),
+    [
+        ("approved", None, 0, "decision=approved"),
+        ("rejected", "NEEDS_REVIEW", 0, "decision=rejected"),
+        ("approved", "NEEDS_REVIEW", 1, "error_code=INVALID_APPROVAL_INPUT"),
+        ("rejected", None, 1, "error_code=INVALID_APPROVAL_INPUT"),
+    ],
+)
+def test_approval_cli_production_behavior_matrix(
+    monkeypatch: pytest.MonkeyPatch,
+    decision: str,
+    rejection_code: str | None,
+    expected_exit: int,
+    expected_output: str,
+) -> None:
+    store = MemoryStore()
+    proposal_id, digest, base_digest, _ = seed_proposal(store)
+    monkeypatch.setattr("medlearn_vault.cli.S3ObjectStore", lambda *args: store)
+    args = ["workflow", "approve", proposal_id, digest, base_digest, "--decision", decision]
+    if rejection_code is not None:
+        args.extend(["--rejection-code", rejection_code])
+    result = CliRunner().invoke(
+        app,
+        args,
+        env={
+            "CONTROL_R2_ENDPOINT": "configured",
+            "CONTROL_R2_ACCESS_KEY_ID": "configured",
+            "CONTROL_R2_SECRET_ACCESS_KEY": "configured",
+        },
+    )
+    assert result.exit_code == expected_exit
+    assert expected_output in result.stdout + result.stderr
+    approval_keys = [key for key in store.objects if key.startswith("v1/approvals/")]
+    assert bool(approval_keys) is (expected_exit == 0)
+
+
 def test_workflow_lock_is_fully_hashed_and_pins_direct_dependencies() -> None:
     text = Path("requirements/workflow.txt").read_text(encoding="utf-8")
     lines = text.splitlines()
