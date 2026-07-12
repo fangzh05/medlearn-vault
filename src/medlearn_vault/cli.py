@@ -1,4 +1,5 @@
 import json
+import os
 import platform
 import sys
 from pathlib import Path
@@ -35,6 +36,14 @@ from medlearn_vault.preview import (
     build_preview_plan,
     render_markdown,
 )
+from medlearn_vault.workflow import (
+    JobRecord,
+    ProposalExecutionRecord,
+    ProposalOrchestrator,
+    S3ObjectStore,
+    WorkflowError,
+    WorkflowInputs,
+)
 
 app = typer.Typer(no_args_is_help=True, help="MedLearn Vault contract tools")
 schema_app = typer.Typer(help="Export JSON schemas")
@@ -42,11 +51,13 @@ concept_app = typer.Typer(help="Validate concept entities")
 bundle_app = typer.Typer(help="Validate contract bundles")
 preview_app = typer.Typer(help="Render deterministic previews")
 capture_app = typer.Typer(help="Validate and review capture proposals")
+workflow_app = typer.Typer(help="Run cloud control-plane workflows")
 app.add_typer(schema_app, name="schema")
 app.add_typer(concept_app, name="concept")
 app.add_typer(bundle_app, name="bundle")
 app.add_typer(preview_app, name="preview")
 app.add_typer(capture_app, name="capture")
+app.add_typer(workflow_app, name="workflow")
 
 SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "concept_entity": ConceptEntity,
@@ -62,6 +73,10 @@ WORKFLOW_SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "capture_draft": CaptureDraft,
     "capture_proposal": CaptureProposal,
     "intake_envelope": IntakeEnvelope,
+}
+CONTROL_SCHEMA_MODELS: dict[str, type[BaseModel]] = {
+    "job_record": JobRecord,
+    "proposal_execution": ProposalExecutionRecord,
 }
 
 
@@ -111,6 +126,15 @@ def export_schema(
             encoding="utf-8",
         )
         typer.echo(path.as_posix())
+    control = output.parent / "control" / output.name
+    control.mkdir(parents=True, exist_ok=True)
+    for name, model in CONTROL_SCHEMA_MODELS.items():
+        path = control / f"{name}.schema.json"
+        path.write_text(
+            json.dumps(model.model_json_schema(), ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        typer.echo(path.as_posix())
 
 
 @schema_app.command("check")
@@ -129,10 +153,49 @@ def check_schema(
         path = workflow / f"{name}.schema.json"
         if not path.exists() or path.read_text(encoding="utf-8") != expected:
             mismatches.append(path.as_posix())
+    control = snapshot.parent / "control" / snapshot.name
+    for name, model in CONTROL_SCHEMA_MODELS.items():
+        expected = json.dumps(model.model_json_schema(), ensure_ascii=False, indent=2) + "\n"
+        path = control / f"{name}.schema.json"
+        if not path.exists() or path.read_text(encoding="utf-8") != expected:
+            mismatches.append(path.as_posix())
     if mismatches:
         typer.echo("schema snapshots differ: " + ", ".join(mismatches), err=True)
         raise typer.Exit(1)
-    typer.echo(f"schema snapshots: ok ({len(SCHEMA_MODELS) + len(WORKFLOW_SCHEMA_MODELS)})")
+    typer.echo(
+        "schema snapshots: ok "
+        f"({len(SCHEMA_MODELS) + len(WORKFLOW_SCHEMA_MODELS) + len(CONTROL_SCHEMA_MODELS)})"
+    )
+
+
+@workflow_app.command("propose")
+def workflow_propose(job_id: str, intake_object_key: str, intake_digest: str) -> None:
+    try:
+        inputs = WorkflowInputs(
+            job_id=job_id,
+            intake_object_key=intake_object_key,
+            intake_digest=intake_digest,
+        )
+        store = S3ObjectStore(
+            os.environ.get("CONTROL_R2_ENDPOINT", ""),
+            os.environ.get("CONTROL_R2_ACCESS_KEY_ID", ""),
+            os.environ.get("CONTROL_R2_SECRET_ACCESS_KEY", ""),
+        )
+        result = ProposalOrchestrator(store, Path.cwd()).run(
+            inputs,
+            bundle_path=os.environ.get("MEDLEARN_PROPOSE_BUNDLE_PATH", ""),
+            workflow_run_id=os.environ.get("GITHUB_RUN_ID", ""),
+        )
+    except WorkflowError as exc:
+        typer.echo(f"error_code={exc.code}", err=True)
+        raise typer.Exit(1) from exc
+    except ValidationError as exc:
+        typer.echo("error_code=INVALID_WORKFLOW_INPUT", err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(
+        f"status={result.status} proposal_id={result.proposal_id or 'none'} "
+        f"reused={str(result.reused).lower()}"
+    )
 
 
 def _safe_error(code: str, field: str, message: str) -> None:

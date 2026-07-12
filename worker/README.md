@@ -16,9 +16,10 @@ R2 keys:
 - `v1/jobs/<job_id>.json`
 - `v1/idempotency/<idempotency-key-sha256>.json`
 - `v1/proposals/<proposal_id>.json` (read-only in this Worker)
+- `v1/executions/<job_id>.json` and `v1/reviews/<proposal_id>.md` (workflow-owned)
 
 The Worker uses a conditional dispatch lease and compare-and-swap job updates. Dispatch is
-at-least-once: the future `medlearn-propose.yml` workflow must deduplicate executions by `job_id`.
+at-least-once; `medlearn-propose.yml` deduplicates and resumes executions by `job_id`.
 
 ```powershell
 npm ci

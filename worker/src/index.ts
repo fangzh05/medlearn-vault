@@ -97,7 +97,7 @@ const allowed: Record<Status, readonly Status[]> = {
   received: ["dispatched", "failed", "expired"],
   dispatched: ["running", "failed", "expired"],
   running: ["succeeded", "blocked", "failed", "expired"],
-  failed: ["dispatched", "expired"],
+  failed: ["received", "expired"],
   succeeded: [],
   blocked: [],
   expired: [],
@@ -197,6 +197,7 @@ async function dispatchRecoverably(env: Config, stored: Stored<JobRecord>, nowMs
   const leaseId = crypto.randomUUID();
   const leased: JobRecord = {
     ...job,
+    status: job.status === "failed" ? "received" : job.status,
     dispatch_attempt: job.dispatch_attempt + 1,
     dispatch_lease_id: leaseId,
     dispatch_lease_expires_at: new Date(nowMs + LEASE_MS).toISOString(),
@@ -225,8 +226,7 @@ async function dispatchRecoverably(env: Config, stored: Stored<JobRecord>, nowMs
     dispatch_lease_id: undefined, dispatch_lease_expires_at: undefined,
     error_code: "GITHUB_DISPATCH_FAILED",
   };
-  if (leased.status === "failed") await putCas(env.CONTROL_BUCKET, jobKey, failed, leasedStored.etag);
-  else await transitionJob(env.CONTROL_BUCKET, jobKey, leasedStored, failed);
+  await transitionJob(env.CONTROL_BUCKET, jobKey, leasedStored, failed);
   const final = await readStored<JobRecord>(env.CONTROL_BUCKET, jobKey);
   return reply(502, sanitizeJob(final?.value ?? failed));
 }

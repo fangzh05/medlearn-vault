@@ -1,0 +1,14 @@
+{
+  "execution_version": "0.1.0",
+  "job_id": "job-example-001",
+  "status": "succeeded",
+  "lease_owner": null,
+  "lease_expires_at": null,
+  "proposal_id": "proposal_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "proposal_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "review_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "workflow_run_id": "run-example-001",
+  "error_code": null,
+  "created_at": "2026-07-12T00:00:00+00:00",
+  "updated_at": "2026-07-12T00:01:00+00:00"
+}

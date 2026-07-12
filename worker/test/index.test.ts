@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import Ajv from "ajv/dist/2020.js";
 import addFormats from "ajv-formats";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import jobSchema from "../contracts/job-record.schema.json";
+import jobSchema from "../../schemas/control/current/job_record.schema.json";
 import { handle, transitionJob, type Env, type JobRecord, type Stored } from "../src/index";
 import intakeSchema from "../../schemas/workflow/current/intake_envelope.schema.json";
 
@@ -89,7 +89,14 @@ describe("shared contracts", () => {
     expect(ajv.compile(intakeSchema)(JSON.parse(fixtureText))).toBe(true);
     const response = await handle(capture(), env);
     expect(response.status).toBe(202);
-    expect(ajv.compile(jobSchema)(await response.json())).toBe(true);
+    const validateJob = ajv.compile(jobSchema);
+    const job = await response.json<JobRecord>();
+    expect(validateJob(job)).toBe(true);
+    expect(validateJob({ ...job, status: "succeeded" })).toBe(false);
+    expect(validateJob({ ...job, status: "failed" })).toBe(false);
+    expect(validateJob({
+      ...job, status: "failed", error_code: "FAILED", dispatch_lease_id: "lease",
+    })).toBe(false);
   });
 
   it("stores exact envelope bytes under the intake digest", async () => {
