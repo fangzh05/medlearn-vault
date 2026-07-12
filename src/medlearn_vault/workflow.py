@@ -65,6 +65,12 @@ class ObjectStore(Protocol):
     ) -> bool: ...
 
 
+class ReadOnlyObjectStore(Protocol):
+    """Minimal control-plane boundary for verification-only operations."""
+
+    def get(self, key: str) -> StoredObject | None: ...
+
+
 class WorkflowInputs(DomainModel):
     job_id: str = Field(pattern=JOB_ID_PATTERN)
     intake_object_key: str = Field(pattern=INTAKE_KEY_PATTERN)
@@ -245,6 +251,21 @@ class ApprovalResult(DomainModel):
     reused: bool = False
 
 
+class ApprovalAttestationResult(DomainModel):
+    """Sanitized, non-persistent proof that existing control outputs agree."""
+
+    approval_id: str = Field(pattern=APPROVAL_ID_PATTERN)
+    approval_object_digest: str = Field(pattern=DIGEST_PATTERN)
+    proposal_id: str = Field(pattern=PROPOSAL_ID_PATTERN)
+    proposal_object_digest: str = Field(pattern=DIGEST_PATTERN)
+    proposal_semantic_digest: str = Field(pattern=DIGEST_PATTERN)
+    source_job_id: str = Field(pattern=JOB_ID_PATTERN)
+    workflow_run_id: str = Field(pattern=JOB_ID_PATTERN)
+    review_digest: str = Field(pattern=DIGEST_PATTERN)
+    decision: ApprovalDecision
+    verified: Literal[True] = True
+
+
 class OrchestrationResult(DomainModel):
     status: Literal["succeeded", "blocked", "lease_held"]
     proposal_id: str | None = None
@@ -382,6 +403,162 @@ class ApprovalOrchestrator:
         return ApprovalResult(approval_id=approval_id, decision=decision, reused=True)
 
 
+class ApprovalAttestor:
+    """Read and verify one immutable approval and its proposal provenance."""
+
+    def __init__(self, store: ReadOnlyObjectStore) -> None:
+        self.store = store
+
+    def run(
+        self,
+        approval_id: str,
+        source_job_id: str,
+        proposal_id: str,
+        expected_proposal_object_digest: str,
+        expected_base_bundle_digest: str,
+        *,
+        expected_decision: str,
+        expected_rejection_code: str | None = None,
+        expected_approval_object_digest: str | None = None,
+    ) -> ApprovalAttestationResult:
+        valid_input = (
+            re.fullmatch(APPROVAL_ID_PATTERN, approval_id) is not None
+            and re.fullmatch(JOB_ID_PATTERN, source_job_id) is not None
+            and re.fullmatch(PROPOSAL_ID_PATTERN, proposal_id) is not None
+            and re.fullmatch(DIGEST_PATTERN, expected_proposal_object_digest) is not None
+            and re.fullmatch(DIGEST_PATTERN, expected_base_bundle_digest) is not None
+            and expected_decision in {"approved", "rejected"}
+            and (
+                expected_approval_object_digest is None
+                or re.fullmatch(DIGEST_PATTERN, expected_approval_object_digest) is not None
+            )
+            and (
+                expected_rejection_code is None
+                or re.fullmatch(r"^[A-Z][A-Z0-9_]{0,127}$", expected_rejection_code)
+                is not None
+            )
+            and not (expected_decision == "approved" and expected_rejection_code is not None)
+            and not (expected_decision == "rejected" and expected_rejection_code is None)
+        )
+        if not valid_input:
+            raise WorkflowError("INVALID_ATTESTATION_INPUT")
+
+        approval_stored = self._read(
+            f"v1/approvals/{approval_id}.json", "APPROVAL_NOT_FOUND"
+        )
+        try:
+            approval = ProposalApprovalRecord.model_validate_json(approval_stored.body)
+        except (ValueError, TypeError) as exc:
+            raise WorkflowError("INVALID_APPROVAL") from exc
+        if canonical_approval_json(approval) != approval_stored.body:
+            raise WorkflowError("INVALID_APPROVAL")
+        approval_digest = _digest(approval_stored.body)
+        if (
+            expected_approval_object_digest is not None
+            and approval_digest != expected_approval_object_digest
+        ):
+            raise WorkflowError("APPROVAL_OBJECT_DIGEST_MISMATCH")
+        if (
+            approval.approval_id != approval_id
+            or approval.approval_id
+            != approval_identity(
+                approval.proposal_id,
+                approval.proposal_object_digest,
+                approval.expected_base_bundle_digest,
+            )
+            or approval.proposal_id != proposal_id
+            or approval.proposal_object_digest != expected_proposal_object_digest
+            or approval.expected_base_bundle_digest != expected_base_bundle_digest
+            or approval.decision != expected_decision
+            or approval.rejection_code != expected_rejection_code
+        ):
+            raise WorkflowError("APPROVAL_EXPECTATION_MISMATCH")
+
+        proposal_stored = self._read(
+            f"v1/proposals/{proposal_id}.json", "PROPOSAL_NOT_FOUND"
+        )
+        try:
+            proposal = CaptureProposal.model_validate_json(proposal_stored.body)
+        except (ValueError, TypeError) as exc:
+            raise WorkflowError("INVALID_PROPOSAL") from exc
+        if (
+            proposal.proposal_id != proposal_id
+            or capture_proposal_digest(proposal) != proposal.proposal_digest
+            or proposal.status != "ready_for_review"
+        ):
+            raise WorkflowError("INVALID_PROPOSAL")
+        if proposal.base_bundle_digest != expected_base_bundle_digest:
+            raise WorkflowError("BASE_BUNDLE_DIGEST_MISMATCH")
+        proposal_digest = _digest(proposal_stored.body)
+        if proposal_digest != expected_proposal_object_digest:
+            raise WorkflowError("PROPOSAL_OBJECT_DIGEST_MISMATCH")
+
+        job_stored = self._read(f"v1/jobs/{source_job_id}.json", "JOB_NOT_FOUND")
+        try:
+            job = JobRecord.model_validate_json(job_stored.body)
+        except (ValueError, TypeError) as exc:
+            raise WorkflowError("INVALID_JOB") from exc
+        if (
+            job.job_id != source_job_id
+            or job.intake_object_key != f"v1/intakes/sha256/{job.intake_digest[7:]}.json"
+            or job.status != "succeeded"
+            or job.workflow_run_id is None
+        ):
+            raise WorkflowError("INVALID_JOB")
+        if job.proposal_id != proposal_id:
+            raise WorkflowError("CONTROL_OUTPUT_MISMATCH")
+
+        execution_stored = self._read(
+            f"v1/executions/{source_job_id}.json", "EXECUTION_NOT_FOUND"
+        )
+        try:
+            execution = ProposalExecutionRecord.model_validate_json(execution_stored.body)
+        except (ValueError, TypeError) as exc:
+            raise WorkflowError("INVALID_EXECUTION") from exc
+        if (
+            execution.job_id != source_job_id
+            or execution.status != "succeeded"
+            or execution.proposal_id is None
+            or execution.proposal_digest is None
+            or execution.review_digest is None
+            or execution.workflow_run_id is None
+        ):
+            raise WorkflowError("INVALID_EXECUTION")
+        if (
+            execution.proposal_id != proposal_id
+            or execution.proposal_digest != proposal_digest
+            or execution.workflow_run_id != job.workflow_run_id
+        ):
+            raise WorkflowError("CONTROL_OUTPUT_MISMATCH")
+
+        review_stored = self._read(f"v1/reviews/{proposal_id}.md", "REVIEW_NOT_FOUND")
+        review_digest = _digest(review_stored.body)
+        if review_digest != execution.review_digest:
+            raise WorkflowError("REVIEW_DIGEST_MISMATCH")
+        return ApprovalAttestationResult(
+            approval_id=approval_id,
+            approval_object_digest=approval_digest,
+            proposal_id=proposal_id,
+            proposal_object_digest=proposal_digest,
+            proposal_semantic_digest=proposal.proposal_digest,
+            source_job_id=source_job_id,
+            workflow_run_id=job.workflow_run_id,
+            review_digest=review_digest,
+            decision=approval.decision,
+        )
+
+    def _read(self, key: str, missing_code: str) -> StoredObject:
+        try:
+            stored = self.store.get(key)
+        except WorkflowError:
+            raise
+        except Exception as exc:
+            raise WorkflowError("CONTROL_STORE_FAILURE") from exc
+        if stored is None:
+            raise WorkflowError(missing_code)
+        return stored
+
+
 def resolve_bundle_path(repository_root: Path, configured_path: str) -> Path:
     if not configured_path or "\\" in configured_path:
         raise WorkflowError("INVALID_BUNDLE_PATH")
@@ -409,7 +586,7 @@ def resolve_bundle_path(repository_root: Path, configured_path: str) -> Path:
     return candidate
 
 
-class S3ObjectStore:
+class S3ReadOnlyObjectStore:
     """R2 S3 adapter fixed to the medlearn-control bucket."""
 
     def __init__(self, endpoint: str, access_key_id: str, secret_access_key: str) -> None:
@@ -434,6 +611,10 @@ class S3ObjectStore:
             raise WorkflowError("CONTROL_STORE_FAILURE") from exc
         except Exception as exc:
             raise WorkflowError("CONTROL_STORE_FAILURE") from exc
+
+
+class S3ObjectStore(S3ReadOnlyObjectStore):
+    """Writable R2 S3 adapter for existing proposal and approval workflows."""
 
     def create(self, key: str, body: bytes, *, content_type: str) -> bool:
         return self._put(key, body, content_type=content_type, if_none_match="*")

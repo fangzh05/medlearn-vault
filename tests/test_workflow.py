@@ -12,8 +12,10 @@ from botocore.exceptions import ClientError
 from pydantic import ValidationError
 from typer.testing import CliRunner
 
+from medlearn_vault.capture import CaptureProposal, capture_proposal_digest
 from medlearn_vault.cli import app
 from medlearn_vault.workflow import (
+    ApprovalAttestor,
     ApprovalOrchestrator,
     JobRecord,
     ObjectStore,
@@ -80,6 +82,22 @@ class MemoryStore(ObjectStore):
         self.objects[key] = StoredObject(body=body, etag=self._etag())
 
 
+class ReadOnlyRecordingStore:
+    def __init__(self, objects: dict[str, StoredObject]) -> None:
+        self.objects = dict(objects)
+        self.reads: list[str] = []
+
+    def get(self, key: str) -> StoredObject | None:
+        self.reads.append(key)
+        return self.objects.get(key)
+
+    def create(self, *args: object, **kwargs: object) -> bool:
+        raise AssertionError("attestation attempted a create")
+
+    def compare_and_swap(self, *args: object, **kwargs: object) -> bool:
+        raise AssertionError("attestation attempted a compare-and-swap")
+
+
 def seed_job(
     store: MemoryStore,
     envelope: bytes,
@@ -135,6 +153,50 @@ def seed_proposal(
         "sha256:" + hashlib.sha256(body).hexdigest(),
         proposal["base_bundle_digest"],
         body,
+    )
+
+
+def seed_attestation(
+    *, decision: str = "approved", rejection_code: str | None = None
+) -> tuple[ReadOnlyRecordingStore, dict[str, str]]:
+    store = MemoryStore()
+    proposal_id, proposal_digest, base_digest, _ = seed_proposal(store)
+    approval = ApprovalOrchestrator(store).run(
+        proposal_id,
+        proposal_digest,
+        base_digest,
+        decision=decision,  # type: ignore[arg-type]
+        rejection_code=rejection_code,
+        now=NOW,
+    )
+    approval_body = store.objects[f"v1/approvals/{approval.approval_id}.json"].body
+    return ReadOnlyRecordingStore(store.objects), {
+        "approval_id": approval.approval_id,
+        "approval_digest": "sha256:" + hashlib.sha256(approval_body).hexdigest(),
+        "proposal_id": proposal_id,
+        "proposal_digest": proposal_digest,
+        "base_digest": base_digest,
+        "job_id": "job-approval-source",
+    }
+
+
+def attest(
+    store: ReadOnlyRecordingStore,
+    values: dict[str, str],
+    *,
+    expected_decision: str = "approved",
+    expected_rejection_code: str | None = None,
+    expected_approval_object_digest: str | None = None,
+) -> object:
+    return ApprovalAttestor(store).run(
+        values["approval_id"],
+        values["job_id"],
+        values["proposal_id"],
+        values["proposal_digest"],
+        values["base_digest"],
+        expected_decision=expected_decision,
+        expected_rejection_code=expected_rejection_code,
+        expected_approval_object_digest=expected_approval_object_digest,
     )
 
 
@@ -1204,6 +1266,387 @@ def test_approval_cli_production_behavior_matrix(
     assert expected_output in result.stdout + result.stderr
     approval_keys = [key for key in store.objects if key.startswith("v1/approvals/")]
     assert bool(approval_keys) is (expected_exit == 0)
+
+
+def test_read_only_approval_attestation_verifies_exact_fixed_outputs() -> None:
+    store, values = seed_attestation()
+    result = attest(store, values, expected_approval_object_digest=values["approval_digest"])
+    assert result.verified is True
+    assert result.approval_object_digest == values["approval_digest"]
+    assert result.proposal_object_digest == values["proposal_digest"]
+    assert result.decision == "approved"
+    assert store.reads == [
+        f"v1/approvals/{values['approval_id']}.json",
+        f"v1/proposals/{values['proposal_id']}.json",
+        f"v1/jobs/{values['job_id']}.json",
+        f"v1/executions/{values['job_id']}.json",
+        f"v1/reviews/{values['proposal_id']}.md",
+    ]
+
+
+def test_read_only_approval_attestation_accepts_rejected_decision() -> None:
+    store, values = seed_attestation(decision="rejected", rejection_code="SYNTHETIC_REJECTION")
+    result = ApprovalAttestor(store).run(
+        values["approval_id"],
+        values["job_id"],
+        values["proposal_id"],
+        values["proposal_digest"],
+        values["base_digest"],
+        expected_decision="rejected",
+        expected_rejection_code="SYNTHETIC_REJECTION",
+    )
+    assert result.decision == "rejected"
+    with pytest.raises(WorkflowError, match="APPROVAL_EXPECTATION_MISMATCH"):
+        ApprovalAttestor(store).run(
+            values["approval_id"],
+            values["job_id"],
+            values["proposal_id"],
+            values["proposal_digest"],
+            values["base_digest"],
+            expected_decision="rejected",
+            expected_rejection_code="OTHER_REJECTION",
+        )
+
+
+@pytest.mark.parametrize(
+    ("key", "body", "code"),
+    [
+        ("approval", None, "APPROVAL_NOT_FOUND"),
+        ("approval", b"{}", "INVALID_APPROVAL"),
+        ("proposal", None, "PROPOSAL_NOT_FOUND"),
+        ("proposal", b"{}", "INVALID_PROPOSAL"),
+        ("job", None, "JOB_NOT_FOUND"),
+        ("job", b"{}", "INVALID_JOB"),
+        ("execution", None, "EXECUTION_NOT_FOUND"),
+        ("execution", b"{}", "INVALID_EXECUTION"),
+        ("review", None, "REVIEW_NOT_FOUND"),
+    ],
+)
+def test_read_only_attestation_rejects_missing_or_malformed_objects(
+    key: str, body: bytes | None, code: str
+) -> None:
+    store, values = seed_attestation()
+    paths = {
+        "approval": f"v1/approvals/{values['approval_id']}.json",
+        "proposal": f"v1/proposals/{values['proposal_id']}.json",
+        "job": f"v1/jobs/{values['job_id']}.json",
+        "execution": f"v1/executions/{values['job_id']}.json",
+        "review": f"v1/reviews/{values['proposal_id']}.md",
+    }
+    if body is None:
+        del store.objects[paths[key]]
+    else:
+        store.objects[paths[key]] = StoredObject(body=body, etag='"changed"')
+    with pytest.raises(WorkflowError, match=code):
+        attest(store, values)
+
+
+def test_read_only_attestation_rejects_noncanonical_or_unexpected_approval() -> None:
+    store, values = seed_attestation()
+    key = f"v1/approvals/{values['approval_id']}.json"
+    approval = ProposalApprovalRecord.model_validate_json(store.objects[key].body)
+    store.objects[key] = StoredObject(body=json_bytes(approval), etag='"changed"')
+    with pytest.raises(WorkflowError, match="INVALID_APPROVAL"):
+        attest(store, values)
+
+    store, values = seed_attestation()
+    with pytest.raises(WorkflowError, match="APPROVAL_EXPECTATION_MISMATCH"):
+        attest(store, values, expected_decision="rejected", expected_rejection_code="EXPECTED")
+    with pytest.raises(WorkflowError, match="APPROVAL_OBJECT_DIGEST_MISMATCH"):
+        attest(store, values, expected_approval_object_digest="sha256:" + "0" * 64)
+
+    store, values = seed_attestation()
+    key = f"v1/approvals/{values['approval_id']}.json"
+    payload = json.loads(store.objects[key].body)
+    payload["decided_at"] = "2026-07-12T00:00:00"
+    store.objects[key] = StoredObject(
+        body=json.dumps(payload, sort_keys=True, separators=(",", ":")).encode() + b"\n",
+        etag='"changed"',
+    )
+    with pytest.raises(WorkflowError, match="INVALID_APPROVAL"):
+        attest(store, values)
+
+
+def test_read_only_attestation_rejects_invalid_proposal_and_control_outputs() -> None:
+    store, values = seed_attestation()
+    proposal_key = f"v1/proposals/{values['proposal_id']}.json"
+    proposal = json.loads(store.objects[proposal_key].body)
+    proposal["status"] = "blocked"
+    store.objects[proposal_key] = StoredObject(
+        body=json.dumps(proposal).encode(), etag='"changed"'
+    )
+    with pytest.raises(WorkflowError, match="INVALID_PROPOSAL"):
+        attest(store, values)
+
+    store, values = seed_attestation()
+    proposal_key = f"v1/proposals/{values['proposal_id']}.json"
+    proposal = json.loads(store.objects[proposal_key].body)
+    proposal["proposal_id"] = "proposal_" + "0" * 32
+    store.objects[proposal_key] = StoredObject(
+        body=json.dumps(proposal).encode(), etag='"changed"'
+    )
+    with pytest.raises(WorkflowError, match="INVALID_PROPOSAL"):
+        attest(store, values)
+
+    store, values = seed_attestation()
+    proposal_key = f"v1/proposals/{values['proposal_id']}.json"
+    proposal = CaptureProposal.model_validate_json(store.objects[proposal_key].body)
+    altered = CaptureProposal.model_validate(
+        {**proposal.model_dump(), "base_bundle_digest": "sha256:" + "0" * 64}
+    )
+    altered = CaptureProposal.model_validate(
+        {**altered.model_dump(), "proposal_digest": capture_proposal_digest(altered)}
+    )
+    store.objects[proposal_key] = StoredObject(body=json_bytes(altered), etag='"changed"')
+    with pytest.raises(WorkflowError, match="BASE_BUNDLE_DIGEST_MISMATCH"):
+        attest(store, values)
+
+    store, values = seed_attestation()
+    proposal_key = f"v1/proposals/{values['proposal_id']}.json"
+    proposal = json.loads(store.objects[proposal_key].body)
+    proposal["proposal_digest"] = "sha256:" + "0" * 64
+    store.objects[proposal_key] = StoredObject(
+        body=json.dumps(proposal).encode(), etag='"changed"'
+    )
+    with pytest.raises(WorkflowError, match="INVALID_PROPOSAL"):
+        attest(store, values)
+
+    store, values = seed_attestation()
+    job_key = f"v1/jobs/{values['job_id']}.json"
+    job = JobRecord.model_validate_json(store.objects[job_key].body)
+    mismatched_job = JobRecord.model_validate(
+        {**job.model_dump(), "proposal_id": "proposal_" + "0" * 32}
+    )
+    store.objects[job_key] = StoredObject(
+        body=json_bytes(mismatched_job),
+        etag='"changed"',
+    )
+    with pytest.raises(WorkflowError, match="CONTROL_OUTPUT_MISMATCH"):
+        attest(store, values)
+
+    store, values = seed_attestation()
+    job_key = f"v1/jobs/{values['job_id']}.json"
+    job = JobRecord.model_validate_json(store.objects[job_key].body)
+    store.objects[job_key] = StoredObject(
+        body=json_bytes(JobRecord.model_validate({**job.model_dump(), "status": "running"})),
+        etag='"changed"',
+    )
+    with pytest.raises(WorkflowError, match="INVALID_JOB"):
+        attest(store, values)
+
+    store, values = seed_attestation()
+    job_key = f"v1/jobs/{values['job_id']}.json"
+    job = JobRecord.model_validate_json(store.objects[job_key].body)
+    invalid_intake = JobRecord.model_validate(
+        {
+            **job.model_dump(),
+            "intake_object_key": "v1/intakes/sha256/" + "0" * 64 + ".json",
+        }
+    )
+    store.objects[job_key] = StoredObject(body=json_bytes(invalid_intake), etag='"changed"')
+    with pytest.raises(WorkflowError, match="INVALID_JOB"):
+        attest(store, values)
+
+    store, values = seed_attestation()
+    execution_key = f"v1/executions/{values['job_id']}.json"
+    execution = ProposalExecutionRecord.model_validate_json(store.objects[execution_key].body)
+    store.objects[execution_key] = StoredObject(
+        body=json_bytes(
+            ProposalExecutionRecord.model_validate(
+                {**execution.model_dump(), "proposal_digest": "sha256:" + "0" * 64}
+            )
+        ),
+        etag='"changed"',
+    )
+    with pytest.raises(WorkflowError, match="CONTROL_OUTPUT_MISMATCH"):
+        attest(store, values)
+
+    store, values = seed_attestation()
+    execution_key = f"v1/executions/{values['job_id']}.json"
+    execution = ProposalExecutionRecord.model_validate_json(store.objects[execution_key].body)
+    wrong_job_execution = ProposalExecutionRecord.model_validate(
+        {**execution.model_dump(), "job_id": "other-job"}
+    )
+    store.objects[execution_key] = StoredObject(
+        body=json_bytes(wrong_job_execution), etag='"changed"'
+    )
+    with pytest.raises(WorkflowError, match="INVALID_EXECUTION"):
+        attest(store, values)
+
+    store, values = seed_attestation()
+    execution_key = f"v1/executions/{values['job_id']}.json"
+    execution = ProposalExecutionRecord.model_validate_json(store.objects[execution_key].body)
+    store.objects[execution_key] = StoredObject(
+        body=json_bytes(
+            ProposalExecutionRecord.model_validate(
+                {**execution.model_dump(), "workflow_run_id": "other-run"}
+            )
+        ),
+        etag='"changed"',
+    )
+    with pytest.raises(WorkflowError, match="CONTROL_OUTPUT_MISMATCH"):
+        attest(store, values)
+
+
+def test_read_only_attestation_rejects_review_mismatch_and_store_failure() -> None:
+    store, values = seed_attestation()
+    review_key = f"v1/reviews/{values['proposal_id']}.md"
+    store.objects[review_key] = StoredObject(body=b"opaque changed review", etag='"changed"')
+    with pytest.raises(WorkflowError, match="REVIEW_DIGEST_MISMATCH"):
+        attest(store, values)
+
+    store, values = seed_attestation()
+    review_key = f"v1/reviews/{values['proposal_id']}.md"
+    opaque = b"opaque review bytes\n"
+    store.objects[review_key] = StoredObject(body=opaque, etag='"changed"')
+    execution_key = f"v1/executions/{values['job_id']}.json"
+    execution = ProposalExecutionRecord.model_validate_json(store.objects[execution_key].body)
+    store.objects[execution_key] = StoredObject(
+        body=json_bytes(
+            ProposalExecutionRecord.model_validate(
+                {
+                    **execution.model_dump(),
+                    "review_digest": "sha256:" + hashlib.sha256(opaque).hexdigest(),
+                }
+            )
+        ),
+        etag='"changed"',
+    )
+    assert attest(store, values).review_digest == "sha256:" + hashlib.sha256(opaque).hexdigest()
+
+    class FailingStore(ReadOnlyRecordingStore):
+        def get(self, key: str) -> StoredObject | None:
+            raise RuntimeError("private storage detail")
+
+    with pytest.raises(WorkflowError, match="CONTROL_STORE_FAILURE"):
+        attest(FailingStore({}), values)
+
+
+def test_read_only_attestation_rejects_invalid_input_before_reads() -> None:
+    store, values = seed_attestation()
+    with pytest.raises(WorkflowError, match="INVALID_ATTESTATION_INPUT"):
+        ApprovalAttestor(store).run(
+            "../approval_" + "a" * 32,
+            values["job_id"],
+            values["proposal_id"],
+            values["proposal_digest"],
+            values["base_digest"],
+            expected_decision="approved",
+        )
+    assert store.reads == []
+
+
+def test_verify_approval_cli_is_sanitized_and_read_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    store, values = seed_attestation()
+    monkeypatch.setattr("medlearn_vault.cli.S3ReadOnlyObjectStore", lambda *args: store)
+    result = CliRunner().invoke(
+        app,
+        [
+            "workflow",
+            "verify-approval",
+            values["approval_id"],
+            values["job_id"],
+            values["proposal_id"],
+            values["proposal_digest"],
+            values["base_digest"],
+            "--expected-decision",
+            "approved",
+        ],
+        env={
+            "CONTROL_R2_ENDPOINT": "configured",
+            "CONTROL_R2_ACCESS_KEY_ID": "configured",
+            "CONTROL_R2_SECRET_ACCESS_KEY": "configured",
+        },
+    )
+    assert result.exit_code == 0
+    assert result.stdout.startswith("status=verified approval_id=approval_")
+    assert "COPD" not in result.stdout + result.stderr
+
+
+def test_verify_approval_workflow_yaml_is_read_only_and_argument_safe() -> None:
+    path = Path(".github/workflows/medlearn-verify-approval.yml")
+    text = path.read_text(encoding="utf-8")
+    data = yaml.load(text, Loader=yaml.BaseLoader)
+    dispatch = data["on"]["workflow_dispatch"]
+    assert set(dispatch["inputs"]) == {
+        "approval_id",
+        "source_job_id",
+        "proposal_id",
+        "expected_proposal_object_digest",
+        "expected_base_bundle_digest",
+        "expected_decision",
+        "expected_rejection_code",
+        "expected_approval_object_digest",
+    }
+    assert dispatch["inputs"]["expected_decision"]["options"] == ["approved", "rejected"]
+    assert dispatch["inputs"]["expected_decision"]["default"] == "approved"
+    assert dispatch["inputs"]["expected_rejection_code"]["default"] == ""
+    assert dispatch["inputs"]["expected_approval_object_digest"]["default"] == ""
+    assert data["permissions"] == {"contents": "read"}
+    assert data["concurrency"] == {
+        "group": "medlearn-verify-approval-${{ inputs.approval_id }}",
+        "cancel-in-progress": "false",
+    }
+    verify_job = data["jobs"]["verify"]
+    assert verify_job["if"] == "github.ref == 'refs/heads/main'"
+    assert verify_job["timeout-minutes"] == "10"
+    assert "env" not in verify_job
+    action_steps = [step for step in verify_job["steps"] if "uses" in step]
+    assert action_steps
+    assert all(re.fullmatch(r"[^@]+@[0-9a-f]{40}", step["uses"]) for step in action_steps)
+    checkout = next(step for step in action_steps if step["uses"].startswith("actions/checkout@"))
+    assert checkout["with"]["persist-credentials"] == "false"
+    assert checkout["with"]["ref"] == "main"
+    install = next(
+        step for step in verify_job["steps"] if "--require-hashes" in step.get("run", "")
+    )
+    assert install["run"].splitlines() == [
+        "python -m pip install --require-hashes -r requirements/workflow.txt",
+        "python -m pip install --no-build-isolation --no-deps .",
+    ]
+    run = next(
+        step for step in verify_job["steps"] if step.get("name") == "Verify existing approval"
+    )
+    control_secrets = {
+        "CONTROL_R2_ENDPOINT",
+        "CONTROL_R2_ACCESS_KEY_ID",
+        "CONTROL_R2_SECRET_ACCESS_KEY",
+    }
+    assert control_secrets <= set(run["env"])
+    assert set(run["env"]) == control_secrets | {
+        "MEDLEARN_APPROVAL_ID",
+        "MEDLEARN_SOURCE_JOB_ID",
+        "MEDLEARN_PROPOSAL_ID",
+        "MEDLEARN_EXPECTED_PROPOSAL_OBJECT_DIGEST",
+        "MEDLEARN_EXPECTED_BASE_BUNDLE_DIGEST",
+        "MEDLEARN_EXPECTED_DECISION",
+        "MEDLEARN_EXPECTED_REJECTION_CODE",
+        "MEDLEARN_EXPECTED_APPROVAL_OBJECT_DIGEST",
+    }
+    for step in verify_job["steps"]:
+        if step is not run:
+            assert not (control_secrets & set(step.get("env", {})))
+    assert "args=(" in run["run"]
+    assert 'medlearn "${args[@]}"' in run["run"]
+    assert "${{ inputs." not in run["run"]
+    assert 'if [[ -n "$MEDLEARN_EXPECTED_REJECTION_CODE" ]]; then' in run["run"]
+    assert 'if [[ -n "$MEDLEARN_EXPECTED_APPROVAL_OBJECT_DIGEST" ]]; then' in run["run"]
+    assert set(re.findall(r"secrets\.([A-Z0-9_]+)", text)) == {
+        "CONTROL_R2_ENDPOINT",
+        "CONTROL_R2_ACCESS_KEY_ID",
+        "CONTROL_R2_SECRET_ACCESS_KEY",
+    }
+    for forbidden in (
+        "actions/upload-artifact",
+        "GITHUB_STEP_SUMMARY",
+        "set -x",
+        "medlearn-vault",
+        "VAULT_R2",
+        "RCLONE",
+        "remotely save",
+        "put_object",
+    ):
+        assert forbidden.lower() not in text.lower()
 
 
 def test_workflow_lock_is_fully_hashed_and_pins_direct_dependencies() -> None:

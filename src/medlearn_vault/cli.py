@@ -37,12 +37,14 @@ from medlearn_vault.preview import (
     render_markdown,
 )
 from medlearn_vault.workflow import (
+    ApprovalAttestor,
     ApprovalOrchestrator,
     JobRecord,
     ProposalApprovalRecord,
     ProposalExecutionRecord,
     ProposalOrchestrator,
     S3ObjectStore,
+    S3ReadOnlyObjectStore,
     WorkflowError,
     WorkflowInputs,
 )
@@ -233,6 +235,53 @@ def workflow_approve(
     typer.echo(
         f"decision={result.decision} approval_id={result.approval_id} "
         f"reused={str(result.reused).lower()}"
+    )
+
+
+@workflow_app.command("verify-approval")
+def workflow_verify_approval(
+    approval_id: str,
+    source_job_id: str,
+    proposal_id: str,
+    expected_proposal_object_digest: str,
+    expected_base_bundle_digest: str,
+    expected_decision: Annotated[str, typer.Option("--expected-decision")] = "approved",
+    expected_rejection_code: Annotated[
+        str | None, typer.Option("--expected-rejection-code")
+    ] = None,
+    expected_approval_object_digest: Annotated[
+        str | None, typer.Option("--expected-approval-object-digest")
+    ] = None,
+) -> None:
+    try:
+        store = S3ReadOnlyObjectStore(
+            os.environ.get("CONTROL_R2_ENDPOINT", ""),
+            os.environ.get("CONTROL_R2_ACCESS_KEY_ID", ""),
+            os.environ.get("CONTROL_R2_SECRET_ACCESS_KEY", ""),
+        )
+        result = ApprovalAttestor(store).run(
+            approval_id,
+            source_job_id,
+            proposal_id,
+            expected_proposal_object_digest,
+            expected_base_bundle_digest,
+            expected_decision=expected_decision,
+            expected_rejection_code=expected_rejection_code,
+            expected_approval_object_digest=expected_approval_object_digest,
+        )
+    except WorkflowError as exc:
+        typer.echo(f"error_code={exc.code}", err=True)
+        raise typer.Exit(1) from exc
+    except ValidationError as exc:
+        typer.echo("error_code=INVALID_ATTESTATION_INPUT", err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(
+        f"status=verified approval_id={result.approval_id} "
+        f"approval_object_digest={result.approval_object_digest} "
+        f"proposal_id={result.proposal_id} "
+        f"proposal_object_digest={result.proposal_object_digest} "
+        f"review_digest={result.review_digest} decision={result.decision} "
+        f"source_job_id={result.source_job_id} workflow_run_id={result.workflow_run_id}"
     )
 
 
