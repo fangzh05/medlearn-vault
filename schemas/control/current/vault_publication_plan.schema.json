@@ -1,0 +1,129 @@
+{
+  "$defs": {
+    "VaultPublicationArtifact": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "media_type": {
+          "title": "Media Type",
+          "type": "string"
+        },
+        "content_digest": {
+          "pattern": "^sha256:[a-f0-9]{64}$",
+          "title": "Content Digest",
+          "type": "string"
+        },
+        "byte_length": {
+          "minimum": 1,
+          "title": "Byte Length",
+          "type": "integer"
+        },
+        "content_utf8": {
+          "title": "Content Utf8",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "media_type",
+        "content_digest",
+        "byte_length",
+        "content_utf8"
+      ],
+      "title": "VaultPublicationArtifact",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "plan_version": {
+      "const": "0.1.0",
+      "title": "Plan Version",
+      "type": "string"
+    },
+    "publication_plan_id": {
+      "pattern": "^publication_plan_[a-f0-9]{32}$",
+      "title": "Publication Plan Id",
+      "type": "string"
+    },
+    "approval_id": {
+      "pattern": "^approval_[a-f0-9]{32}$",
+      "title": "Approval Id",
+      "type": "string"
+    },
+    "approval_object_digest": {
+      "pattern": "^sha256:[a-f0-9]{64}$",
+      "title": "Approval Object Digest",
+      "type": "string"
+    },
+    "proposal_id": {
+      "pattern": "^proposal_[a-f0-9]{32}$",
+      "title": "Proposal Id",
+      "type": "string"
+    },
+    "proposal_object_digest": {
+      "pattern": "^sha256:[a-f0-9]{64}$",
+      "title": "Proposal Object Digest",
+      "type": "string"
+    },
+    "proposal_semantic_digest": {
+      "pattern": "^sha256:[a-f0-9]{64}$",
+      "title": "Proposal Semantic Digest",
+      "type": "string"
+    },
+    "base_bundle_digest": {
+      "pattern": "^sha256:[a-f0-9]{64}$",
+      "title": "Base Bundle Digest",
+      "type": "string"
+    },
+    "review_digest": {
+      "pattern": "^sha256:[a-f0-9]{64}$",
+      "title": "Review Digest",
+      "type": "string"
+    },
+    "approval_decision": {
+      "const": "approved",
+      "title": "Approval Decision",
+      "type": "string"
+    },
+    "capture_id": {
+      "pattern": "^capture_[a-f0-9]{32}$",
+      "title": "Capture Id",
+      "type": "string"
+    },
+    "capture_object_digest": {
+      "pattern": "^sha256:[a-f0-9]{64}$",
+      "title": "Capture Object Digest",
+      "type": "string"
+    },
+    "artifacts": {
+      "items": {
+        "$ref": "#/$defs/VaultPublicationArtifact"
+      },
+      "maxItems": 2,
+      "minItems": 2,
+      "title": "Artifacts",
+      "type": "array"
+    }
+  },
+  "required": [
+    "plan_version",
+    "publication_plan_id",
+    "approval_id",
+    "approval_object_digest",
+    "proposal_id",
+    "proposal_object_digest",
+    "proposal_semantic_digest",
+    "base_bundle_digest",
+    "review_digest",
+    "approval_decision",
+    "capture_id",
+    "capture_object_digest",
+    "artifacts"
+  ],
+  "title": "VaultPublicationPlan",
+  "type": "object"
+}

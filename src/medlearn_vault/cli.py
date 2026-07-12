@@ -36,6 +36,7 @@ from medlearn_vault.preview import (
     build_preview_plan,
     render_markdown,
 )
+from medlearn_vault.publication import VaultPublicationPlan
 from medlearn_vault.workflow import (
     ApprovalAttestor,
     ApprovalOrchestrator,
@@ -44,6 +45,7 @@ from medlearn_vault.workflow import (
     ProposalExecutionRecord,
     ProposalOrchestrator,
     ProposalOutputInspector,
+    PublicationPlanOrchestrator,
     S3ObjectStore,
     S3ReadOnlyObjectStore,
     WorkflowError,
@@ -83,6 +85,7 @@ CONTROL_SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "proposal_approval": ProposalApprovalRecord,
     "job_record": JobRecord,
     "proposal_execution": ProposalExecutionRecord,
+    "vault_publication_plan": VaultPublicationPlan,
 }
 
 
@@ -283,6 +286,44 @@ def workflow_verify_approval(
         f"proposal_object_digest={result.proposal_object_digest} "
         f"review_digest={result.review_digest} decision={result.decision} "
         f"source_job_id={result.source_job_id} workflow_run_id={result.workflow_run_id}"
+    )
+
+
+@workflow_app.command("plan-publication")
+def workflow_plan_publication(
+    approval_id: str,
+    approval_object_digest: str,
+    source_job_id: str,
+    proposal_id: str,
+    proposal_object_digest: str,
+    expected_base_bundle_digest: str,
+) -> None:
+    try:
+        store = S3ObjectStore(
+            os.environ.get("CONTROL_R2_ENDPOINT", ""),
+            os.environ.get("CONTROL_R2_ACCESS_KEY_ID", ""),
+            os.environ.get("CONTROL_R2_SECRET_ACCESS_KEY", ""),
+        )
+        result = PublicationPlanOrchestrator(store, Path.cwd()).run(
+            approval_id,
+            approval_object_digest,
+            source_job_id,
+            proposal_id,
+            proposal_object_digest,
+            expected_base_bundle_digest,
+            bundle_path=os.environ.get("MEDLEARN_PROPOSE_BUNDLE_PATH", ""),
+        )
+    except WorkflowError as exc:
+        typer.echo(f"error_code={exc.code}", err=True)
+        raise typer.Exit(1) from exc
+    except ValidationError as exc:
+        typer.echo("error_code=INVALID_PUBLICATION_INPUT", err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(
+        f"status=planned publication_plan_id={result.publication_plan_id} "
+        f"publication_plan_object_digest={result.publication_plan_object_digest} "
+        f"capture_id={result.capture_id} capture_object_digest={result.capture_object_digest} "
+        f"markdown_digest={result.markdown_digest} reused={str(result.reused).lower()}"
     )
 
 

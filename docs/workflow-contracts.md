@@ -77,8 +77,9 @@ not stored in `ProposalApprovalRecord`. The read-only boundary and workflow auth
 that the Vault is not accessed; verification does not read the Vault bucket to prove absence.
 
 Release sequence: PR #15 added Synthetic Intake and the production control-plane E2E passed.
-PR #16 hardens privileged workflows and repository CI. The next feature PR may introduce a
-deterministic VaultPublicationPlan; Vault writes remain forbidden until that plan is reviewed.
+PR #16 hardens privileged workflows and repository CI. Version 0.9.0 adds the deterministic
+`VaultPublicationPlan` 0.1.0 boundary; see `publication-contracts.md`. Vault writes remain
+forbidden until a separately reviewed writer exists.
 
 ## Production workflow operations
 

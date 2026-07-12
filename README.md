@@ -9,7 +9,7 @@ permanent identifiers, matching fingerprints, versioned JSON Schema, a small CLI
 tests, and CI. It performs no Vault writes and contains no LLM, database, Obsidian,
 or document-ingestion integration.
 
-Version 0.8.4 accepts an untrusted, structured `CaptureDraft` (workflow contract 0.3.0),
+Version 0.9.0 accepts an untrusted, structured `CaptureDraft` (workflow contract 0.3.0),
 reconciles it deterministically against a `ContractBundle`, and emits a reviewable
 `CaptureProposal`. ChatGPT Work performs language understanding; MedLearn calls no LLM API.
 Drafts contain only context, message IDs, short evidence excerpts, and extracted candidates—not
@@ -49,6 +49,10 @@ through fixed `medlearn-control` keys. It is read-only: it writes no attestation
 authorize publication, does not replace future commit-time revalidation, and does not access the
 Vault, Obsidian, or Remotely Save. Its source job ID is an operational assertion verified against
 the stored Job and Execution, not a field added to `ProposalApprovalRecord`.
+
+Version 0.9.0 adds `VaultPublicationPlan` 0.1.0: a deterministic, create-only control-plane plan
+containing exact `LearningCapture` JSON and Markdown bytes. It writes only `medlearn-control`;
+`medlearn-vault` remains untouched. See `docs/publication-contracts.md`.
 
 `medlearn-synthetic-intake.yml` submits a fixed, excerpt-free synthetic fixture through the real
 Worker intake path, waits for Proposal completion, and reports only sanitized Proposal provenance
