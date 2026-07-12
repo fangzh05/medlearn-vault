@@ -25,6 +25,7 @@ from medlearn_vault.domain.base import AwareDatetime, DomainModel
 
 CONTROL_BUCKET = "medlearn-control"
 LEASE_DURATION = timedelta(minutes=10)
+TERMINAL_JOB_RETRIES = 3
 JOB_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
 DIGEST_PATTERN = r"^sha256:[a-f0-9]{64}$"
 INTAKE_KEY_PATTERN = r"^v1/intakes/sha256/[a-f0-9]{64}\.json$"
@@ -364,6 +365,9 @@ class ProposalOrchestrator:
             review_bytes = render_capture_proposal_markdown(proposal, bundle=bundle).encode()
             if execution.status in {"succeeded", "blocked"}:
                 self._verify_terminal_outputs(execution, proposal, proposal_bytes, review_bytes)
+                self._reconcile_terminal_job(
+                    job_key, inputs, execution, current_time
+                )
                 return OrchestrationResult(
                     status=execution.status, proposal_id=proposal.proposal_id, reused=True
                 )
@@ -550,6 +554,56 @@ class ProposalOrchestrator:
             or execution.review_digest != _digest(review_bytes)
         ):
             raise WorkflowError("PROPOSAL_COLLISION")
+
+    def _reconcile_terminal_job(
+        self,
+        key: str,
+        inputs: WorkflowInputs,
+        execution: ProposalExecutionRecord,
+        now: datetime,
+    ) -> None:
+        for _ in range(TERMINAL_JOB_RETRIES):
+            stored = self.store.get(key)
+            if stored is None:
+                raise WorkflowError("CONTROL_STATE_CONFLICT")
+            try:
+                job = JobRecord.model_validate_json(stored.body)
+            except ValueError as exc:
+                raise WorkflowError("CONTROL_STATE_CONFLICT") from exc
+            identity_matches = (
+                job.job_id == inputs.job_id
+                and job.intake_object_key == inputs.intake_object_key
+                and job.intake_digest == inputs.intake_digest
+            )
+            if not identity_matches or job.status == "expired":
+                raise WorkflowError("CONTROL_STATE_CONFLICT")
+            if job.status in {"succeeded", "blocked"}:
+                if (
+                    job.status == execution.status
+                    and job.proposal_id == execution.proposal_id
+                    and job.workflow_run_id == execution.workflow_run_id
+                ):
+                    return
+                raise WorkflowError("CONTROL_STATE_CONFLICT")
+            if job.status not in {"dispatched", "running", "failed"}:
+                raise WorkflowError("CONTROL_STATE_CONFLICT")
+            repaired = JobRecord.model_validate(
+                {
+                    **job.model_dump(),
+                    "status": execution.status,
+                    "proposal_id": execution.proposal_id,
+                    "workflow_run_id": execution.workflow_run_id,
+                    "dispatch_lease_id": None,
+                    "dispatch_lease_expires_at": None,
+                    "error_code": None,
+                    "updated_at": now,
+                }
+            )
+            if self.store.compare_and_swap(
+                key, _json_bytes(repaired), stored.etag, content_type="application/json"
+            ):
+                return
+        raise WorkflowError("CONTROL_STATE_CONFLICT")
 
     def _record_failure(
         self,

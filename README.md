@@ -9,7 +9,7 @@ permanent identifiers, matching fingerprints, versioned JSON Schema, a small CLI
 tests, and CI. It performs no Vault writes and contains no LLM, database, Obsidian,
 or document-ingestion integration.
 
-Version 0.7.0 accepts an untrusted, structured `CaptureDraft` (workflow contract 0.3.0),
+Version 0.7.1 accepts an untrusted, structured `CaptureDraft` (workflow contract 0.3.0),
 reconciles it deterministically against a `ContractBundle`, and emits a reviewable
 `CaptureProposal`. ChatGPT Work performs language understanding; MedLearn calls no LLM API.
 Drafts contain only context, message IDs, short evidence excerpts, and extracted candidates—not
