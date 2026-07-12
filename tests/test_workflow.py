@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import re
 import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -38,6 +39,7 @@ class MemoryStore(ObjectStore):
     def __init__(self) -> None:
         self.objects: dict[str, StoredObject] = {}
         self.creates: list[str] = []
+        self.swaps: list[str] = []
         self._revision = 0
         self.fail_create_once: str | None = None
 
@@ -67,6 +69,7 @@ class MemoryStore(ObjectStore):
         if current is None or current.etag != etag:
             return False
         self.objects[key] = StoredObject(body=body, etag=self._etag())
+        self.swaps.append(key)
         return True
 
     def seed(self, key: str, body: bytes) -> None:
@@ -142,6 +145,147 @@ def test_copd_end_to_end_and_terminal_rerun_is_verification_only(
     assert captured.out == captured.err == ""
 
 
+@pytest.mark.parametrize("status", ["dispatched", "running", "failed"])
+def test_terminal_execution_repairs_nonterminal_job_without_rewriting_outputs(
+    status: str,
+) -> None:
+    store = MemoryStore()
+    inputs, original = seed_job(store, copd_envelope())
+    orchestrator = ProposalOrchestrator(store, ROOT)
+    first = orchestrator.run(
+        inputs, bundle_path="examples/copd", workflow_run_id="run-original", now=NOW
+    )
+    job_key = f"v1/jobs/{inputs.job_id}.json"
+    stale = JobRecord.model_validate(
+        {
+            **original.model_dump(),
+            "status": status,
+            "error_code": "STALE_FAILURE" if status == "failed" else None,
+            "updated_at": NOW + timedelta(seconds=1),
+        }
+    )
+    store.seed(job_key, json_bytes(stale))
+    store.creates.clear()
+    store.swaps.clear()
+
+    result = orchestrator.run(
+        inputs,
+        bundle_path="examples/copd",
+        workflow_run_id="run-reconcile",
+        now=NOW + timedelta(minutes=1),
+    )
+
+    assert result.reused is True
+    repaired = JobRecord.model_validate_json(store.objects[job_key].body)
+    assert (repaired.status, repaired.proposal_id, repaired.workflow_run_id) == (
+        "succeeded",
+        first.proposal_id,
+        "run-original",
+    )
+    assert repaired.error_code is None
+    assert repaired.dispatch_attempt == original.dispatch_attempt
+    assert repaired.created_at == original.created_at
+    assert store.creates == []
+    assert store.swaps == [job_key]
+
+
+def test_terminal_execution_write_survives_failed_final_job_write_and_rerun_repairs() -> None:
+    class FailFinalJobStore(MemoryStore):
+        fail_job_cas = False
+
+        def compare_and_swap(
+            self, key: str, body: bytes, etag: str, *, content_type: str
+        ) -> bool:
+            if (
+                self.fail_job_cas
+                and key.startswith("v1/jobs/")
+                and JobRecord.model_validate_json(body).status in {"succeeded", "blocked"}
+            ):
+                self.fail_job_cas = False
+                return False
+            return super().compare_and_swap(key, body, etag, content_type=content_type)
+
+    store = FailFinalJobStore()
+    inputs, _ = seed_job(store, copd_envelope())
+    store.fail_job_cas = True
+    with pytest.raises(WorkflowError, match="STALE_JOB_UPDATE"):
+        ProposalOrchestrator(store, ROOT).run(
+            inputs, bundle_path="examples/copd", workflow_run_id="run-crash", now=NOW
+        )
+    execution = ProposalExecutionRecord.model_validate_json(
+        store.objects[f"v1/executions/{inputs.job_id}.json"].body
+    )
+    assert execution.status == "succeeded"
+
+    result = ProposalOrchestrator(store, ROOT).run(
+        inputs,
+        bundle_path="examples/copd",
+        workflow_run_id="run-repair",
+        now=NOW + timedelta(minutes=1),
+    )
+    assert result.reused is True
+    assert JobRecord.model_validate_json(
+        store.objects[f"v1/jobs/{inputs.job_id}.json"].body
+    ).status == "succeeded"
+
+
+def test_terminal_reconciliation_accepts_concurrent_cas_winner() -> None:
+    class RacingStore(MemoryStore):
+        winner: bytes | None = None
+
+        def compare_and_swap(
+            self, key: str, body: bytes, etag: str, *, content_type: str
+        ) -> bool:
+            if self.winner is not None and key.startswith("v1/jobs/"):
+                winner, self.winner = self.winner, None
+                self.seed(key, winner)
+                return False
+            return super().compare_and_swap(key, body, etag, content_type=content_type)
+
+    store = RacingStore()
+    inputs, original = seed_job(store, copd_envelope())
+    orchestrator = ProposalOrchestrator(store, ROOT)
+    first = orchestrator.run(
+        inputs, bundle_path="examples/copd", workflow_run_id="run-winner", now=NOW
+    )
+    job_key = f"v1/jobs/{inputs.job_id}.json"
+    terminal = store.objects[job_key].body
+    store.seed(job_key, json_bytes(original))
+    store.winner = terminal
+    result = orchestrator.run(
+        inputs,
+        bundle_path="examples/copd",
+        workflow_run_id="run-loser",
+        now=NOW + timedelta(minutes=1),
+    )
+    assert result.reused is True
+    assert result.proposal_id == first.proposal_id
+
+
+@pytest.mark.parametrize("status", ["succeeded", "blocked", "expired"])
+def test_terminal_reconciliation_rejects_conflicting_or_expired_job(status: str) -> None:
+    store = MemoryStore()
+    inputs, original = seed_job(store, copd_envelope())
+    orchestrator = ProposalOrchestrator(store, ROOT)
+    orchestrator.run(inputs, bundle_path="examples/copd", workflow_run_id="run-ok", now=NOW)
+    conflict = JobRecord.model_validate(
+        {
+            **original.model_dump(),
+            "status": status,
+            "proposal_id": "proposal_" + "f" * 32 if status != "expired" else None,
+            "workflow_run_id": "other-run" if status != "expired" else None,
+        }
+    )
+    store.seed(f"v1/jobs/{inputs.job_id}.json", json_bytes(conflict))
+    with pytest.raises(WorkflowError, match="CONTROL_STATE_CONFLICT"):
+        orchestrator.run(
+            inputs,
+            bundle_path="examples/copd",
+            workflow_run_id="run-conflict",
+            now=NOW + timedelta(minutes=1),
+        )
+
+
 def test_blocked_proposal_writes_both_outputs_and_is_workflow_success() -> None:
     store = MemoryStore()
     inputs, _ = seed_job(store, ambiguous_envelope(), job_id="job-blocked-001")
@@ -169,15 +313,25 @@ def test_blocked_proposal_writes_both_outputs_and_is_workflow_success() -> None:
     assert repeated.reused is True
 
 
-def test_existing_different_proposal_bytes_are_a_collision() -> None:
+@pytest.mark.parametrize(
+    ("kind", "missing"),
+    [("proposal", False), ("proposal", True), ("review", False), ("review", True)],
+)
+def test_missing_or_modified_terminal_outputs_are_a_collision(
+    kind: str, missing: bool
+) -> None:
     store = MemoryStore()
     inputs, _ = seed_job(store, copd_envelope())
     orchestrator = ProposalOrchestrator(store, ROOT)
     result = orchestrator.run(
         inputs, bundle_path="examples/copd", workflow_run_id="run-1", now=NOW
     )
-    key = f"v1/proposals/{result.proposal_id}.json"
-    store.objects[key] = StoredObject(body=b'{"tampered":true}', etag=store.objects[key].etag)
+    suffix = ".json" if kind == "proposal" else ".md"
+    key = f"v1/{kind}s/{result.proposal_id}{suffix}"
+    if missing:
+        del store.objects[key]
+    else:
+        store.objects[key] = StoredObject(body=b"tampered", etag=store.objects[key].etag)
     with pytest.raises(WorkflowError, match="PROPOSAL_COLLISION"):
         orchestrator.run(
             inputs,
@@ -443,10 +597,11 @@ def test_workflow_yaml_has_fixed_minimal_authority() -> None:
     assert set(dispatch["inputs"]) == {"job_id", "intake_object_key", "intake_digest"}
     assert data["permissions"] == {"contents": "read"}
     assert data["concurrency"] == {
-        "group": "${{ inputs.job_id }}",
+        "group": "medlearn-propose-${{ inputs.job_id }}",
         "cancel-in-progress": "false",
     }
     propose_job = data["jobs"]["propose"]
+    assert propose_job["timeout-minutes"] == "15"
     assert set(propose_job["env"]) == {
         "CONTROL_R2_ENDPOINT",
         "CONTROL_R2_ACCESS_KEY_ID",
@@ -456,6 +611,18 @@ def test_workflow_yaml_has_fixed_minimal_authority() -> None:
     assert propose_job["env"]["MEDLEARN_PROPOSE_BUNDLE_PATH"] == (
         "${{ vars.MEDLEARN_PROPOSE_BUNDLE_PATH }}"
     )
+    action_steps = [step for step in propose_job["steps"] if "uses" in step]
+    assert action_steps
+    assert all(re.fullmatch(r"[^@]+@[0-9a-f]{40}", step["uses"]) for step in action_steps)
+    checkout = next(step for step in action_steps if step["uses"].startswith("actions/checkout@"))
+    assert checkout["with"]["persist-credentials"] == "false"
+    install_step = next(
+        step for step in propose_job["steps"] if "--require-hashes" in step.get("run", "")
+    )
+    assert install_step["run"].splitlines() == [
+        "python -m pip install --require-hashes -r requirements/workflow.txt",
+        "python -m pip install --no-build-isolation --no-deps .",
+    ]
     build_step = next(
         step for step in propose_job["steps"] if step.get("name") == "Build or verify proposal"
     )
@@ -473,6 +640,20 @@ def test_workflow_yaml_has_fixed_minimal_authority() -> None:
     assert "examples/copd" not in text
     assert "examples/gerd" not in text
     assert "CONTROL_BUCKET" not in text
+    assert not re.search(r"run:\s*.*\$\{\{\s*inputs\.", text)
+
+
+def test_workflow_lock_is_fully_hashed_and_pins_direct_dependencies() -> None:
+    text = Path("requirements/workflow.txt").read_text(encoding="utf-8")
+    lines = text.splitlines()
+    for package in ("boto3", "botocore", "pydantic", "typer", "hatchling"):
+        assert any(line.startswith(f"{package}==") and line.endswith(" \\") for line in lines)
+    requirement_lines = [
+        line for line in lines if line and not line.startswith((" ", "#"))
+    ]
+    assert requirement_lines
+    assert all("==" in line and line.endswith(" \\") for line in requirement_lines)
+    assert "--hash=sha256:" in text
 
 
 def test_cli_failure_logs_only_stable_code(monkeypatch: pytest.MonkeyPatch) -> None:

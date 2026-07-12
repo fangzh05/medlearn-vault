@@ -26,10 +26,40 @@ to mean only that canonical CaptureDraft digest.
 `ProposalExecutionRecord` 0.1.0 is a control-plane record, not a persistent medical aggregate. It
 leases proposal production by `job_id`, records only output identities and digests, and ends as
 `succeeded`, `blocked`, or sanitized `failed`. Terminal reruns recompute deterministic bytes and
-verify the existing proposal and review; mismatched bytes are `PROPOSAL_COLLISION`.
+verify the existing proposal and review; mismatched or missing bytes are `PROPOSAL_COLLISION`.
+Only after that verification is a terminal Execution the authoritative record of the completed
+operation. A verified terminal rerun rereads its Job and repairs `dispatched`, `running`, or
+`failed` to the Execution's status with bounded compare-and-swap retries. It preserves intake
+identity, dispatch attempt, and creation time; copies the verified proposal and workflow run IDs;
+and clears errors and leases. A stale CAS rereads and accepts only an identical winner. Expired,
+identity-mismatched, or conflicting terminal Jobs fail with `CONTROL_STATE_CONFLICT`. Reconciliation
+never creates or rewrites Proposal or Review objects.
 
 JobRecord remains 0.2.0. `succeeded` and `blocked` require both `proposal_id` and
 `workflow_run_id`; `failed` requires `error_code`; terminal records cannot retain dispatch leases.
+
+## Production workflow operations
+
+The secret-bearing workflow installs only `requirements/workflow.txt`, then installs this package
+without dependency resolution or build isolation. Regenerate the lock reproducibly with Python
+3.12 and pip-tools 7.5.3:
+
+```bash
+python -m pip install pip-tools==7.5.3
+python -m piptools compile --generate-hashes --resolver=backtracking --output-file requirements/workflow.txt requirements/workflow.in
+```
+
+Configure GitHub Secrets `CONTROL_R2_ENDPOINT`, `CONTROL_R2_ACCESS_KEY_ID`, and
+`CONTROL_R2_SECRET_ACCESS_KEY`, plus repository variable `MEDLEARN_PROPOSE_BUNDLE_PATH`. The R2
+credentials must be scoped only to the `medlearn-control` control bucket; they require no
+`medlearn-vault` access.
+
+After deployment, dispatch a synthetic intake and Job using a non-medical fixture, run
+`MedLearn Propose`, and verify that the Execution, deterministic Proposal, Review, and terminal Job
+agree on status, proposal ID, digests, workflow run ID, and intake identity. Then fault-inject or
+manually retain the synthetic Job as `dispatched`, `running`, and stale `failed`, rerun the workflow,
+and verify repair without Proposal/Review writes. Finally verify that expired and conflicting
+terminal Jobs are rejected and delete the synthetic control objects.
 
 Concept terms for an observed misconception and `correction_terms` are resolved independently.
 Authoritative correction matching uses the correction terms and requires an exact statement and
