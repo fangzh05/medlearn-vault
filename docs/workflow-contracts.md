@@ -68,6 +68,17 @@ medlearn workflow approve \
   sha256:<expected-base-bundle-digest>
 ```
 
+`medlearn workflow verify-approval` is a read-only operational attestation. It derives fixed
+Approval, Proposal, Job, Execution, and Review keys from validated identifiers; verifies exact
+stored bytes and provenance; and returns only IDs, digests, decision, and workflow run ID. It does
+not persist an attestation object, authorize publication, access `medlearn-vault`, or invoke
+Obsidian or Remotely Save. `source_job_id` is an assertion verified against Job and Execution,
+not stored in `ProposalApprovalRecord`. The read-only boundary and workflow authority establish
+that the Vault is not accessed; verification does not read the Vault bucket to prove absence.
+
+Release sequence: PR #14 adds read-only approval attestation, then production Approval E2E runs,
+then PR #15 may add deterministic VaultPublicationPlan work.
+
 ## Production workflow operations
 
 The secret-bearing workflow installs only `requirements/workflow.txt`, then installs this package
