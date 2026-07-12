@@ -548,11 +548,9 @@ def test_non_utc_month_boundary_path() -> None:
 
 
 class TestErrorCodeRouting:
-    def test_rejected_approval_returns_not_approved_at_both_levels(
-        self,
-    ) -> None:
-        """Rejected approval → PUBLICATION_NOT_APPROVED at both
-        build_vault_publication_plan and orchestrator levels."""
+    def test_rejected_approval_is_attested_then_routed(self) -> None:
+        """A fully valid rejected approval must pass attestation first,
+        then yield PUBLICATION_NOT_APPROVED only from the orchestrator."""
         store = MemoryStore()
         proposal_id, proposal_digest, base_digest, proposal_body = seed_proposal(
             store
@@ -574,16 +572,86 @@ class TestErrorCodeRouting:
             store.objects[f"v1/reviews/{proposal_id}.md"].body
         )
 
-        # Level 1: build_vault_publication_plan direct
+        # Level 1: build_vault_publication_plan still catches rejected early
         bundle = ContractBundle.from_directory(ROOT / "examples" / "copd")
         with pytest.raises(ValueError, match="PUBLICATION_NOT_APPROVED"):
             build_vault_publication_plan(
                 bundle, proposal_body, approval_body, review_digest
             )
 
-        # Level 2: orchestrator (catches rejected before attestor)
+        # Level 2: orchestrator attest → routed after attestation succeeds
         orchestrator = PublicationPlanOrchestrator(store, ROOT)
         with pytest.raises(WorkflowError, match="PUBLICATION_NOT_APPROVED"):
+            orchestrator.run(
+                approval.approval_id,
+                approval_digest,
+                "job-approval-source",
+                proposal_id,
+                proposal_digest,
+                base_digest,
+                bundle_path="examples/copd",
+            )
+
+    def test_rejected_approval_wrong_object_digest_not_masked(self) -> None:
+        """A rejected approval with a wrong expected object digest must
+        return APPROVAL_OBJECT_DIGEST_MISMATCH, not PUBLICATION_NOT_APPROVED."""
+        store = MemoryStore()
+        proposal_id, proposal_digest, base_digest, _ = seed_proposal(store)
+        approval = ApprovalOrchestrator(store).run(
+            proposal_id,
+            proposal_digest,
+            base_digest,
+            decision="rejected",
+            rejection_code="INSUFFICIENT_EVIDENCE",
+            now=NOW,
+        )
+        orchestrator = PublicationPlanOrchestrator(store, ROOT)
+        # Pass a deliberately wrong approval_object_digest
+        with pytest.raises(
+            WorkflowError, match="APPROVAL_OBJECT_DIGEST_MISMATCH"
+        ):
+            orchestrator.run(
+                approval.approval_id,
+                "sha256:00000000000000000000000000000000"
+                "00000000000000000000000000000000",
+                "job-approval-source",
+                proposal_id,
+                proposal_digest,
+                base_digest,
+                bundle_path="examples/copd",
+            )
+
+    def test_rejected_approval_tampered_body_not_masked(self) -> None:
+        """If the stored rejected-approval body is non-canonical, the
+        attestor must return INVALID_APPROVAL rather than the orchestrator
+        silently mapping to PUBLICATION_NOT_APPROVED."""
+        store = MemoryStore()
+        proposal_id, proposal_digest, base_digest, _ = seed_proposal(store)
+        approval = ApprovalOrchestrator(store).run(
+            proposal_id,
+            proposal_digest,
+            base_digest,
+            decision="rejected",
+            rejection_code="INSUFFICIENT_EVIDENCE",
+            now=NOW,
+        )
+        stored = store.objects[f"v1/approvals/{approval.approval_id}.json"]
+        approval_digest = _sha256(stored.body)
+        # Replace stored body with non-canonical JSON (indented instead of compact)
+        approval_obj = ProposalApprovalRecord.model_validate_json(stored.body)
+        non_canonical = (
+            json.dumps(
+                approval_obj.model_dump(mode="json"),
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n"
+        ).encode()
+        store.objects[f"v1/approvals/{approval.approval_id}.json"] = (
+            StoredObject(body=non_canonical, etag=stored.etag)
+        )
+        orchestrator = PublicationPlanOrchestrator(store, ROOT)
+        with pytest.raises(WorkflowError, match="INVALID_APPROVAL"):
             orchestrator.run(
                 approval.approval_id,
                 approval_digest,

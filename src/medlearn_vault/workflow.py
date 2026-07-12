@@ -621,6 +621,8 @@ class PublicationPlanOrchestrator:
             publication_plan_object_digest,
         )
 
+        # Pre-read approval only to recover decision and rejection_code so
+        # the attestor is always called regardless of outcome.
         try:
             approval_stored = self.store.get(f"v1/approvals/{approval_id}.json")
         except Exception as exc:
@@ -633,18 +635,26 @@ class PublicationPlanOrchestrator:
             )
         except (ValueError, TypeError) as exc:
             raise WorkflowError("INVALID_APPROVAL") from exc
-        if approval_pre.decision == "rejected":
-            raise WorkflowError("PUBLICATION_NOT_APPROVED")
+        decision: str = approval_pre.decision
+        rejection_code: str | None = (
+            approval_pre.rejection_code if decision == "rejected" else None
+        )
 
+        # Always attest — digest, identity, proposal and bundle binding are
+        # verified before we route on the decision.
         attestation = ApprovalAttestor(self.store).run(
             approval_id,
             source_job_id,
             proposal_id,
             proposal_object_digest,
             expected_base_bundle_digest,
-            expected_decision="approved",
+            expected_decision=decision,
+            expected_rejection_code=rejection_code,
             expected_approval_object_digest=approval_object_digest,
         )
+        if attestation.decision == "rejected":
+            raise WorkflowError("PUBLICATION_NOT_APPROVED")
+
         try:
             proposal = self.store.get(f"v1/proposals/{proposal_id}.json")
             if proposal is None:
