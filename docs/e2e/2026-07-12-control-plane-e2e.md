@@ -19,3 +19,12 @@
 - Review digest: `sha256:d408dd8ea74f2d3623ce9d85d65a806ba7ef14b8a5dca26b420ea0e4020a9395`
 
 This synthetic check used no private medical content or complete transcript.
+
+## Publication Plan baseline
+
+- Workflow: `29202779036` (succeeded, reused=false)
+- publication_plan_id: `publication_plan_f292a00d10d8ea0fc750577cf1823fe3`
+- publication_plan_object_digest: `sha256:964db58e3792844695c22f4c45b0bd04eb4a5695e0923e1f68d5d688a8413071`
+- capture_id: `capture_a0a71c75e894b2c358e9bb62b242b6ee`
+- capture_object_digest: `sha256:a0a71c75e894b2c358e9bb62b242b6eef279f75b03b6c82b993a0dacd30e446e`
+- markdown_digest: `sha256:e458a4bd6e260e1ad3b53227e9b341ef1cb27cb219054d724133d4f8a95d75ba`

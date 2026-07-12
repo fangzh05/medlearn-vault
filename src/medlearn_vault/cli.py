@@ -352,6 +352,49 @@ def workflow_inspect_proposal(source_job_id: str) -> None:
     )
 
 
+@workflow_app.command("publish-vault")
+def workflow_publish_vault(
+    publication_plan_id: str,
+    publication_plan_object_digest: str,
+    source_job_id: str,
+) -> None:
+    """Publish exact planned artifact bytes to medlearn-vault (create-only)."""
+    from medlearn_vault.vault_writer import (
+        S3VaultObjectStore,
+        VaultPublicationWriter,
+    )
+
+    try:
+        control_store = S3ReadOnlyObjectStore(
+            os.environ.get("CONTROL_R2_ENDPOINT", ""),
+            os.environ.get("CONTROL_R2_ACCESS_KEY_ID", ""),
+            os.environ.get("CONTROL_R2_SECRET_ACCESS_KEY", ""),
+        )
+        vault_store = S3VaultObjectStore(
+            os.environ.get("VAULT_R2_ENDPOINT", ""),
+            os.environ.get("VAULT_R2_ACCESS_KEY_ID", ""),
+            os.environ.get("VAULT_R2_SECRET_ACCESS_KEY", ""),
+        )
+        result = VaultPublicationWriter(
+            control_store, vault_store
+        ).run(
+            publication_plan_id,
+            publication_plan_object_digest,
+            source_job_id,
+        )
+    except WorkflowError as exc:
+        typer.echo(f"error_code={exc.code}", err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(
+        f"status=published "
+        f"publication_plan_id={result.publication_plan_id} "
+        f"publication_plan_object_digest={result.publication_plan_object_digest} "
+        f"capture_id={result.capture_id} "
+        f"created_count={len(result.created_paths)} "
+        f"reused_count={len(result.reused_paths)}"
+    )
+
+
 def _safe_error(code: str, field: str, message: str) -> None:
     typer.echo(f"{code}: {field}: {message}", err=True)
 

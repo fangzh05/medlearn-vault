@@ -21,6 +21,18 @@ proposal ID confirmation before its credential-bearing step runs.
 confirmation before exposing the same control-only credentials, then creates or verifies only the
 immutable plan under `medlearn-control`. It has no Vault credential, bucket, or write.
 
+`medlearn-publish-vault.yml` runs only from `main` and requires separate Vault-scoped credentials
+configured as additional Actions secrets:
+
+- `VAULT_R2_ENDPOINT`
+- `VAULT_R2_ACCESS_KEY_ID`
+- `VAULT_R2_SECRET_ACCESS_KEY`
+
+These credentials must be scoped only to the fixed `medlearn-vault` bucket and must not be shared
+with any other workflow or step. The workflow validates an exact `publication_plan_id` confirmation
+before exposing `CONTROL_R2_*` (read-only) and `VAULT_R2_*` (create-only) in the final step only.
+No single job-level environment variable holds both credential sets.
+
 For the permanent synthetic intake workflow, configure Actions secret `MEDLEARN_INGEST_TOKEN` to
 the same value held by the Worker and set repository variable `MEDLEARN_INGEST_URL` to the fixed
 HTTPS Worker endpoint ending in `/v1/captures`. Neither value is a workflow-dispatch input.
