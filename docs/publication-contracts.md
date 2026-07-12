@@ -20,15 +20,16 @@ An identical rerun reads and validates the exact canonical winner without rewrit
 or different bytes at the same key return `PUBLICATION_PLAN_CONFLICT`. No generated time, host,
 workflow-run, source-job, environment, or filesystem values appear in the plan.
 
-The later writer must freshly revalidate the Approval and plan digest, then commit the planned bytes
-without recomputing or altering them.
+The later writer must freshly revalidate the Approval and plan digest, then write the exact planned
+bytes without regenerating, re-rendering, or re-materializing artifact content.
 
 ## Vault writer contract
 
 `VaultPublicationWriter` (0.10.0) reads a verified `VaultPublicationPlan` from `medlearn-control`,
 re-attests provenance through `ApprovalAttestor`, then writes the exact planned artifact bytes to
-`medlearn-vault` R2 using create-only semantics. It never re-renders, re-materializes, or recomputes
-anything — only the byte sequences already fixed in the Plan.
+`medlearn-vault` R2 using create-only semantics. It never regenerates, re-renders, or
+re-materializes artifact content; it only verifies identities and digests before writing the exact
+planned bytes.
 
 ### Validation order
 
@@ -60,6 +61,7 @@ anything — only the byte sequences already fixed in the Plan.
 - `PUBLICATION_PLAN_PROVENANCE_MISMATCH`
 - `VAULT_ARTIFACT_CONFLICT`
 - `VAULT_STORE_FAILURE`
+- `CONTROL_STORE_FAILURE`
 
 ### Store boundary
 

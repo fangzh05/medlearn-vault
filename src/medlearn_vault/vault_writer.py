@@ -1,9 +1,9 @@
 """Immutable, create-only medlearn-vault writer.
 
 This module consumes a verified VaultPublicationPlan and writes its exact
-planned bytes to the medlearn-vault R2 bucket.  It never re-renders,
-re-materializes, or recomputes anything — only the byte sequences already
-fixed in the Plan are written.
+planned bytes to the medlearn-vault R2 bucket. It never regenerates,
+re-renders, or re-materializes artifact content; it only verifies identities
+and digests before writing the exact planned bytes.
 """
 
 from __future__ import annotations
@@ -140,19 +140,6 @@ class VaultPublicationResult(DomainModel):
     reused_paths: tuple[str, ...] = ()
 
 
-_VAULT_PUBLICATION_INPUT_ERROR_CODES = frozenset(
-    {
-        "INVALID_VAULT_PUBLICATION_INPUT",
-        "PUBLICATION_PLAN_NOT_FOUND",
-        "INVALID_PUBLICATION_PLAN",
-        "PUBLICATION_PLAN_OBJECT_DIGEST_MISMATCH",
-        "PUBLICATION_PLAN_PROVENANCE_MISMATCH",
-        "VAULT_ARTIFACT_CONFLICT",
-        "VAULT_STORE_FAILURE",
-    }
-)
-
-
 def _sha256(data: bytes) -> str:
     return "sha256:" + hashlib.sha256(data).hexdigest()
 
@@ -192,7 +179,7 @@ class VaultPublicationWriter:
         except WorkflowError:
             raise
         except Exception as exc:
-            raise WorkflowError("VAULT_STORE_FAILURE") from exc
+            raise WorkflowError("CONTROL_STORE_FAILURE") from exc
         if plan_stored is None:
             raise WorkflowError("PUBLICATION_PLAN_NOT_FOUND")
 
@@ -230,7 +217,7 @@ class VaultPublicationWriter:
         except WorkflowError:
             raise
         except Exception as exc:
-            raise WorkflowError("VAULT_STORE_FAILURE") from exc
+            raise WorkflowError("CONTROL_STORE_FAILURE") from exc
 
         # Cross-check attestation result against plan fields
         if (

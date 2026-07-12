@@ -8,12 +8,16 @@ from test_workflow import NOW, ROOT, MemoryStore, seed_proposal
 
 from medlearn_vault.publication import (
     VaultPublicationPlan,
+    canonical_publication_plan_json,
+    publication_plan_identity,
+    publication_plan_object_digest,
 )
 from medlearn_vault.vault_writer import (
     VaultPublicationWriter,
     VaultStoredObject,
 )
 from medlearn_vault.workflow import (
+    ApprovalAttestor,
     ApprovalOrchestrator,
     PublicationPlanOrchestrator,
     StoredObject,
@@ -362,19 +366,26 @@ def test_plan_tampered_field_invalidates_identity() -> None:
 
 
 def test_plan_id_key_mismatch() -> None:
-    """Plan publication_plan_id differs from requested ID → not found
-    at that key."""
+    """A valid plan body at a different valid key is rejected before writes."""
     store = MemoryStore()
     vault = MemoryVaultStore()
     plan, plan_body, _ = _build_plan(store)
     plan_digest = _sha256(plan_body)
+    different_plan_id = "publication_plan_" + "0" * 32
+    assert different_plan_id != plan.publication_plan_id
+    store.objects[
+        f"v1/publication-plans/{different_plan_id}.json"
+    ] = StoredObject(body=plan_body, etag="wrong-key")
     writer = VaultPublicationWriter(store, vault)
-    with pytest.raises(WorkflowError, match="PUBLICATION_PLAN_NOT_FOUND"):
+    with pytest.raises(WorkflowError) as captured:
         writer.run(
-            "publication_plan_11111111111111111111111111111111",
+            different_plan_id,
             plan_digest,
             "job-approval-source",
         )
+    assert captured.value.code == "INVALID_PUBLICATION_PLAN"
+    assert vault.objects == {}
+    assert vault.creates == []
 
 
 def test_artifact_tampered_in_stored_plan_rejected() -> None:
@@ -423,6 +434,60 @@ def test_attestation_failure_zero_vault_writes() -> None:
     assert len(vault.objects) == 0
 
 
+def test_provenance_review_digest_mismatch_zero_vault_writes() -> None:
+    """A self-valid plan with a false review digest fails only at provenance cross-check."""
+    store = MemoryStore()
+    vault = MemoryVaultStore()
+    plan, _, _ = _build_plan(store)
+    mismatched_review_digest = "sha256:" + "0" * 64
+    plan_data = plan.model_dump(mode="json")
+    plan_data["review_digest"] = mismatched_review_digest
+    plan_data["publication_plan_id"] = publication_plan_identity(
+        plan.approval_id,
+        plan.approval_object_digest,
+        plan.proposal_id,
+        plan.proposal_object_digest,
+        plan.base_bundle_digest,
+        mismatched_review_digest,
+    )
+    mismatched_plan = VaultPublicationPlan.model_validate(plan_data)
+    mismatched_body = canonical_publication_plan_json(mismatched_plan)
+    assert (
+        canonical_publication_plan_json(
+            VaultPublicationPlan.model_validate_json(mismatched_body)
+        )
+        == mismatched_body
+    )
+    mismatched_plan_digest = publication_plan_object_digest(mismatched_plan)
+    assert _sha256(mismatched_body) == mismatched_plan_digest
+    store.objects[
+        f"v1/publication-plans/{mismatched_plan.publication_plan_id}.json"
+    ] = StoredObject(body=mismatched_body, etag="mismatched-review")
+
+    fresh_attestation = ApprovalAttestor(store).run(
+        mismatched_plan.approval_id,
+        "job-approval-source",
+        mismatched_plan.proposal_id,
+        mismatched_plan.proposal_object_digest,
+        mismatched_plan.base_bundle_digest,
+        expected_decision="approved",
+        expected_rejection_code=None,
+        expected_approval_object_digest=mismatched_plan.approval_object_digest,
+    )
+    assert fresh_attestation.review_digest != mismatched_plan.review_digest
+
+    writer = VaultPublicationWriter(store, vault)
+    with pytest.raises(WorkflowError) as captured:
+        writer.run(
+            mismatched_plan.publication_plan_id,
+            mismatched_plan_digest,
+            "job-approval-source",
+        )
+    assert captured.value.code == "PUBLICATION_PLAN_PROVENANCE_MISMATCH"
+    assert vault.objects == {}
+    assert vault.creates == []
+
+
 # ── store failure ────────────────────────────────────────────────────
 
 
@@ -457,6 +522,63 @@ def test_vault_get_failure() -> None:
         writer.run(
             plan.publication_plan_id, plan_digest, "job-approval-source"
         )
+
+
+def test_control_store_get_unexpected_failure_zero_vault_writes() -> None:
+    plan_id = "publication_plan_" + "0" * 32
+    plan_key = f"v1/publication-plans/{plan_id}.json"
+
+    class BrokenControlStore:
+        def __init__(self) -> None:
+            self.requested_keys: list[str] = []
+
+        def get(self, key: str) -> StoredObject | None:
+            self.requested_keys.append(key)
+            assert key == plan_key
+            raise RuntimeError("control storage unavailable")
+
+    control = BrokenControlStore()
+    vault = MemoryVaultStore()
+    writer = VaultPublicationWriter(control, vault)
+    with pytest.raises(WorkflowError) as captured:
+        writer.run(plan_id, "sha256:" + "0" * 64, "job-approval-source")
+    assert captured.value.code == "CONTROL_STORE_FAILURE"
+    assert captured.value.code != "VAULT_STORE_FAILURE"
+    assert control.requested_keys == [plan_key]
+    assert vault.objects == {}
+    assert vault.creates == []
+
+
+def test_second_artifact_create_failure_recovers_without_overwrite() -> None:
+    store = MemoryStore()
+    vault = MemoryVaultStore()
+    plan, plan_body, _ = _build_plan(store)
+    plan_digest = _sha256(plan_body)
+    json_artifact, markdown_artifact = plan.artifacts
+    vault._fail_create = markdown_artifact.path
+    writer = VaultPublicationWriter(store, vault)
+
+    with pytest.raises(WorkflowError) as captured:
+        writer.run(
+            plan.publication_plan_id, plan_digest, "job-approval-source"
+        )
+    assert captured.value.code == "VAULT_STORE_FAILURE"
+    assert set(vault.objects) == {json_artifact.path}
+    assert vault.objects[json_artifact.path].body == json_artifact.content_utf8.encode("utf-8")
+    assert vault.objects[json_artifact.path].content_type == json_artifact.media_type
+    assert markdown_artifact.path not in vault.objects
+    json_etag = vault.objects[json_artifact.path].etag
+
+    vault._fail_create = None
+    recovered = writer.run(
+        plan.publication_plan_id, plan_digest, "job-approval-source"
+    )
+    assert recovered.reused_paths == (json_artifact.path,)
+    assert recovered.created_paths == (markdown_artifact.path,)
+    assert vault.objects[json_artifact.path].etag == json_etag
+    for artifact in plan.artifacts:
+        assert vault.objects[artifact.path].body == artifact.content_utf8.encode("utf-8")
+        assert vault.objects[artifact.path].content_type == artifact.media_type
 
 
 # ── no side-effects on control objects ───────────────────────────────
