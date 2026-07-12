@@ -1,0 +1,100 @@
+{
+  "additionalProperties": false,
+  "description": "Immutable control-plane decision bound to one exact proposal and base.",
+  "properties": {
+    "approval_version": {
+      "const": "0.1.0",
+      "default": "0.1.0",
+      "title": "Approval Version",
+      "type": "string"
+    },
+    "approval_id": {
+      "pattern": "^approval_[a-f0-9]{32}$",
+      "title": "Approval Id",
+      "type": "string"
+    },
+    "proposal_id": {
+      "pattern": "^proposal_[a-f0-9]{32}$",
+      "title": "Proposal Id",
+      "type": "string"
+    },
+    "proposal_digest": {
+      "pattern": "^sha256:[a-f0-9]{64}$",
+      "title": "Proposal Digest",
+      "type": "string"
+    },
+    "expected_base_bundle_digest": {
+      "pattern": "^sha256:[a-f0-9]{64}$",
+      "title": "Expected Base Bundle Digest",
+      "type": "string"
+    },
+    "decision": {
+      "enum": [
+        "approved",
+        "rejected"
+      ],
+      "title": "Decision",
+      "type": "string"
+    },
+    "decided_at": {
+      "format": "date-time",
+      "title": "Decided At",
+      "type": "string"
+    },
+    "approved_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Approved At"
+    },
+    "source_job_id": {
+      "anyOf": [
+        {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Source Job Id"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "rejection_code": {
+      "anyOf": [
+        {
+          "pattern": "^[A-Z][A-Z0-9_]{0,127}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Rejection Code"
+    }
+  },
+  "required": [
+    "approval_id",
+    "proposal_id",
+    "proposal_digest",
+    "expected_base_bundle_digest",
+    "decision",
+    "decided_at",
+    "created_at"
+  ],
+  "title": "ProposalApprovalRecord",
+  "type": "object"
+}

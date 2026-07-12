@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal, Protocol
@@ -18,6 +19,7 @@ from medlearn_vault.capture import (
     CaptureDraft,
     CaptureProposal,
     build_capture_proposal,
+    capture_proposal_digest,
     extract_capture_draft,
     render_capture_proposal_markdown,
 )
@@ -28,6 +30,8 @@ LEASE_DURATION = timedelta(minutes=10)
 TERMINAL_JOB_RETRIES = 3
 JOB_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
 DIGEST_PATTERN = r"^sha256:[a-f0-9]{64}$"
+PROPOSAL_ID_PATTERN = r"^proposal_[a-f0-9]{32}$"
+APPROVAL_ID_PATTERN = r"^approval_[a-f0-9]{32}$"
 INTAKE_KEY_PATTERN = r"^v1/intakes/sha256/[a-f0-9]{64}\.json$"
 BUNDLE_FILES = (
     "sources.json",
@@ -181,6 +185,49 @@ class ProposalExecutionRecord(DomainModel):
         return self
 
 
+ApprovalDecision = Literal["approved", "rejected"]
+
+
+class ProposalApprovalRecord(DomainModel):
+    """Immutable control-plane decision bound to one exact proposal and base."""
+
+    approval_version: Literal["0.1.0"] = "0.1.0"
+    approval_id: str = Field(pattern=APPROVAL_ID_PATTERN)
+    proposal_id: str = Field(pattern=PROPOSAL_ID_PATTERN)
+    proposal_digest: str = Field(pattern=DIGEST_PATTERN)
+    expected_base_bundle_digest: str = Field(pattern=DIGEST_PATTERN)
+    decision: ApprovalDecision
+    decided_at: AwareDatetime
+    approved_at: AwareDatetime | None = None
+    source_job_id: str | None = Field(default=None, pattern=JOB_ID_PATTERN)
+    created_at: AwareDatetime
+    rejection_code: str | None = Field(default=None, pattern=r"^[A-Z][A-Z0-9_]{0,127}$")
+
+    @model_validator(mode="after")
+    def validate_decision_fields(self) -> ProposalApprovalRecord:
+        if self.decision == "approved":
+            if self.approved_at != self.decided_at or self.rejection_code is not None:
+                raise ValueError("approved decisions require matching approved_at and no rejection")
+        elif self.approved_at is not None:
+            raise ValueError("rejected decisions cannot have approved_at")
+        if self.created_at != self.decided_at:
+            raise ValueError("created_at must equal decided_at")
+        if self.approval_id != approval_identity(
+            self.proposal_id,
+            self.proposal_digest,
+            self.expected_base_bundle_digest,
+            self.decision,
+        ):
+            raise ValueError("approval_id does not match bound decision")
+        return self
+
+
+class ApprovalResult(DomainModel):
+    approval_id: str = Field(pattern=APPROVAL_ID_PATTERN)
+    decision: ApprovalDecision
+    reused: bool = False
+
+
 class OrchestrationResult(DomainModel):
     status: Literal["succeeded", "blocked", "lease_held"]
     proposal_id: str | None = None
@@ -195,6 +242,134 @@ def _json_bytes(value: DomainModel) -> bytes:
 
 def _digest(value: bytes) -> str:
     return "sha256:" + hashlib.sha256(value).hexdigest()
+
+
+def _canonical_json_bytes(value: DomainModel | dict[str, Any] | tuple[Any, ...]) -> bytes:
+    if isinstance(value, DomainModel):
+        value = value.model_dump(mode="json")
+    return json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+
+
+def approval_identity(
+    proposal_id: str,
+    proposal_digest: str,
+    expected_base_bundle_digest: str,
+    decision: ApprovalDecision,
+) -> str:
+    bound = {
+        "decision": decision,
+        "expected_base_bundle_digest": expected_base_bundle_digest,
+        "proposal_digest": proposal_digest,
+        "proposal_id": proposal_id,
+    }
+    return "approval_" + hashlib.sha256(_canonical_json_bytes(bound)).hexdigest()[:32]
+
+
+def canonical_approval_json(record: ProposalApprovalRecord) -> bytes:
+    return _canonical_json_bytes(record) + b"\n"
+
+
+class ApprovalOrchestrator:
+    """Validate a stored proposal and create one immutable approval decision."""
+
+    def __init__(self, store: ObjectStore) -> None:
+        self.store = store
+
+    def run(
+        self,
+        proposal_id: str,
+        proposal_digest: str,
+        expected_base_bundle_digest: str,
+        *,
+        decision: ApprovalDecision = "approved",
+        source_job_id: str | None = None,
+        rejection_code: str | None = None,
+        now: datetime | None = None,
+    ) -> ApprovalResult:
+        decided_at = now or datetime.now(UTC)
+        valid_input = (
+            re.fullmatch(PROPOSAL_ID_PATTERN, proposal_id) is not None
+            and re.fullmatch(DIGEST_PATTERN, proposal_digest) is not None
+            and re.fullmatch(DIGEST_PATTERN, expected_base_bundle_digest) is not None
+            and decision in {"approved", "rejected"}
+            and (source_job_id is None or re.fullmatch(JOB_ID_PATTERN, source_job_id) is not None)
+            and (
+                rejection_code is None
+                or re.fullmatch(r"^[A-Z][A-Z0-9_]{0,127}$", rejection_code) is not None
+            )
+            and not (decision == "approved" and rejection_code is not None)
+        )
+        if decided_at.tzinfo is None or not valid_input:
+            raise WorkflowError("INVALID_APPROVAL_INPUT")
+        approval_id = approval_identity(
+            proposal_id, proposal_digest, expected_base_bundle_digest, decision
+        )
+        try:
+            proposal_stored = self.store.get(f"v1/proposals/{proposal_id}.json")
+        except WorkflowError:
+            raise
+        except Exception as exc:
+            raise WorkflowError("CONTROL_STORE_FAILURE") from exc
+        if proposal_stored is None:
+            raise WorkflowError("PROPOSAL_NOT_FOUND")
+        if _digest(proposal_stored.body) != proposal_digest:
+            raise WorkflowError("PROPOSAL_DIGEST_MISMATCH")
+        try:
+            proposal = CaptureProposal.model_validate_json(proposal_stored.body)
+        except (ValueError, TypeError) as exc:
+            raise WorkflowError("INVALID_PROPOSAL") from exc
+        if proposal.proposal_id != proposal_id:
+            raise WorkflowError("INVALID_PROPOSAL")
+        if capture_proposal_digest(proposal) != proposal.proposal_digest:
+            raise WorkflowError("INVALID_PROPOSAL")
+        if proposal.base_bundle_digest != expected_base_bundle_digest:
+            raise WorkflowError("BASE_BUNDLE_DIGEST_MISMATCH")
+        if proposal.status == "blocked":
+            raise WorkflowError("PROPOSAL_BLOCKED")
+
+        record = ProposalApprovalRecord(
+            approval_id=approval_id,
+            proposal_id=proposal_id,
+            proposal_digest=proposal_digest,
+            expected_base_bundle_digest=expected_base_bundle_digest,
+            decision=decision,
+            decided_at=decided_at,
+            approved_at=decided_at if decision == "approved" else None,
+            source_job_id=source_job_id,
+            created_at=decided_at,
+            rejection_code=rejection_code if decision == "rejected" else None,
+        )
+        approval_key = f"v1/approvals/{approval_id}.json"
+        body = canonical_approval_json(record)
+        try:
+            if self.store.create(approval_key, body, content_type="application/json"):
+                return ApprovalResult(approval_id=approval_id, decision=decision)
+            winner = self.store.get(approval_key)
+        except WorkflowError:
+            raise
+        except Exception as exc:
+            raise WorkflowError("CONTROL_STORE_FAILURE") from exc
+        if winner is None:
+            raise WorkflowError("CONTROL_STORE_FAILURE")
+        try:
+            existing = ProposalApprovalRecord.model_validate_json(winner.body)
+        except (ValueError, TypeError) as exc:
+            raise WorkflowError("APPROVAL_CONFLICT") from exc
+        same_request = (
+            existing.approval_id == approval_id
+            and existing.proposal_id == proposal_id
+            and existing.proposal_digest == proposal_digest
+            and existing.expected_base_bundle_digest == expected_base_bundle_digest
+            and existing.decision == decision
+            and existing.source_job_id == source_job_id
+            and existing.rejection_code == (rejection_code if decision == "rejected" else None)
+            and canonical_approval_json(existing) == winner.body
+        )
+        if not same_request:
+            raise WorkflowError("APPROVAL_CONFLICT")
+        return ApprovalResult(approval_id=approval_id, decision=decision, reused=True)
 
 
 def resolve_bundle_path(repository_root: Path, configured_path: str) -> Path:

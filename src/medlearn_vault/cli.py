@@ -37,7 +37,9 @@ from medlearn_vault.preview import (
     render_markdown,
 )
 from medlearn_vault.workflow import (
+    ApprovalOrchestrator,
     JobRecord,
+    ProposalApprovalRecord,
     ProposalExecutionRecord,
     ProposalOrchestrator,
     S3ObjectStore,
@@ -75,6 +77,7 @@ WORKFLOW_SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "intake_envelope": IntakeEnvelope,
 }
 CONTROL_SCHEMA_MODELS: dict[str, type[BaseModel]] = {
+    "proposal_approval": ProposalApprovalRecord,
     "job_record": JobRecord,
     "proposal_execution": ProposalExecutionRecord,
 }
@@ -194,6 +197,43 @@ def workflow_propose(job_id: str, intake_object_key: str, intake_digest: str) ->
         raise typer.Exit(1) from exc
     typer.echo(
         f"status={result.status} proposal_id={result.proposal_id or 'none'} "
+        f"reused={str(result.reused).lower()}"
+    )
+
+
+@workflow_app.command("approve")
+def workflow_approve(
+    proposal_id: str,
+    proposal_digest: str,
+    expected_base_bundle_digest: str,
+    decision: Annotated[str, typer.Option("--decision")] = "approved",
+    source_job_id: Annotated[str | None, typer.Option("--source-job-id")] = None,
+    rejection_code: Annotated[str | None, typer.Option("--rejection-code")] = None,
+) -> None:
+    try:
+        if decision not in {"approved", "rejected"}:
+            raise WorkflowError("INVALID_APPROVAL_INPUT")
+        store = S3ObjectStore(
+            os.environ.get("CONTROL_R2_ENDPOINT", ""),
+            os.environ.get("CONTROL_R2_ACCESS_KEY_ID", ""),
+            os.environ.get("CONTROL_R2_SECRET_ACCESS_KEY", ""),
+        )
+        result = ApprovalOrchestrator(store).run(
+            proposal_id,
+            proposal_digest,
+            expected_base_bundle_digest,
+            decision=decision,  # type: ignore[arg-type]
+            source_job_id=source_job_id,
+            rejection_code=rejection_code,
+        )
+    except WorkflowError as exc:
+        typer.echo(f"error_code={exc.code}", err=True)
+        raise typer.Exit(1) from exc
+    except ValidationError as exc:
+        typer.echo("error_code=INVALID_APPROVAL_INPUT", err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(
+        f"decision={result.decision} approval_id={result.approval_id} "
         f"reused={str(result.reused).lower()}"
     )
 

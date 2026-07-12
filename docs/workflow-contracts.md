@@ -38,6 +38,27 @@ never creates or rewrites Proposal or Review objects.
 JobRecord remains 0.2.0. `succeeded` and `blocked` require both `proposal_id` and
 `workflow_run_id`; `failed` requires `error_code`; terminal records cannot retain dispatch leases.
 
+`ProposalApprovalRecord` 0.1.0 is the immutable boundary between proposal production and any future
+commit workflow. Its deterministic `approval_id` binds exactly the proposal ID, exact stored
+Proposal byte digest, expected base bundle digest, and `approved` or `rejected` decision. Records
+use canonical key-sorted compact UTF-8 JSON and are stored only at
+`v1/approvals/<approval_id>.json` with create-only semantics. An identical request reuses the
+canonical winner; malformed, noncanonical, or differently attributed bytes at that identity are an
+`APPROVAL_CONFLICT`.
+
+Approval loads only `v1/proposals/<proposal_id>.json` from the fixed `medlearn-control` bucket. It
+checks the exact stored byte digest, Proposal contract and internal digest, Proposal ID, ready
+status, and base bundle digest before writing. It never reads or mutates a ContractBundle, Proposal,
+Review, `medlearn-vault`, Obsidian note, or persistent `LearningCapture`. Inputs cannot select a
+bucket, endpoint, repository ref, workflow, or object key.
+
+```bash
+medlearn workflow approve \
+  proposal_0123456789abcdef0123456789abcdef \
+  sha256:<exact-proposal-object-digest> \
+  sha256:<expected-base-bundle-digest>
+```
+
 ## Production workflow operations
 
 The secret-bearing workflow installs only `requirements/workflow.txt`, then installs this package
