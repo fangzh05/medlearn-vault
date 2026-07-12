@@ -1,0 +1,131 @@
+{
+  "concept": {
+    "schema_version": "1.0.0",
+    "concept_id": "disease_gerd",
+    "canonical_name": "胃食管反流病",
+    "preferred_english": "gastroesophageal reflux disease",
+    "concept_type": "disease",
+    "aliases": [
+      {
+        "text": "GERD",
+        "normalized": "gerd",
+        "language": "en",
+        "alias_type": "abbreviation",
+        "source_id": null
+      },
+      {
+        "text": "反流病",
+        "normalized": "反流病",
+        "language": "zh-CN",
+        "alias_type": "synonym",
+        "source_id": null
+      }
+    ],
+    "relations": [
+      {
+        "relation_id": "rel_1f3a4d58b123",
+        "relation_type": "complicated_by",
+        "target_concept_id": "pathology_barrett_esophagus",
+        "citations": [
+          "src_textbook_internal_medicine:p321"
+        ],
+        "confidence": 1.0
+      },
+      {
+        "relation_id": "rel_2a3b4c5d6e78",
+        "relation_type": "treated_by",
+        "target_concept_id": "drug_class_ppi",
+        "citations": [
+          "src_guideline_gerd_2025:recommendation_12"
+        ],
+        "confidence": 1.0
+      }
+    ],
+    "discipline_lenses": [
+      {
+        "lens_id": "lens_gerd_internal",
+        "discipline_id": "internal_medicine",
+        "course_id": "internal_medicine_2026",
+        "focus_questions": [
+          "发病机制是什么？",
+          "如何诊断？",
+          "如何进行药物治疗？"
+        ],
+        "chapter_refs": [
+          "chapter_internal_gerd"
+        ],
+        "knowledge_unit_refs": [
+          "ku_111111111111"
+        ],
+        "exam_point_refs": [
+          "exam_internal_gerd_01"
+        ],
+        "discipline_summary": "侧重症状、诊断路径、内科治疗和并发症。"
+      },
+      {
+        "lens_id": "lens_gerd_surgery",
+        "discipline_id": "surgery",
+        "course_id": "surgery_2026",
+        "focus_questions": [
+          "何时需要抗反流手术？",
+          "术式和并发症是什么？"
+        ],
+        "chapter_refs": [
+          "chapter_surgery_antireflux"
+        ],
+        "knowledge_unit_refs": [
+          "ku_222222222222"
+        ],
+        "exam_point_refs": [
+          "exam_surgery_gerd_01"
+        ],
+        "discipline_summary": "侧重手术适应证、术式选择和术后并发症。"
+      },
+      {
+        "lens_id": "lens_gerd_pathology",
+        "discipline_id": "pathology",
+        "course_id": "pathology_2026",
+        "focus_questions": [
+          "反流性食管炎有哪些病理改变？",
+          "Barrett 食管如何发生？"
+        ],
+        "chapter_refs": [
+          "chapter_pathology_esophagus"
+        ],
+        "knowledge_unit_refs": [
+          "ku_333333333333"
+        ],
+        "exam_point_refs": [
+          "exam_pathology_barrett_01"
+        ],
+        "discipline_summary": "侧重组织学改变、化生和癌前病变。"
+      }
+    ],
+    "status": "active",
+    "merged_into": null
+  },
+  "shared_concept_references": [
+    {
+      "chapter_id": "chapter_internal_gerd",
+      "discipline_id": "internal_medicine",
+      "primary_concept_ids": [
+        "disease_gerd"
+      ]
+    },
+    {
+      "chapter_id": "chapter_surgery_antireflux",
+      "discipline_id": "surgery",
+      "primary_concept_ids": [
+        "disease_gerd"
+      ]
+    },
+    {
+      "chapter_id": "chapter_pathology_esophagus",
+      "discipline_id": "pathology",
+      "primary_concept_ids": [
+        "disease_gerd",
+        "pathology_barrett_esophagus"
+      ]
+    }
+  ]
+}

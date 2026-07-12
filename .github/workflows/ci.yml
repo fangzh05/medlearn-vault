@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:  # allow manual trigger
+
+jobs:
+  # ── Schema & Example Validation ──────────────────────────────
+  validate-schemas:
+    name: Validate JSON Schemas & Examples
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Validate schemas and examples
+        run: python scripts/validate_schemas.py
+
+  # ── Markdown Lint (info only) ────────────────────────────────
+  markdown-lint:
+    name: Lint Markdown
+    runs-on: ubuntu-latest
+    continue-on-error: true  # non-blocking for now
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: DavidAnson/markdownlint-cli2-action@v19
+        with:
+          globs: "**/*.md"
+          continue-on-error: true
+
+  # ── Python Tests (placeholder — runs when tests/ exists) ─────
+  python-tests:
+    name: Python Tests
+    runs-on: ubuntu-latest
+    needs: validate-schemas
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements-dev.txt
+          pip install -e . 2>/dev/null || echo "(no package install needed)"
+
+      - name: Run tests
+        run: |
+          if [ -d "tests" ] && [ -n "$(ls -A tests/*.py 2>/dev/null)" ]; then
+            python -m pytest tests/ -v
+          else
+            echo "No tests/ directory yet — skipping. This job is ready for P0 tests."
+          fi

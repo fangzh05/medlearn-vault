@@ -1,0 +1,238 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://medlearn.local/schemas/concept_entity.schema.json",
+  "title": "ConceptEntity",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "concept_id",
+    "canonical_name",
+    "concept_type",
+    "aliases",
+    "relations",
+    "discipline_lenses",
+    "status"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "concept_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{2,127}$"
+    },
+    "canonical_name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "preferred_english": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "concept_type": {
+      "enum": [
+        "disease",
+        "syndrome",
+        "symptom",
+        "sign",
+        "anatomy",
+        "physiology",
+        "pathology",
+        "mechanism",
+        "investigation",
+        "imaging_sign",
+        "drug",
+        "procedure",
+        "complication",
+        "score",
+        "guideline",
+        "organism",
+        "gene",
+        "biomarker",
+        "other"
+      ]
+    },
+    "aliases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "text",
+          "language",
+          "alias_type"
+        ],
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1
+          },
+          "normalized": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "language": {
+            "type": "string"
+          },
+          "alias_type": {
+            "enum": [
+              "abbreviation",
+              "translation",
+              "synonym",
+              "legacy",
+              "trade_name",
+              "other"
+            ]
+          },
+          "source_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      }
+    },
+    "relations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "relation_id",
+          "relation_type",
+          "target_concept_id",
+          "citations"
+        ],
+        "properties": {
+          "relation_id": {
+            "type": "string",
+            "pattern": "^rel_[a-f0-9]{12,64}$"
+          },
+          "relation_type": {
+            "enum": [
+              "is_a",
+              "part_of",
+              "causes",
+              "risk_factor_for",
+              "leads_to",
+              "manifests_as",
+              "diagnosed_by",
+              "differentiated_from",
+              "treated_by",
+              "contraindicates",
+              "complicated_by",
+              "associated_with",
+              "progresses_to",
+              "measured_by",
+              "located_in",
+              "acts_on",
+              "exam_confused_with",
+              "discipline_view_of",
+              "taught_in",
+              "examined_in",
+              "prerequisite_for",
+              "clinically_connects_to",
+              "pathology_basis_of",
+              "pharmacologic_target_of",
+              "imaging_correlate_of",
+              "surgical_management_of"
+            ]
+          },
+          "target_concept_id": {
+            "type": "string"
+          },
+          "citations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          }
+        }
+      }
+    },
+    "discipline_lenses": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "lens_id",
+          "discipline_id",
+          "focus_questions",
+          "chapter_refs",
+          "knowledge_unit_refs",
+          "exam_point_refs"
+        ],
+        "properties": {
+          "lens_id": {
+            "type": "string"
+          },
+          "discipline_id": {
+            "type": "string"
+          },
+          "course_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "focus_questions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "chapter_refs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "knowledge_unit_refs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "exam_point_refs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "discipline_summary": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      }
+    },
+    "status": {
+      "enum": [
+        "active",
+        "deprecated",
+        "merged",
+        "split_pending"
+      ]
+    },
+    "merged_into": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  }
+}

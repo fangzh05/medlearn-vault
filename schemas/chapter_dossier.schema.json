@@ -1,0 +1,257 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://medlearn.local/schemas/chapter_dossier.schema.json",
+  "title": "ChapterDossier",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "chapter_id",
+    "course_id",
+    "discipline_id",
+    "title",
+    "topic_archetype",
+    "primary_concept_ids",
+    "learning_objectives",
+    "knowledge_units",
+    "exam_summary",
+    "quality_status"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "chapter_id": {
+      "type": "string"
+    },
+    "course_id": {
+      "type": "string"
+    },
+    "discipline_id": {
+      "type": "string"
+    },
+    "title": {
+      "type": "string"
+    },
+    "topic_archetype": {
+      "enum": [
+        "disease",
+        "procedure",
+        "drug",
+        "investigation",
+        "mechanism",
+        "syndrome",
+        "other"
+      ]
+    },
+    "primary_concept_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1
+    },
+    "related_concept_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "learning_objectives": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "objective_id",
+          "text",
+          "mastery_level",
+          "source_refs",
+          "coverage_status"
+        ],
+        "properties": {
+          "objective_id": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "mastery_level": {
+            "enum": [
+              "know",
+              "understand",
+              "apply",
+              "reason"
+            ]
+          },
+          "source_refs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "coverage_status": {
+            "enum": [
+              "missing",
+              "partial",
+              "covered",
+              "verified"
+            ]
+          }
+        }
+      }
+    },
+    "knowledge_units": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "unit_id",
+          "unit_type",
+          "title",
+          "concept_ids",
+          "claim_ids",
+          "source_refs",
+          "content"
+        ],
+        "properties": {
+          "unit_id": {
+            "type": "string",
+            "pattern": "^ku_[a-f0-9]{12,64}$"
+          },
+          "unit_type": {
+            "enum": [
+              "definition",
+              "etiology",
+              "risk_factor",
+              "mechanism_chain",
+              "pathology",
+              "clinical_feature",
+              "investigation",
+              "diagnosis",
+              "differential",
+              "treatment_decision",
+              "complication",
+              "case_reasoning",
+              "exam_point",
+              "memory_framework",
+              "cross_discipline_link",
+              "other"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "concept_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "claim_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "source_refs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "content": {},
+          "figure_spec_refs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "table_spec_refs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "exam_summary": {
+      "type": "object",
+      "required": [
+        "must_memorize",
+        "must_understand",
+        "case_likely",
+        "mcq_traps",
+        "awareness_only"
+      ],
+      "properties": {
+        "must_memorize": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "must_understand": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "case_likely": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "mcq_traps": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "awareness_only": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "cross_discipline_links": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "concept_id",
+          "discipline_id",
+          "chapter_ref",
+          "relationship"
+        ],
+        "properties": {
+          "concept_id": {
+            "type": "string"
+          },
+          "discipline_id": {
+            "type": "string"
+          },
+          "chapter_ref": {
+            "type": "string"
+          },
+          "relationship": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "quality_status": {
+      "enum": [
+        "draft",
+        "source_gap",
+        "conflict_review",
+        "content_review",
+        "publishable",
+        "published"
+      ]
+    }
+  }
+}
