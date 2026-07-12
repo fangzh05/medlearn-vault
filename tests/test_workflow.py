@@ -1588,17 +1588,15 @@ def test_verify_approval_workflow_yaml_is_read_only_and_argument_safe() -> None:
         "cancel-in-progress": "false",
     }
     verify_job = data["jobs"]["verify"]
+    assert verify_job["if"] == "github.ref == 'refs/heads/main'"
     assert verify_job["timeout-minutes"] == "10"
-    assert set(verify_job["env"]) == {
-        "CONTROL_R2_ENDPOINT",
-        "CONTROL_R2_ACCESS_KEY_ID",
-        "CONTROL_R2_SECRET_ACCESS_KEY",
-    }
+    assert "env" not in verify_job
     action_steps = [step for step in verify_job["steps"] if "uses" in step]
     assert action_steps
     assert all(re.fullmatch(r"[^@]+@[0-9a-f]{40}", step["uses"]) for step in action_steps)
     checkout = next(step for step in action_steps if step["uses"].startswith("actions/checkout@"))
     assert checkout["with"]["persist-credentials"] == "false"
+    assert checkout["with"]["ref"] == "main"
     install = next(
         step for step in verify_job["steps"] if "--require-hashes" in step.get("run", "")
     )
@@ -1609,6 +1607,25 @@ def test_verify_approval_workflow_yaml_is_read_only_and_argument_safe() -> None:
     run = next(
         step for step in verify_job["steps"] if step.get("name") == "Verify existing approval"
     )
+    control_secrets = {
+        "CONTROL_R2_ENDPOINT",
+        "CONTROL_R2_ACCESS_KEY_ID",
+        "CONTROL_R2_SECRET_ACCESS_KEY",
+    }
+    assert control_secrets <= set(run["env"])
+    assert set(run["env"]) == control_secrets | {
+        "MEDLEARN_APPROVAL_ID",
+        "MEDLEARN_SOURCE_JOB_ID",
+        "MEDLEARN_PROPOSAL_ID",
+        "MEDLEARN_EXPECTED_PROPOSAL_OBJECT_DIGEST",
+        "MEDLEARN_EXPECTED_BASE_BUNDLE_DIGEST",
+        "MEDLEARN_EXPECTED_DECISION",
+        "MEDLEARN_EXPECTED_REJECTION_CODE",
+        "MEDLEARN_EXPECTED_APPROVAL_OBJECT_DIGEST",
+    }
+    for step in verify_job["steps"]:
+        if step is not run:
+            assert not (control_secrets & set(step.get("env", {})))
     assert "args=(" in run["run"]
     assert 'medlearn "${args[@]}"' in run["run"]
     assert "${{ inputs." not in run["run"]
