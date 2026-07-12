@@ -1094,13 +1094,26 @@ def test_approval_workflow_yaml_is_control_only_and_argument_safe() -> None:
         "decision",
         "rejection_code",
     }
+    assert dispatch["inputs"]["decision"] == {
+        "description": "Immutable decision for this Proposal",
+        "required": "true",
+        "type": "choice",
+        "options": ["approved", "rejected"],
+        "default": "approved",
+    }
+    assert dispatch["inputs"]["rejection_code"] == {
+        "description": "Required uppercase code when decision is rejected",
+        "required": "false",
+        "type": "string",
+        "default": "",
+    }
     assert data["permissions"] == {"contents": "read"}
     assert data["concurrency"] == {
         "group": "medlearn-approve-${{ inputs.proposal_id }}",
         "cancel-in-progress": "false",
     }
     approve_job = data["jobs"]["approve"]
-    assert approve_job["timeout-minutes"] == "15"
+    assert approve_job["timeout-minutes"] == "10"
     assert set(approve_job["env"]) == {
         "CONTROL_R2_ENDPOINT",
         "CONTROL_R2_ACCESS_KEY_ID",
@@ -1126,11 +1139,34 @@ def test_approval_workflow_yaml_is_control_only_and_argument_safe() -> None:
     assert "args=(" in run_step["run"]
     assert 'medlearn "${args[@]}"' in run_step["run"]
     assert "${{ inputs." not in run_step["run"]
+    assert 'if [[ -n "$MEDLEARN_REJECTION_CODE" ]]; then' in run_step["run"]
+    assert 'args+=(--rejection-code "$MEDLEARN_REJECTION_CODE")' in run_step["run"]
     assert "actions/upload-artifact" not in text
     assert "GITHUB_STEP_SUMMARY" not in text
     assert not re.search(r"run:\s*.*\$\{\{\s*inputs\.", text)
+    assert set(re.findall(r"secrets\.([A-Z0-9_]+)", text)) == {
+        "CONTROL_R2_ENDPOINT",
+        "CONTROL_R2_ACCESS_KEY_ID",
+        "CONTROL_R2_SECRET_ACCESS_KEY",
+    }
+    assert not re.search(r"(?:MEDLEARN_VAULT|VAULT_R2|RCLONE)", text, re.IGNORECASE)
+    assert not re.search(r"(?:endpoint|bucket|object_key|repository|ref|workflow)\s*:", text)
     for forbidden in ("medlearn-vault", "obsidian", "remotely save", "d1", "vps", "git commit"):
         assert forbidden not in text.lower()
+
+
+def test_remotely_save_ignore_rule_is_path_scoped() -> None:
+    ignored = subprocess.run(
+        ["git", "check-ignore", "-q", ".obsidian/plugins/remotely-save/data.json"],
+        cwd=ROOT,
+        check=False,
+    )
+    assert ignored.returncode == 0
+    for path in ("examples/data.json", "tests/fixtures/data.json"):
+        tracked = subprocess.run(
+            ["git", "check-ignore", "-q", path], cwd=ROOT, check=False
+        )
+        assert tracked.returncode == 1
 
 
 @pytest.mark.parametrize(

@@ -20,10 +20,12 @@ on:
         required: true
         type: choice
         options: [approved, rejected]
+        default: approved
       rejection_code:
         description: Required uppercase code when decision is rejected
         required: false
         type: string
+        default: ""
 
 permissions:
   contents: read
@@ -35,7 +37,7 @@ concurrency:
 jobs:
   approve:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     env:
       CONTROL_R2_ENDPOINT: ${{ secrets.CONTROL_R2_ENDPOINT }}
       CONTROL_R2_ACCESS_KEY_ID: ${{ secrets.CONTROL_R2_ACCESS_KEY_ID }}

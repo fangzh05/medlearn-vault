@@ -20,8 +20,10 @@ objects under either prefix. Do not promote the test Vault into production.
 
 ## Remotely Save configuration
 
-Create the configuration only in Obsidian on each device. Do not commit Remotely Save `data.json`,
-access keys, or an encryption password. Store the password outside this repository. Every device
+Create the configuration only in Obsidian on each device. Only
+`**/.obsidian/plugins/remotely-save/data.json` is ignored; arbitrary `data.json` files remain
+trackable. Do not commit that Remotely Save configuration, access keys, or an encryption password.
+Store the password outside this repository. Every device
 must use identical encryption and crypt settings, bucket, endpoint, and prefix.
 
 ## Initial cross-device test
