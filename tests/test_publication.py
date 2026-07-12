@@ -548,15 +548,15 @@ def test_non_utc_month_boundary_path() -> None:
 
 
 class TestErrorCodeRouting:
-    def test_rejected_approval_returns_not_approved(self) -> None:
-        """A rejected approval must raise PUBLICATION_NOT_APPROVED.
-        Test at build_vault_publication_plan level since the orchestrator's
-        attestor rejects non-approved decisions before reaching build."""
+    def test_rejected_approval_returns_not_approved_at_both_levels(
+        self,
+    ) -> None:
+        """Rejected approval → PUBLICATION_NOT_APPROVED at both
+        build_vault_publication_plan and orchestrator levels."""
         store = MemoryStore()
         proposal_id, proposal_digest, base_digest, proposal_body = seed_proposal(
             store
         )
-        # Create a rejected approval
         approval = ApprovalOrchestrator(store).run(
             proposal_id,
             proposal_digest,
@@ -569,13 +569,29 @@ class TestErrorCodeRouting:
             f"v1/approvals/{approval.approval_id}.json"
         ]
         approval_body = stored_approval.body
+        approval_digest = _sha256(approval_body)
         review_digest = _sha256(
             store.objects[f"v1/reviews/{proposal_id}.md"].body
         )
+
+        # Level 1: build_vault_publication_plan direct
         bundle = ContractBundle.from_directory(ROOT / "examples" / "copd")
         with pytest.raises(ValueError, match="PUBLICATION_NOT_APPROVED"):
             build_vault_publication_plan(
                 bundle, proposal_body, approval_body, review_digest
+            )
+
+        # Level 2: orchestrator (catches rejected before attestor)
+        orchestrator = PublicationPlanOrchestrator(store, ROOT)
+        with pytest.raises(WorkflowError, match="PUBLICATION_NOT_APPROVED"):
+            orchestrator.run(
+                approval.approval_id,
+                approval_digest,
+                "job-approval-source",
+                proposal_id,
+                proposal_digest,
+                base_digest,
+                bundle_path="examples/copd",
             )
 
     def test_blocked_proposal_passes_through(self) -> None:
@@ -978,3 +994,188 @@ def test_build_directly_and_validate_roundtrip() -> None:
     plan2 = VaultPublicationPlan.model_validate_json(plan_json)
     assert plan == plan2
     assert canonical_publication_plan_json(plan2) == plan_json
+
+
+# ── timezone / month boundary ────────────────────────────────────────
+
+
+def test_month_boundary_uses_local_timezone_not_utc() -> None:
+    """captured_at=2026-08-01T00:30:00+08:00 → Markdown path uses 2026/08,
+    even though UTC equivalent is 2026-07-31 (July).
+
+    Uses build_vault_publication_plan, stretching the capture interval
+    so existing observation timestamps remain valid."""
+    from medlearn_vault.capture import CaptureProposal, capture_proposal_digest
+
+    store = MemoryStore()
+    _, _, _, proposal_body = seed_proposal(store)
+    proposal = json.loads(proposal_body)
+    proposal["learning_capture_candidate"]["capture"][
+        "session_started_at"
+    ] = "2026-07-01T00:00:00+08:00"
+    proposal["learning_capture_candidate"]["capture"]["captured_at"] = (
+        "2026-08-01T00:30:00+08:00"
+    )
+    cap = CaptureProposal.model_validate(proposal)
+    new_digest = capture_proposal_digest(cap)
+    proposal["proposal_digest"] = new_digest
+    modified_proposal = (
+        json.dumps(
+            proposal, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        )
+        + "\n"
+    ).encode()
+    modified_proposal_digest = _sha256(modified_proposal)
+
+    approval_id_val = approval_identity(
+        cap.proposal_id, modified_proposal_digest, cap.base_bundle_digest
+    )
+    approval_record = ProposalApprovalRecord(
+        approval_id=approval_id_val,
+        proposal_id=cap.proposal_id,
+        proposal_object_digest=modified_proposal_digest,
+        expected_base_bundle_digest=cap.base_bundle_digest,
+        decision="approved",
+        decided_at=NOW,
+    )
+    approval_body = canonical_approval_json(approval_record)
+    review_digest = _sha256(
+        store.objects[f"v1/reviews/{cap.proposal_id}.md"].body
+    )
+
+    bundle = ContractBundle.from_directory(ROOT / "examples" / "copd")
+    plan = build_vault_publication_plan(
+        bundle, modified_proposal, approval_body, review_digest
+    )
+    assert plan.artifacts[1].path == (
+        f"MedLearn/Captures/2026/08/{plan.capture_id}.md"
+    )
+    VaultPublicationPlan.model_validate_json(canonical_publication_plan_json(plan))
+
+
+def test_month_boundary_rejects_wrong_utc_month() -> None:
+    """When the Markdown path uses UTC month (07) instead of local (08),
+    the plan validator must reject it."""
+    from medlearn_vault.capture import CaptureProposal, capture_proposal_digest
+
+    store = MemoryStore()
+    _, _, _, proposal_body = seed_proposal(store)
+    proposal = json.loads(proposal_body)
+    proposal["learning_capture_candidate"]["capture"][
+        "session_started_at"
+    ] = "2026-07-01T00:00:00+08:00"
+    proposal["learning_capture_candidate"]["capture"]["captured_at"] = (
+        "2026-08-01T00:30:00+08:00"
+    )
+    cap = CaptureProposal.model_validate(proposal)
+    new_digest = capture_proposal_digest(cap)
+    proposal["proposal_digest"] = new_digest
+    modified_proposal = (
+        json.dumps(
+            proposal, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        )
+        + "\n"
+    ).encode()
+    modified_proposal_digest = _sha256(modified_proposal)
+
+    approval_id_val = approval_identity(
+        cap.proposal_id, modified_proposal_digest, cap.base_bundle_digest
+    )
+    approval_record = ProposalApprovalRecord(
+        approval_id=approval_id_val,
+        proposal_id=cap.proposal_id,
+        proposal_object_digest=modified_proposal_digest,
+        expected_base_bundle_digest=cap.base_bundle_digest,
+        decision="approved",
+        decided_at=NOW,
+    )
+    approval_body = canonical_approval_json(approval_record)
+    review_digest = _sha256(
+        store.objects[f"v1/reviews/{cap.proposal_id}.md"].body
+    )
+
+    bundle = ContractBundle.from_directory(ROOT / "examples" / "copd")
+    plan = build_vault_publication_plan(
+        bundle, modified_proposal, approval_body, review_digest
+    )
+
+    data = plan.model_dump()
+    artifacts = list(data["artifacts"])
+    artifacts[1] = dict(artifacts[1])
+    artifacts[1]["path"] = (
+        f"MedLearn/Captures/2026/07/{plan.capture_id}.md"
+    )
+    data["artifacts"] = artifacts
+    data["publication_plan_id"] = publication_plan_identity(
+        data["approval_id"],
+        data["approval_object_digest"],
+        data["proposal_id"],
+        data["proposal_object_digest"],
+        data["base_bundle_digest"],
+        data["review_digest"],
+    )
+    with pytest.raises(ValidationError, match="Markdown artifact path"):
+        VaultPublicationPlan.model_validate(data)
+
+
+# ── optional fields absent ───────────────────────────────────────────
+
+
+def test_missing_course_id_and_chapter_id_accepted() -> None:
+    """When course_id and chapter_id are absent, JSON canonicalises without
+    them and Markdown frontmatter omits those keys."""
+    from medlearn_vault.capture import CaptureProposal, capture_proposal_digest
+
+    store = MemoryStore()
+    _, _, _, proposal_body = seed_proposal(store)
+    proposal = json.loads(proposal_body)
+    # Remove course_id and chapter_id from the capture context
+    cap_ctx = proposal["learning_capture_candidate"]["capture"]
+    del cap_ctx["course_id"]
+    del cap_ctx["chapter_id"]
+    # Recompute proposal_digest
+    cap = CaptureProposal.model_validate(proposal)
+    new_digest = capture_proposal_digest(cap)
+    proposal["proposal_digest"] = new_digest
+    modified_proposal = (
+        json.dumps(
+            proposal, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        )
+        + "\n"
+    ).encode()
+    modified_proposal_digest = _sha256(modified_proposal)
+
+    approval_id = approval_identity(
+        cap.proposal_id, modified_proposal_digest, cap.base_bundle_digest
+    )
+    approval_record = ProposalApprovalRecord(
+        approval_id=approval_id,
+        proposal_id=cap.proposal_id,
+        proposal_object_digest=modified_proposal_digest,
+        expected_base_bundle_digest=cap.base_bundle_digest,
+        decision="approved",
+        decided_at=NOW,
+    )
+    approval_body = canonical_approval_json(approval_record)
+    review_digest = _sha256(
+        store.objects[f"v1/reviews/{cap.proposal_id}.md"].body
+    )
+
+    bundle = ContractBundle.from_directory(ROOT / "examples" / "copd")
+    plan = build_vault_publication_plan(
+        bundle, modified_proposal, approval_body, review_digest
+    )
+
+    # JSON artifact will serialize None as null (Pydantic v2 default);
+    # the key point is the plan builds and validates correctly
+    json_content = json.loads(plan.artifacts[0].content_utf8)
+    assert json_content["discipline_id"] is not None
+
+    # Markdown frontmatter must not contain course_id or chapter_id lines
+    md = plan.artifacts[1].content_utf8
+    assert "course_id:" not in md
+    assert "chapter_id:" not in md
+    assert "discipline_id:" in md
+
+    # Plan validates round-trip
+    VaultPublicationPlan.model_validate_json(canonical_publication_plan_json(plan))

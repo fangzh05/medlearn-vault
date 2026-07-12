@@ -621,6 +621,21 @@ class PublicationPlanOrchestrator:
             publication_plan_object_digest,
         )
 
+        try:
+            approval_stored = self.store.get(f"v1/approvals/{approval_id}.json")
+        except Exception as exc:
+            raise WorkflowError("CONTROL_STORE_FAILURE") from exc
+        if approval_stored is None:
+            raise WorkflowError("APPROVAL_NOT_FOUND")
+        try:
+            approval_pre = ProposalApprovalRecord.model_validate_json(
+                approval_stored.body
+            )
+        except (ValueError, TypeError) as exc:
+            raise WorkflowError("INVALID_APPROVAL") from exc
+        if approval_pre.decision == "rejected":
+            raise WorkflowError("PUBLICATION_NOT_APPROVED")
+
         attestation = ApprovalAttestor(self.store).run(
             approval_id,
             source_job_id,
@@ -631,15 +646,17 @@ class PublicationPlanOrchestrator:
             expected_approval_object_digest=approval_object_digest,
         )
         try:
-            approval = self.store.get(f"v1/approvals/{approval_id}.json")
             proposal = self.store.get(f"v1/proposals/{proposal_id}.json")
-            if approval is None or proposal is None:
+            if proposal is None:
                 raise WorkflowError("CONTROL_STORE_FAILURE")
             bundle = ContractBundle.from_directory(
                 resolve_bundle_path(self.repository_root, bundle_path)
             )
             plan = build_vault_publication_plan(
-                bundle, proposal.body, approval.body, attestation.review_digest
+                bundle,
+                proposal.body,
+                approval_stored.body,
+                attestation.review_digest,
             )
         except WorkflowError:
             raise
