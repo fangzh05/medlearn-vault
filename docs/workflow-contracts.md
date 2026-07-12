@@ -76,8 +76,9 @@ Obsidian or Remotely Save. `source_job_id` is an assertion verified against Job 
 not stored in `ProposalApprovalRecord`. The read-only boundary and workflow authority establish
 that the Vault is not accessed; verification does not read the Vault bucket to prove absence.
 
-Release sequence: PR #14 adds read-only approval attestation, then production Approval E2E runs,
-then PR #15 may add deterministic VaultPublicationPlan work.
+Release sequence: PR #15 added Synthetic Intake and the production control-plane E2E passed.
+PR #16 hardens privileged workflows and repository CI. The next feature PR may introduce a
+deterministic VaultPublicationPlan; Vault writes remain forbidden until that plan is reviewed.
 
 ## Production workflow operations
 
@@ -92,8 +93,8 @@ python -m piptools compile --generate-hashes --resolver=backtracking --output-fi
 
 Configure GitHub Secrets `CONTROL_R2_ENDPOINT`, `CONTROL_R2_ACCESS_KEY_ID`, and
 `CONTROL_R2_SECRET_ACCESS_KEY`, plus repository variable `MEDLEARN_PROPOSE_BUNDLE_PATH`. The R2
-credentials must be scoped only to the `medlearn-control` control bucket; they require no
-`medlearn-vault` access.
+credentials are exposed only to the final control-plane business step in Propose, Approve, and
+Verify Approval; checkout and dependency installation receive none. They require no Vault access.
 
 After deployment, dispatch a synthetic intake and Job using a non-medical fixture, run
 `MedLearn Propose`, and verify that the Execution, deterministic Proposal, Review, and terminal Job
@@ -108,6 +109,10 @@ identity, and sends the committed excerpt-free fixture through `POST /v1/capture
 token is scoped only to submission and polling; control-plane credentials are scoped only to the
 final read-only `medlearn workflow inspect-proposal` step. Checkout and installation receive no
 credentials. Logs contain only sanitized IDs, digests, status, and workflow run ID.
+
+`medlearn-approve.yml` requires an explicit `approved` or `rejected` choice and an exact
+`proposal_id` confirmation before it exposes any control-plane credential. The confirmation is a
+workflow guard only and does not change immutable Approval identity or storage semantics.
 
 Concept terms for an observed misconception and `correction_terms` are resolved independently.
 Authoritative correction matching uses the correction terms and requires an exact statement and
