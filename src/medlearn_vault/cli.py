@@ -43,6 +43,7 @@ from medlearn_vault.workflow import (
     ProposalApprovalRecord,
     ProposalExecutionRecord,
     ProposalOrchestrator,
+    ProposalOutputInspector,
     S3ObjectStore,
     S3ReadOnlyObjectStore,
     WorkflowError,
@@ -282,6 +283,31 @@ def workflow_verify_approval(
         f"proposal_object_digest={result.proposal_object_digest} "
         f"review_digest={result.review_digest} decision={result.decision} "
         f"source_job_id={result.source_job_id} workflow_run_id={result.workflow_run_id}"
+    )
+
+
+@workflow_app.command("inspect-proposal")
+def workflow_inspect_proposal(source_job_id: str) -> None:
+    try:
+        store = S3ReadOnlyObjectStore(
+            os.environ.get("CONTROL_R2_ENDPOINT", ""),
+            os.environ.get("CONTROL_R2_ACCESS_KEY_ID", ""),
+            os.environ.get("CONTROL_R2_SECRET_ACCESS_KEY", ""),
+        )
+        result = ProposalOutputInspector(store).run(source_job_id)
+    except WorkflowError as exc:
+        typer.echo(f"error_code={exc.code}", err=True)
+        raise typer.Exit(1) from exc
+    except ValidationError as exc:
+        typer.echo("error_code=INVALID_ATTESTATION_INPUT", err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(
+        f"status=verified source_job_id={result.source_job_id} "
+        f"proposal_id={result.proposal_id} "
+        f"proposal_object_digest={result.proposal_object_digest} "
+        f"proposal_semantic_digest={result.proposal_semantic_digest} "
+        f"expected_base_bundle_digest={result.expected_base_bundle_digest} "
+        f"review_digest={result.review_digest} workflow_run_id={result.workflow_run_id}"
     )
 
 

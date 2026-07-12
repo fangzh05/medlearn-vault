@@ -12,7 +12,13 @@ from botocore.exceptions import ClientError
 from pydantic import ValidationError
 from typer.testing import CliRunner
 
-from medlearn_vault.capture import CaptureProposal, capture_proposal_digest
+from medlearn_vault.bundle import ContractBundle
+from medlearn_vault.capture import (
+    CaptureProposal,
+    IntakeEnvelope,
+    build_capture_proposal,
+    capture_proposal_digest,
+)
 from medlearn_vault.cli import app
 from medlearn_vault.workflow import (
     ApprovalAttestor,
@@ -22,6 +28,7 @@ from medlearn_vault.workflow import (
     ProposalApprovalRecord,
     ProposalExecutionRecord,
     ProposalOrchestrator,
+    ProposalOutputInspector,
     S3ObjectStore,
     StoredObject,
     WorkflowError,
@@ -1563,6 +1570,49 @@ def test_verify_approval_cli_is_sanitized_and_read_only(monkeypatch: pytest.Monk
     assert "COPD" not in result.stdout + result.stderr
 
 
+def test_proposal_output_inspector_reads_only_fixed_provenance_keys() -> None:
+    store = MemoryStore()
+    proposal_id, proposal_digest, base_digest, _ = seed_proposal(store)
+    read_only = ReadOnlyRecordingStore(store.objects)
+    result = ProposalOutputInspector(read_only).run("job-approval-source")
+    assert result.proposal_id == proposal_id
+    assert result.proposal_object_digest == proposal_digest
+    assert result.expected_base_bundle_digest == base_digest
+    assert read_only.reads == [
+        "v1/jobs/job-approval-source.json",
+        "v1/executions/job-approval-source.json",
+        f"v1/proposals/{proposal_id}.json",
+        f"v1/reviews/{proposal_id}.md",
+    ]
+
+
+def test_proposal_output_inspector_rejects_invalid_input_before_reads() -> None:
+    store = ReadOnlyRecordingStore({})
+    with pytest.raises(WorkflowError, match="INVALID_ATTESTATION_INPUT"):
+        ProposalOutputInspector(store).run("../job")
+    assert store.reads == []
+
+
+def test_inspect_proposal_cli_is_sanitized(monkeypatch: pytest.MonkeyPatch) -> None:
+    store = MemoryStore()
+    proposal_id, proposal_digest, _, _ = seed_proposal(store)
+    read_only = ReadOnlyRecordingStore(store.objects)
+    monkeypatch.setattr("medlearn_vault.cli.S3ReadOnlyObjectStore", lambda *args: read_only)
+    result = CliRunner().invoke(
+        app,
+        ["workflow", "inspect-proposal", "job-approval-source"],
+        env={
+            "CONTROL_R2_ENDPOINT": "configured",
+            "CONTROL_R2_ACCESS_KEY_ID": "configured",
+            "CONTROL_R2_SECRET_ACCESS_KEY": "configured",
+        },
+    )
+    assert result.exit_code == 0
+    assert f"proposal_id={proposal_id}" in result.stdout
+    assert f"proposal_object_digest={proposal_digest}" in result.stdout
+    assert "COPD" not in result.stdout + result.stderr
+
+
 def test_verify_approval_workflow_yaml_is_read_only_and_argument_safe() -> None:
     path = Path(".github/workflows/medlearn-verify-approval.yml")
     text = path.read_text(encoding="utf-8")
@@ -1647,6 +1697,93 @@ def test_verify_approval_workflow_yaml_is_read_only_and_argument_safe() -> None:
         "put_object",
     ):
         assert forbidden.lower() not in text.lower()
+
+
+def test_synthetic_intake_workflow_is_fixed_hardened_and_secret_scoped() -> None:
+    path = Path(".github/workflows/medlearn-synthetic-intake.yml")
+    text = path.read_text(encoding="utf-8")
+    data = yaml.load(text, Loader=yaml.BaseLoader)
+    assert data["on"]["workflow_dispatch"] == ""
+    assert data["permissions"] == {"contents": "read"}
+    assert data["concurrency"] == {
+        "group": "medlearn-synthetic-intake",
+        "cancel-in-progress": "false",
+    }
+    job = data["jobs"]["intake"]
+    assert job["if"] == "github.ref == 'refs/heads/main'"
+    assert job["timeout-minutes"] == "10"
+    assert "env" not in job
+    actions = [step for step in job["steps"] if "uses" in step]
+    assert actions
+    assert all(re.fullmatch(r"[^@]+@[0-9a-f]{40}", step["uses"]) for step in actions)
+    checkout = next(step for step in actions if step["uses"].startswith("actions/checkout@"))
+    assert checkout["with"] == {"persist-credentials": "false", "ref": "main"}
+    install = next(step for step in job["steps"] if "--require-hashes" in step.get("run", ""))
+    assert "env" not in install
+    assert install["run"].splitlines() == [
+        "python -m pip install --require-hashes -r requirements/workflow.txt",
+        "python -m pip install --no-build-isolation --no-deps .",
+    ]
+    submit = next(step for step in job["steps"] if step.get("name") == "Submit synthetic intake")
+    inspect = next(
+        step for step in job["steps"] if step.get("name") == "Inspect synthetic proposal"
+    )
+    assert set(submit["env"]) == {
+        "MEDLEARN_INGEST_TOKEN",
+        "MEDLEARN_INGEST_URL",
+        "MEDLEARN_RUN_ID",
+        "MEDLEARN_RUN_ATTEMPT",
+    }
+    assert submit["env"]["MEDLEARN_INGEST_TOKEN"] == "${{ secrets.MEDLEARN_INGEST_TOKEN }}"
+    assert submit["env"]["MEDLEARN_INGEST_URL"] == "${{ vars.MEDLEARN_INGEST_URL }}"
+    assert set(inspect["env"]) == {
+        "CONTROL_R2_ENDPOINT",
+        "CONTROL_R2_ACCESS_KEY_ID",
+        "CONTROL_R2_SECRET_ACCESS_KEY",
+        "MEDLEARN_SOURCE_JOB_ID",
+    }
+    for step in job["steps"]:
+        if step is not submit:
+            assert "MEDLEARN_INGEST_TOKEN" not in step.get("env", {})
+        if step is not inspect:
+            assert not {
+                "CONTROL_R2_ENDPOINT",
+                "CONTROL_R2_ACCESS_KEY_ID",
+                "CONTROL_R2_SECRET_ACCESS_KEY",
+            } & set(step.get("env", {}))
+    assert "examples/intake/synthetic-e2e.json" in submit["run"]
+    assert "${{ " not in submit["run"]
+    assert set(re.findall(r"secrets\.([A-Z0-9_]+)", text)) == {
+        "MEDLEARN_INGEST_TOKEN",
+        "CONTROL_R2_ENDPOINT",
+        "CONTROL_R2_ACCESS_KEY_ID",
+        "CONTROL_R2_SECRET_ACCESS_KEY",
+    }
+    for forbidden in (
+        "actions/upload-artifact",
+        "GITHUB_STEP_SUMMARY",
+        "set -x",
+        "medlearn-vault",
+        "VAULT_R2",
+        "RCLONE",
+        "remotely save",
+    ):
+        assert forbidden.lower() not in text.lower()
+
+
+def test_synthetic_e2e_fixture_is_minimal_ready_and_has_no_excerpts() -> None:
+    envelope = IntakeEnvelope.model_validate_json(
+        Path("examples/intake/synthetic-e2e.json").read_bytes()
+    )
+    proposal = build_capture_proposal(
+        ContractBundle.from_directory(Path("examples/copd")), envelope.draft
+    )
+    assert proposal.status == "ready_for_review"
+    assert len(envelope.draft.evidence_messages) == 1
+    assert envelope.draft.evidence_messages[0].excerpt is None
+    assert envelope.draft.claim_candidates == ()
+    assert envelope.draft.learner_evidence_candidates == ()
+    assert envelope.draft.misconception_candidates == ()
 
 
 def test_workflow_lock_is_fully_hashed_and_pins_direct_dependencies() -> None:

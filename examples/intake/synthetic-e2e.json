@@ -1,0 +1,32 @@
+{
+  "intake_version": "0.1.0",
+  "client_kind": "manual",
+  "draft": {
+    "draft_version": "0.3.0",
+    "context": {
+      "source_id": "source_22222222222222222222222222222222",
+      "session_id": "session:synthetic-template",
+      "discipline_id": "internal_medicine",
+      "course_id": "course:synthetic-e2e",
+      "chapter_id": "chapter:copd",
+      "session_started_at": "2026-07-12T08:00:00+08:00",
+      "captured_at": "2026-07-12T08:01:00+08:00"
+    },
+    "evidence_messages": [
+      {
+        "message_id": "message:synthetic-user",
+        "role": "user",
+        "observed_at": "2026-07-12T08:00:30+08:00"
+      }
+    ],
+    "concept_mentions": [
+      {
+        "surface_text": "COPD",
+        "evidence_message_ids": ["message:synthetic-user"]
+      }
+    ],
+    "claim_candidates": [],
+    "learner_evidence_candidates": [],
+    "misconception_candidates": []
+  }
+}
