@@ -14,14 +14,18 @@ from typer.testing import CliRunner
 
 from medlearn_vault.cli import app
 from medlearn_vault.workflow import (
+    ApprovalOrchestrator,
     JobRecord,
     ObjectStore,
+    ProposalApprovalRecord,
     ProposalExecutionRecord,
     ProposalOrchestrator,
     S3ObjectStore,
     StoredObject,
     WorkflowError,
     WorkflowInputs,
+    approval_identity,
+    canonical_approval_json,
     resolve_bundle_path,
 )
 
@@ -112,6 +116,441 @@ def ambiguous_envelope() -> bytes:
         ensure_ascii=False,
         separators=(",", ":"),
     ).encode()
+
+
+def seed_proposal(
+    store: MemoryStore, *, blocked: bool = False
+) -> tuple[str, str, str, bytes]:
+    envelope = ambiguous_envelope() if blocked else copd_envelope()
+    inputs, _ = seed_job(store, envelope, job_id="job-approval-source")
+    bundle = "examples/capture/ambiguous-ms/bundle" if blocked else "examples/copd"
+    result = ProposalOrchestrator(store, ROOT).run(
+        inputs, bundle_path=bundle, workflow_run_id="run-approval-source", now=NOW
+    )
+    assert result.proposal_id
+    body = store.objects[f"v1/proposals/{result.proposal_id}.json"].body
+    proposal = json.loads(body)
+    return (
+        result.proposal_id,
+        "sha256:" + hashlib.sha256(body).hexdigest(),
+        proposal["base_bundle_digest"],
+        body,
+    )
+
+
+def test_successful_approval_and_identical_rerun_are_create_only() -> None:
+    store = MemoryStore()
+    proposal_id, digest, base_digest, _ = seed_proposal(store)
+    orchestrator = ApprovalOrchestrator(store)
+    first = orchestrator.run(
+        proposal_id,
+        digest,
+        base_digest,
+        now=NOW,
+    )
+    approval_key = f"v1/approvals/{first.approval_id}.json"
+    record = ProposalApprovalRecord.model_validate_json(store.objects[approval_key].body)
+    assert record.decision == "approved"
+    assert record.decided_at == NOW
+    assert store.objects[approval_key].body.endswith(b"\n")
+    assert store.objects[approval_key].body == json.dumps(
+        record.model_dump(mode="json"),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode() + b"\n"
+    canonical = store.objects[approval_key].body
+    creates = tuple(store.creates)
+    second = orchestrator.run(
+        proposal_id,
+        digest,
+        base_digest,
+        now=NOW + timedelta(minutes=1),
+    )
+    assert second.reused is True
+    assert tuple(store.creates) == creates
+    assert store.objects[approval_key].body == canonical
+
+
+def test_rejected_decision_is_recorded_but_blocked_proposal_is_rejected() -> None:
+    store = MemoryStore()
+    proposal_id, digest, base_digest, _ = seed_proposal(store)
+    result = ApprovalOrchestrator(store).run(
+        proposal_id,
+        digest,
+        base_digest,
+        decision="rejected",
+        rejection_code="NEEDS_REVIEW",
+        now=NOW,
+    )
+    record = ProposalApprovalRecord.model_validate_json(
+        store.objects[f"v1/approvals/{result.approval_id}.json"].body
+    )
+    assert record.rejection_code == "NEEDS_REVIEW"
+
+    blocked_store = MemoryStore()
+    blocked_id, blocked_digest, blocked_base, _ = seed_proposal(blocked_store, blocked=True)
+    with pytest.raises(WorkflowError, match="PROPOSAL_BLOCKED"):
+        ApprovalOrchestrator(blocked_store).run(
+            blocked_id, blocked_digest, blocked_base, now=NOW
+        )
+    assert not any(key.startswith("v1/approvals/") for key in blocked_store.creates)
+
+
+def test_approval_identity_binds_only_the_exact_proposal_subject() -> None:
+    proposal_id = "proposal_" + "a" * 32
+    object_digest = "sha256:" + "b" * 64
+    base_digest = "sha256:" + "c" * 64
+    expected = "approval_" + hashlib.sha256(
+        json.dumps(
+            {
+                "expected_base_bundle_digest": base_digest,
+                "proposal_id": proposal_id,
+                "proposal_object_digest": object_digest,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()[:32]
+    assert approval_identity(proposal_id, object_digest, base_digest) == expected
+
+
+@pytest.mark.parametrize(
+    ("decision", "rejection_code"),
+    [("approved", "NO"), ("rejected", None), ("rejected", "lowercase")],
+)
+def test_approval_decision_invariants(
+    decision: str, rejection_code: str | None
+) -> None:
+    with pytest.raises(ValidationError):
+        ProposalApprovalRecord(
+            approval_id="approval_" + "a" * 32,
+            proposal_id="proposal_" + "b" * 32,
+            proposal_object_digest="sha256:" + "c" * 64,
+            expected_base_bundle_digest="sha256:" + "d" * 64,
+            decision=decision,  # type: ignore[arg-type]
+            decided_at=NOW,
+            rejection_code=rejection_code,
+        )
+
+
+def test_approval_schema_expresses_decision_invariants() -> None:
+    schema = ProposalApprovalRecord.model_json_schema()
+    assert schema["additionalProperties"] is False
+    assert schema["allOf"] == [
+        {
+            "if": {"properties": {"decision": {"const": "approved"}}},
+            "then": {"properties": {"rejection_code": {"type": "null"}}},
+        },
+        {
+            "if": {"properties": {"decision": {"const": "rejected"}}},
+            "then": {
+                "required": ["rejection_code"],
+                "properties": {
+                    "rejection_code": {
+                        "type": "string",
+                        "pattern": "^[A-Z][A-Z0-9_]{0,127}$",
+                    }
+                },
+            },
+        },
+    ]
+
+
+@pytest.mark.parametrize(
+    ("mutation", "code"),
+    [
+        ("missing", "PROPOSAL_NOT_FOUND"),
+        ("digest", "PROPOSAL_OBJECT_DIGEST_MISMATCH"),
+        ("base", "BASE_BUNDLE_DIGEST_MISMATCH"),
+        ("malformed", "INVALID_PROPOSAL"),
+        ("id", "INVALID_PROPOSAL"),
+    ],
+)
+def test_approval_rejects_invalid_proposal_inputs(mutation: str, code: str) -> None:
+    store = MemoryStore()
+    proposal_id, digest, base_digest, body = seed_proposal(store)
+    request_id = proposal_id
+    request_digest = digest
+    request_base = base_digest
+    if mutation == "missing":
+        request_id = "proposal_" + "f" * 32
+    elif mutation == "digest":
+        request_digest = "sha256:" + "f" * 64
+    elif mutation == "base":
+        request_base = "sha256:" + "f" * 64
+    elif mutation == "malformed":
+        malformed = b'{"proposal_id":"broken"}\n'
+        store.seed(f"v1/proposals/{proposal_id}.json", malformed)
+        request_digest = "sha256:" + hashlib.sha256(malformed).hexdigest()
+    elif mutation == "id":
+        parsed = json.loads(body)
+        parsed["proposal_id"] = "proposal_" + "f" * 32
+        changed = json_bytes(parsed)
+        store.seed(f"v1/proposals/{proposal_id}.json", changed)
+        request_digest = "sha256:" + hashlib.sha256(changed).hexdigest()
+    with pytest.raises(WorkflowError, match=code):
+        ApprovalOrchestrator(store).run(
+            request_id, request_digest, request_base, now=NOW
+        )
+
+
+def test_approval_rejects_wrong_internal_proposal_digest() -> None:
+    store = MemoryStore()
+    proposal_id, _, base_digest, body = seed_proposal(store)
+    proposal = json.loads(body)
+    proposal["proposal_digest"] = "sha256:" + "f" * 64
+    changed = json_bytes(proposal)
+    store.seed(f"v1/proposals/{proposal_id}.json", changed)
+    object_digest = "sha256:" + hashlib.sha256(changed).hexdigest()
+    with pytest.raises(WorkflowError, match="INVALID_PROPOSAL"):
+        ApprovalOrchestrator(store).run(proposal_id, object_digest, base_digest, now=NOW)
+
+
+def test_approval_conflict_and_create_only_race() -> None:
+    class RacingStore(MemoryStore):
+        winner: bytes | None = None
+
+        def create(self, key: str, body: bytes, *, content_type: str) -> bool:
+            if key.startswith("v1/approvals/") and self.winner is not None:
+                self.seed(key, self.winner)
+                self.winner = None
+                return False
+            return super().create(key, body, content_type=content_type)
+
+    store = RacingStore()
+    proposal_id, digest, base_digest, _ = seed_proposal(store)
+    probe = ApprovalOrchestrator(store).run(
+        proposal_id, digest, base_digest, now=NOW
+    )
+    key = f"v1/approvals/{probe.approval_id}.json"
+    winner = store.objects.pop(key).body
+    store.creates.remove(key)
+    store.winner = winner
+    raced = ApprovalOrchestrator(store).run(
+        proposal_id, digest, base_digest, now=NOW
+    )
+    assert raced.reused is True
+
+    record = ProposalApprovalRecord.model_validate_json(winner)
+    conflict = record.model_copy(update={"decision": "rejected", "rejection_code": "NO"})
+    store.seed(key, canonical_approval_json(conflict))
+    with pytest.raises(WorkflowError, match="APPROVAL_CONFLICT"):
+        ApprovalOrchestrator(store).run(
+            proposal_id, digest, base_digest, now=NOW
+        )
+
+
+def test_concurrent_opposite_decisions_have_one_winner() -> None:
+    class RacingStore(MemoryStore):
+        winner: bytes
+
+        def create(self, key: str, body: bytes, *, content_type: str) -> bool:
+            del body, content_type
+            self.seed(key, self.winner)
+            return False
+
+    seed = MemoryStore()
+    proposal_id, digest, base_digest, body = seed_proposal(seed)
+    approved = ApprovalOrchestrator(seed).run(proposal_id, digest, base_digest, now=NOW)
+    winner = seed.objects[f"v1/approvals/{approved.approval_id}.json"].body
+    store = RacingStore()
+    store.winner = winner
+    store.seed(f"v1/proposals/{proposal_id}.json", body)
+    with pytest.raises(WorkflowError, match="APPROVAL_CONFLICT"):
+        ApprovalOrchestrator(store).run(
+            proposal_id,
+            digest,
+            base_digest,
+            decision="rejected",
+            rejection_code="NO",
+            now=NOW,
+        )
+
+
+@pytest.mark.parametrize(
+    ("first_decision", "first_code", "second_decision", "second_code", "reused"),
+    [
+        ("approved", None, "approved", None, True),
+        ("rejected", "NO", "rejected", "NO", True),
+        ("approved", None, "rejected", "NO", False),
+        ("rejected", "NO", "approved", None, False),
+        ("rejected", "NO", "rejected", "OTHER", False),
+    ],
+)
+def test_approval_immutable_decision_matrix(
+    first_decision: str,
+    first_code: str | None,
+    second_decision: str,
+    second_code: str | None,
+    reused: bool,
+) -> None:
+    store = MemoryStore()
+    proposal_id, digest, base_digest, _ = seed_proposal(store)
+    first = ApprovalOrchestrator(store).run(
+        proposal_id,
+        digest,
+        base_digest,
+        decision=first_decision,  # type: ignore[arg-type]
+        rejection_code=first_code,
+        now=NOW,
+    )
+    key = f"v1/approvals/{first.approval_id}.json"
+    original = store.objects[key].body
+    if reused:
+        result = ApprovalOrchestrator(store).run(
+            proposal_id,
+            digest,
+            base_digest,
+            decision=second_decision,  # type: ignore[arg-type]
+            rejection_code=second_code,
+            now=NOW + timedelta(days=1),
+        )
+        assert result.reused is True
+        assert store.objects[key].body == original
+    else:
+        with pytest.raises(WorkflowError, match="APPROVAL_CONFLICT"):
+            ApprovalOrchestrator(store).run(
+                proposal_id,
+                digest,
+                base_digest,
+                decision=second_decision,  # type: ignore[arg-type]
+                rejection_code=second_code,
+                now=NOW + timedelta(days=1),
+            )
+
+
+def test_approval_rejects_malformed_or_noncanonical_winner() -> None:
+    store = MemoryStore()
+    proposal_id, digest, base_digest, _ = seed_proposal(store)
+    approval_id = approval_identity(proposal_id, digest, base_digest)
+    key = f"v1/approvals/{approval_id}.json"
+    store.seed(key, b"{}\n")
+    with pytest.raises(WorkflowError, match="APPROVAL_CONFLICT"):
+        ApprovalOrchestrator(store).run(proposal_id, digest, base_digest, now=NOW)
+    record = ProposalApprovalRecord(
+        approval_id=approval_id,
+        proposal_id=proposal_id,
+        proposal_object_digest=digest,
+        expected_base_bundle_digest=base_digest,
+        decision="approved",
+        decided_at=NOW,
+    )
+    store.seed(key, json_bytes(record))
+    with pytest.raises(WorkflowError, match="APPROVAL_CONFLICT"):
+        ApprovalOrchestrator(store).run(proposal_id, digest, base_digest, now=NOW)
+
+
+def test_missing_winner_after_failed_create_is_store_failure() -> None:
+    class MissingWinnerStore(MemoryStore):
+        def create(self, key: str, body: bytes, *, content_type: str) -> bool:
+            del key, body, content_type
+            return False
+
+    seeded = MemoryStore()
+    proposal_id, digest, base_digest, body = seed_proposal(seeded)
+    store = MissingWinnerStore()
+    store.seed(f"v1/proposals/{proposal_id}.json", body)
+    with pytest.raises(WorkflowError, match="CONTROL_STORE_FAILURE"):
+        ApprovalOrchestrator(store).run(proposal_id, digest, base_digest, now=NOW)
+
+
+def test_approval_store_failures_are_sanitized_and_outputs_are_read_only() -> None:
+    store = MemoryStore()
+    proposal_id, digest, base_digest, proposal_body = seed_proposal(store)
+    proposal_key = f"v1/proposals/{proposal_id}.json"
+    review_key = f"v1/reviews/{proposal_id}.md"
+    review_body = store.objects[review_key].body
+    before_swaps = tuple(store.swaps)
+    approval_id = ApprovalOrchestrator(store).run(
+        proposal_id, digest, base_digest, now=NOW
+    ).approval_id
+    assert store.objects[proposal_key].body == proposal_body
+    assert store.objects[review_key].body == review_body
+    assert tuple(store.swaps) == before_swaps
+    assert all("medlearn-vault" not in key for key in store.objects)
+
+    failing = MemoryStore()
+    proposal_id, digest, base_digest, _ = seed_proposal(failing)
+    failing.fail_create_once = (
+        "v1/approvals/"
+        + approval_identity(proposal_id, digest, base_digest)
+        + ".json"
+    )
+    with pytest.raises(WorkflowError) as captured:
+        ApprovalOrchestrator(failing).run(proposal_id, digest, base_digest, now=NOW)
+    assert captured.value.code == "CONTROL_STORE_FAILURE"
+    assert str(captured.value) == "CONTROL_STORE_FAILURE"
+    assert approval_id.startswith("approval_")
+
+
+def test_approval_cli_uses_only_fixed_control_inputs(monkeypatch: pytest.MonkeyPatch) -> None:
+    store = MemoryStore()
+    proposal_id, digest, base_digest, _ = seed_proposal(store)
+    monkeypatch.setattr("medlearn_vault.cli.S3ObjectStore", lambda *args: store)
+    result = CliRunner().invoke(
+        app,
+        ["workflow", "approve", proposal_id, digest, base_digest],
+        env={
+            "CONTROL_R2_ENDPOINT": "fixed-endpoint",
+            "CONTROL_R2_ACCESS_KEY_ID": "fixed-key",
+            "CONTROL_R2_SECRET_ACCESS_KEY": "fixed-secret",
+        },
+    )
+    assert result.exit_code == 0
+    assert "decision=approved approval_id=approval_" in result.stdout
+    help_result = CliRunner().invoke(app, ["workflow", "approve", "--help"])
+    for forbidden in ("--bucket", "--endpoint", "--object-key", "--repository", "--ref"):
+        assert forbidden not in help_result.stdout.lower()
+
+
+def test_approval_cli_failure_prints_only_stable_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    medical = "private COPD transcript"
+
+    class BrokenStore:
+        def __init__(self, *args: object) -> None:
+            del args
+            raise WorkflowError("CONTROL_STORE_FAILURE")
+
+    monkeypatch.setattr("medlearn_vault.cli.S3ObjectStore", BrokenStore)
+    result = CliRunner().invoke(
+        app,
+        [
+            "workflow",
+            "approve",
+            "proposal_" + "a" * 32,
+            "sha256:" + "b" * 64,
+            "sha256:" + "c" * 64,
+        ],
+        env={
+            "CONTROL_R2_ENDPOINT": medical,
+            "CONTROL_R2_ACCESS_KEY_ID": medical,
+            "CONTROL_R2_SECRET_ACCESS_KEY": medical,
+        },
+    )
+    assert result.exit_code == 1
+    assert result.stderr.strip() == "error_code=CONTROL_STORE_FAILURE"
+    assert medical not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize(
+    "proposal_id",
+    ["../proposal_" + "a" * 32, "proposal_" + "a" * 32 + "/other", "v1/jobs/x"],
+)
+def test_approval_rejects_object_key_injection_before_store_access(proposal_id: str) -> None:
+    class NoAccessStore(MemoryStore):
+        def get(self, key: str) -> StoredObject | None:
+            raise AssertionError(f"unexpected control-store access: {key}")
+
+    with pytest.raises(WorkflowError, match="INVALID_APPROVAL_INPUT"):
+        ApprovalOrchestrator(NoAccessStore()).run(
+            proposal_id,
+            "sha256:" + "b" * 64,
+            "sha256:" + "c" * 64,
+            now=NOW,
+        )
 
 
 def test_copd_end_to_end_and_terminal_rerun_is_verification_only(

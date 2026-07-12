@@ -9,7 +9,7 @@ permanent identifiers, matching fingerprints, versioned JSON Schema, a small CLI
 tests, and CI. It performs no Vault writes and contains no LLM, database, Obsidian,
 or document-ingestion integration.
 
-Version 0.7.1 accepts an untrusted, structured `CaptureDraft` (workflow contract 0.3.0),
+Version 0.8.0 accepts an untrusted, structured `CaptureDraft` (workflow contract 0.3.0),
 reconciles it deterministically against a `ContractBundle`, and emits a reviewable
 `CaptureProposal`. ChatGPT Work performs language understanding; MedLearn calls no LLM API.
 Drafts contain only context, message IDs, short evidence excerpts, and extracted candidates—not
@@ -29,6 +29,16 @@ The first idempotent `medlearn-propose.yml` workflow reads only the fixed `medle
 bucket, verifies exact intake bytes, loads a repository-controlled bundle, and create-only writes a
 deterministic proposal and review. A leased `ProposalExecutionRecord` makes at-least-once dispatch
 resumable without claiming exactly-once execution. It does not approve or commit a LearningCapture.
+
+The approval boundary adds immutable `ProposalApprovalRecord` 0.1.0 objects. Approval verifies the
+exact stored Proposal bytes, proposal identity and internal digest, ready status, and expected base
+bundle digest before a create-only write under a fixed control key. One exact Proposal subject has
+one immutable decision slot: the first create-only decision wins and an opposite decision returns
+`APPROVAL_CONFLICT`. `proposal_object_digest` names the exact stored bytes; the Proposal's own
+`proposal_digest` remains its separate internal semantic digest. Rejections require a sanitized
+`rejection_code`; `decided_at` is the only approval timestamp, and unverified `source_job_id` is not
+stored. It does not load or mutate the
+bundle and still performs no LearningCapture, Vault, Obsidian, artifact, or commit write.
 
 ```powershell
 cd worker
