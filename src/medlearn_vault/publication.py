@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 from pathlib import PurePosixPath
+from typing import Literal
 
 from pydantic import Field, model_validator
 
@@ -69,13 +70,24 @@ class VaultPublicationArtifact(DomainModel):
 
     @model_validator(mode="after")
     def validate_bytes_and_path(self) -> VaultPublicationArtifact:
-        path = PurePosixPath(self.path)
+        # --- Raw string checks BEFORE PurePosixPath (which collapses ".", "..", and "//") ---
         if (
             not self.path.startswith("MedLearn/")
             or "\\" in self.path
-            or path.is_absolute()
-            or any(part in {".", ".."} for part in path.parts)
+            or "//" in self.path
+            or "\x00" in self.path
+            or "./" in self.path
+            or "/." in self.path
+        ):
+            raise ValueError("invalid publication artifact")
+        _path = PurePosixPath(self.path)
+        if _path.is_absolute() or any(part in {".", ".."} for part in _path.parts):
+            raise ValueError("invalid publication artifact")
+        # --- Content checks: no BOM, no NUL, no CR/CRLF, exactly one LF terminator ---
+        if (
+            self.content_utf8.startswith("﻿")
             or "\x00" in self.content_utf8
+            or "\r" in self.content_utf8
             or not self.content_utf8.endswith("\n")
             or self.content_utf8.endswith("\n\n")
         ):
@@ -87,7 +99,7 @@ class VaultPublicationArtifact(DomainModel):
 
 
 class VaultPublicationPlan(DomainModel):
-    plan_version: str = Field(default="0.1.0", pattern=r"^0\.1\.0$")
+    plan_version: Literal["0.1.0"]
     publication_plan_id: str = Field(pattern=PLAN_ID_PATTERN)
     approval_id: str = Field(pattern=r"^approval_[a-f0-9]{32}$")
     approval_object_digest: str = Field(pattern=DIGEST_PATTERN)
@@ -96,13 +108,14 @@ class VaultPublicationPlan(DomainModel):
     proposal_semantic_digest: str = Field(pattern=DIGEST_PATTERN)
     base_bundle_digest: str = Field(pattern=DIGEST_PATTERN)
     review_digest: str = Field(pattern=DIGEST_PATTERN)
-    approval_decision: str = Field(default="approved", pattern=r"^approved$")
+    approval_decision: Literal["approved"]
     capture_id: str = Field(pattern=CAPTURE_ID_PATTERN)
     capture_object_digest: str = Field(pattern=DIGEST_PATTERN)
     artifacts: tuple[VaultPublicationArtifact, ...] = Field(min_length=2, max_length=2)
 
     @model_validator(mode="after")
     def validate_identity_and_artifacts(self) -> VaultPublicationPlan:
+        # --- Identity ---
         if self.publication_plan_id != publication_plan_identity(
             self.approval_id,
             self.approval_object_digest,
@@ -112,16 +125,62 @@ class VaultPublicationPlan(DomainModel):
             self.review_digest,
         ):
             raise ValueError("publication_plan_id does not match approved subject")
+
+        # --- Exactly two artifacts with fixed ordering ---
+        if len(self.artifacts) != 2:
+            raise ValueError("publication plan must have exactly 2 artifacts")
+
+        json_artifact = self.artifacts[0]
+        md_artifact = self.artifacts[1]
+
+        if json_artifact.media_type != "application/json; charset=utf-8":
+            raise ValueError("first artifact must be JSON")
+        if md_artifact.media_type != "text/markdown; charset=utf-8":
+            raise ValueError("second artifact must be Markdown")
+
+        # --- JSON artifact path ---
+        if json_artifact.path != f"MedLearn/Data/Captures/{self.capture_id}.json":
+            raise ValueError("JSON artifact path does not match capture_id")
+
+        # --- JSON content self-consistency ---
+        if json_artifact.content_digest != self.capture_object_digest:
+            raise ValueError("capture artifact digest mismatch")
+
+        json_bytes = json_artifact.content_utf8.encode("utf-8")
+        if json_artifact.content_digest != _digest(json_bytes):
+            raise ValueError("JSON artifact digest mismatch")
+
+        computed_capture_id = "capture_" + hashlib.sha256(json_bytes).hexdigest()[:32]
+        if self.capture_id != computed_capture_id:
+            raise ValueError("capture_id does not match JSON artifact bytes")
+
+        # --- Parse as LearningCapture and re-canonicalize ---
+        try:
+            capture = LearningCapture.model_validate_json(json_artifact.content_utf8)
+        except Exception as exc:
+            raise ValueError(
+                "JSON artifact does not parse as LearningCapture"
+            ) from exc
+
+        recoded = canonical_learning_capture_json(capture)
+        if json_bytes != recoded:
+            raise ValueError("JSON artifact is not canonical LearningCapture")
+
+        # --- Markdown artifact path from captured_at local timezone ---
+        captured = capture.captured_at
+        expected_md_path = (
+            f"MedLearn/Captures/{captured.year:04d}/{captured.month:02d}/"
+            f"{self.capture_id}.md"
+        )
+        if md_artifact.path != expected_md_path:
+            raise ValueError(
+                "Markdown artifact path does not match capture_id and captured_at"
+            )
+
+        # --- Paths must be unique ---
         if len({item.path for item in self.artifacts}) != 2:
             raise ValueError("publication artifact paths must be unique")
-        json_artifacts = [
-            item for item in self.artifacts if item.media_type == "application/json; charset=utf-8"
-        ]
-        if (
-            len(json_artifacts) != 1
-            or json_artifacts[0].content_digest != self.capture_object_digest
-        ):
-            raise ValueError("capture artifact mismatch")
+
         return self
 
 
@@ -209,7 +268,6 @@ def build_vault_publication_plan(
     review_digest: str,
 ) -> VaultPublicationPlan:
     """Build a plan from exact already-read control objects; no I/O or clock access."""
-    from medlearn_vault.capture import capture_proposal_digest, contract_bundle_digest
     from medlearn_vault.workflow import (
         ProposalApprovalRecord,
         approval_identity,
@@ -235,10 +293,7 @@ def build_vault_publication_plan(
     if (
         proposal.proposal_id != approval.proposal_id
         or proposal_digest != approval.proposal_object_digest
-        or capture_proposal_digest(proposal) != proposal.proposal_digest
-        or proposal.status != "ready_for_review"
         or proposal.base_bundle_digest != approval.expected_base_bundle_digest
-        or contract_bundle_digest(bundle) != approval.expected_base_bundle_digest
     ):
         raise ValueError("INVALID_PUBLICATION_INPUT")
     try:
@@ -274,6 +329,8 @@ def build_vault_publication_plan(
         ),
     )
     return VaultPublicationPlan(
+        plan_version="0.1.0",
+        approval_decision="approved",
         publication_plan_id=publication_plan_identity(
             approval.approval_id,
             _digest(exact_approval_bytes),

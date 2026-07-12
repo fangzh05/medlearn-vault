@@ -583,6 +583,19 @@ class ApprovalAttestor:
         return stored
 
 
+_PUBLICATION_PASS_THROUGH_CODES = frozenset(
+    {
+        "PUBLICATION_NOT_APPROVED",
+        "PROPOSAL_DIGEST_MISMATCH",
+        "STALE_BASE_BUNDLE",
+        "BLOCKED_PROPOSAL",
+        "UNRESOLVED_CONCEPT",
+        "INVALID_CAPTURE_CONCEPT",
+        "INVALID_CORRECTION_CLAIM",
+    }
+)
+
+
 class PublicationPlanOrchestrator:
     """Freshly attest an approved subject, then create exactly one control-plane plan."""
 
@@ -632,7 +645,7 @@ class PublicationPlanOrchestrator:
             raise
         except ValueError as exc:
             code = str(exc)
-            if code == "PUBLICATION_NOT_APPROVED":
+            if code in _PUBLICATION_PASS_THROUGH_CODES:
                 raise WorkflowError(code) from exc
             raise WorkflowError("INVALID_PUBLICATION_INPUT") from exc
         except Exception as exc:

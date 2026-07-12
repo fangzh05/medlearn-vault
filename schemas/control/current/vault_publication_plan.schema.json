@@ -40,8 +40,7 @@
   "additionalProperties": false,
   "properties": {
     "plan_version": {
-      "default": "0.1.0",
-      "pattern": "^0\\.1\\.0$",
+      "const": "0.1.0",
       "title": "Plan Version",
       "type": "string"
     },
@@ -86,8 +85,7 @@
       "type": "string"
     },
     "approval_decision": {
-      "default": "approved",
-      "pattern": "^approved$",
+      "const": "approved",
       "title": "Approval Decision",
       "type": "string"
     },
@@ -112,6 +110,7 @@
     }
   },
   "required": [
+    "plan_version",
     "publication_plan_id",
     "approval_id",
     "approval_object_digest",
@@ -120,6 +119,7 @@
     "proposal_semantic_digest",
     "base_bundle_digest",
     "review_digest",
+    "approval_decision",
     "capture_id",
     "capture_object_digest",
     "artifacts"
