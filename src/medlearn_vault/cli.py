@@ -204,10 +204,9 @@ def workflow_propose(job_id: str, intake_object_key: str, intake_digest: str) ->
 @workflow_app.command("approve")
 def workflow_approve(
     proposal_id: str,
-    proposal_digest: str,
+    proposal_object_digest: str,
     expected_base_bundle_digest: str,
     decision: Annotated[str, typer.Option("--decision")] = "approved",
-    source_job_id: Annotated[str | None, typer.Option("--source-job-id")] = None,
     rejection_code: Annotated[str | None, typer.Option("--rejection-code")] = None,
 ) -> None:
     try:
@@ -220,10 +219,9 @@ def workflow_approve(
         )
         result = ApprovalOrchestrator(store).run(
             proposal_id,
-            proposal_digest,
+            proposal_object_digest,
             expected_base_bundle_digest,
             decision=decision,  # type: ignore[arg-type]
-            source_job_id=source_job_id,
             rejection_code=rejection_code,
         )
     except WorkflowError as exc:

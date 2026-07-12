@@ -194,31 +194,48 @@ class ProposalApprovalRecord(DomainModel):
     approval_version: Literal["0.1.0"] = "0.1.0"
     approval_id: str = Field(pattern=APPROVAL_ID_PATTERN)
     proposal_id: str = Field(pattern=PROPOSAL_ID_PATTERN)
-    proposal_digest: str = Field(pattern=DIGEST_PATTERN)
+    proposal_object_digest: str = Field(pattern=DIGEST_PATTERN)
     expected_base_bundle_digest: str = Field(pattern=DIGEST_PATTERN)
     decision: ApprovalDecision
     decided_at: AwareDatetime
-    approved_at: AwareDatetime | None = None
-    source_job_id: str | None = Field(default=None, pattern=JOB_ID_PATTERN)
-    created_at: AwareDatetime
     rejection_code: str | None = Field(default=None, pattern=r"^[A-Z][A-Z0-9_]{0,127}$")
+
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "allOf": [
+                {
+                    "if": {"properties": {"decision": {"const": "approved"}}},
+                    "then": {"properties": {"rejection_code": {"type": "null"}}},
+                },
+                {
+                    "if": {"properties": {"decision": {"const": "rejected"}}},
+                    "then": {
+                        "required": ["rejection_code"],
+                        "properties": {
+                            "rejection_code": {
+                                "type": "string",
+                                "pattern": r"^[A-Z][A-Z0-9_]{0,127}$",
+                            }
+                        },
+                    },
+                },
+            ]
+        },
+    )
 
     @model_validator(mode="after")
     def validate_decision_fields(self) -> ProposalApprovalRecord:
-        if self.decision == "approved":
-            if self.approved_at != self.decided_at or self.rejection_code is not None:
-                raise ValueError("approved decisions require matching approved_at and no rejection")
-        elif self.approved_at is not None:
-            raise ValueError("rejected decisions cannot have approved_at")
-        if self.created_at != self.decided_at:
-            raise ValueError("created_at must equal decided_at")
+        if self.decision == "approved" and self.rejection_code is not None:
+            raise ValueError("approved decisions cannot have a rejection_code")
+        if self.decision == "rejected" and self.rejection_code is None:
+            raise ValueError("rejected decisions require a rejection_code")
         if self.approval_id != approval_identity(
             self.proposal_id,
-            self.proposal_digest,
+            self.proposal_object_digest,
             self.expected_base_bundle_digest,
-            self.decision,
         ):
-            raise ValueError("approval_id does not match bound decision")
+            raise ValueError("approval_id does not match bound proposal subject")
         return self
 
 
@@ -254,15 +271,13 @@ def _canonical_json_bytes(value: DomainModel | dict[str, Any] | tuple[Any, ...])
 
 def approval_identity(
     proposal_id: str,
-    proposal_digest: str,
+    proposal_object_digest: str,
     expected_base_bundle_digest: str,
-    decision: ApprovalDecision,
 ) -> str:
     bound = {
-        "decision": decision,
         "expected_base_bundle_digest": expected_base_bundle_digest,
-        "proposal_digest": proposal_digest,
         "proposal_id": proposal_id,
+        "proposal_object_digest": proposal_object_digest,
     }
     return "approval_" + hashlib.sha256(_canonical_json_bytes(bound)).hexdigest()[:32]
 
@@ -280,31 +295,30 @@ class ApprovalOrchestrator:
     def run(
         self,
         proposal_id: str,
-        proposal_digest: str,
+        proposal_object_digest: str,
         expected_base_bundle_digest: str,
         *,
         decision: ApprovalDecision = "approved",
-        source_job_id: str | None = None,
         rejection_code: str | None = None,
         now: datetime | None = None,
     ) -> ApprovalResult:
         decided_at = now or datetime.now(UTC)
         valid_input = (
             re.fullmatch(PROPOSAL_ID_PATTERN, proposal_id) is not None
-            and re.fullmatch(DIGEST_PATTERN, proposal_digest) is not None
+            and re.fullmatch(DIGEST_PATTERN, proposal_object_digest) is not None
             and re.fullmatch(DIGEST_PATTERN, expected_base_bundle_digest) is not None
             and decision in {"approved", "rejected"}
-            and (source_job_id is None or re.fullmatch(JOB_ID_PATTERN, source_job_id) is not None)
             and (
                 rejection_code is None
                 or re.fullmatch(r"^[A-Z][A-Z0-9_]{0,127}$", rejection_code) is not None
             )
             and not (decision == "approved" and rejection_code is not None)
+            and not (decision == "rejected" and rejection_code is None)
         )
         if decided_at.tzinfo is None or not valid_input:
             raise WorkflowError("INVALID_APPROVAL_INPUT")
         approval_id = approval_identity(
-            proposal_id, proposal_digest, expected_base_bundle_digest, decision
+            proposal_id, proposal_object_digest, expected_base_bundle_digest
         )
         try:
             proposal_stored = self.store.get(f"v1/proposals/{proposal_id}.json")
@@ -314,8 +328,8 @@ class ApprovalOrchestrator:
             raise WorkflowError("CONTROL_STORE_FAILURE") from exc
         if proposal_stored is None:
             raise WorkflowError("PROPOSAL_NOT_FOUND")
-        if _digest(proposal_stored.body) != proposal_digest:
-            raise WorkflowError("PROPOSAL_DIGEST_MISMATCH")
+        if _digest(proposal_stored.body) != proposal_object_digest:
+            raise WorkflowError("PROPOSAL_OBJECT_DIGEST_MISMATCH")
         try:
             proposal = CaptureProposal.model_validate_json(proposal_stored.body)
         except (ValueError, TypeError) as exc:
@@ -332,13 +346,10 @@ class ApprovalOrchestrator:
         record = ProposalApprovalRecord(
             approval_id=approval_id,
             proposal_id=proposal_id,
-            proposal_digest=proposal_digest,
+            proposal_object_digest=proposal_object_digest,
             expected_base_bundle_digest=expected_base_bundle_digest,
             decision=decision,
             decided_at=decided_at,
-            approved_at=decided_at if decision == "approved" else None,
-            source_job_id=source_job_id,
-            created_at=decided_at,
             rejection_code=rejection_code if decision == "rejected" else None,
         )
         approval_key = f"v1/approvals/{approval_id}.json"
@@ -360,10 +371,9 @@ class ApprovalOrchestrator:
         same_request = (
             existing.approval_id == approval_id
             and existing.proposal_id == proposal_id
-            and existing.proposal_digest == proposal_digest
+            and existing.proposal_object_digest == proposal_object_digest
             and existing.expected_base_bundle_digest == expected_base_bundle_digest
             and existing.decision == decision
-            and existing.source_job_id == source_job_id
             and existing.rejection_code == (rejection_code if decision == "rejected" else None)
             and canonical_approval_json(existing) == winner.body
         )

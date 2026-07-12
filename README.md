@@ -32,7 +32,12 @@ resumable without claiming exactly-once execution. It does not approve or commit
 
 The approval boundary adds immutable `ProposalApprovalRecord` 0.1.0 objects. Approval verifies the
 exact stored Proposal bytes, proposal identity and internal digest, ready status, and expected base
-bundle digest before a create-only write under a fixed control key. It does not load or mutate the
+bundle digest before a create-only write under a fixed control key. One exact Proposal subject has
+one immutable decision slot: the first create-only decision wins and an opposite decision returns
+`APPROVAL_CONFLICT`. `proposal_object_digest` names the exact stored bytes; the Proposal's own
+`proposal_digest` remains its separate internal semantic digest. Rejections require a sanitized
+`rejection_code`; `decided_at` is the only approval timestamp, and unverified `source_job_id` is not
+stored. It does not load or mutate the
 bundle and still performs no LearningCapture, Vault, Obsidian, artifact, or commit write.
 
 ```powershell

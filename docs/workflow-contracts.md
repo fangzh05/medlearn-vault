@@ -40,17 +40,26 @@ JobRecord remains 0.2.0. `succeeded` and `blocked` require both `proposal_id` an
 
 `ProposalApprovalRecord` 0.1.0 is the immutable boundary between proposal production and any future
 commit workflow. Its deterministic `approval_id` binds exactly the proposal ID, exact stored
-Proposal byte digest, expected base bundle digest, and `approved` or `rejected` decision. Records
+Proposal byte digest, and expected base bundle digest; it is independent of the decision. Records
 use canonical key-sorted compact UTF-8 JSON and are stored only at
-`v1/approvals/<approval_id>.json` with create-only semantics. An identical request reuses the
-canonical winner; malformed, noncanonical, or differently attributed bytes at that identity are an
-`APPROVAL_CONFLICT`.
+`v1/approvals/<approval_id>.json` with create-only semantics. The first decision wins the subject's
+single immutable slot. An identical decision reuses the canonical winner; an opposite decision, a
+different rejection code, or malformed/noncanonical bytes are `APPROVAL_CONFLICT`. Changing a
+decision requires a new Proposal or a future explicit supersession contract.
+
+`proposal_object_digest` is the SHA-256 digest of the exact stored Proposal JSON bytes;
+`CaptureProposal.proposal_digest` is a separate internal semantic digest and both are verified.
+`decided_at` is the only approval timestamp. Rejected decisions require a sanitized uppercase
+`rejection_code`; approved decisions require it to be null. `source_job_id` is deliberately not
+stored because this contract does not verify Job or Execution provenance. Consumers must recompute
+and verify `approval_id`; JSON Schema cannot prove the derived SHA-256 identity.
 
 Approval loads only `v1/proposals/<proposal_id>.json` from the fixed `medlearn-control` bucket. It
 checks the exact stored byte digest, Proposal contract and internal digest, Proposal ID, ready
 status, and base bundle digest before writing. It never reads or mutates a ContractBundle, Proposal,
 Review, `medlearn-vault`, Obsidian note, or persistent `LearningCapture`. Inputs cannot select a
 bucket, endpoint, repository ref, workflow, or object key.
+Approval is not permission for a future commit workflow to skip revalidation.
 
 ```bash
 medlearn workflow approve \
