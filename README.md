@@ -9,7 +9,7 @@ permanent identifiers, matching fingerprints, versioned JSON Schema, a small CLI
 tests, and CI. It performs no Vault writes and contains no LLM, database, Obsidian,
 or document-ingestion integration.
 
-Version 0.6.0 accepts an untrusted, structured `CaptureDraft` (workflow contract 0.3.0),
+Version 0.7.0 accepts an untrusted, structured `CaptureDraft` (workflow contract 0.3.0),
 reconciles it deterministically against a `ContractBundle`, and emits a reviewable
 `CaptureProposal`. ChatGPT Work performs language understanding; MedLearn calls no LLM API.
 Drafts contain only context, message IDs, short evidence excerpts, and extracted candidates—not
@@ -23,7 +23,12 @@ An isolated TypeScript Worker in `worker/` provides the first single-user cloud 
 handoff uses conditional R2 writes and a dispatch lease before calling the fixed GitHub workflow
 target. Python's `capture extract-intake` verifies the transport digest and emits deterministic
 CaptureDraft JSON plus its distinct canonical digest. The adapter contains no medical reasoning,
-approval, Vault writing, or real propose workflow.
+approval or Vault writing.
+
+The first idempotent `medlearn-propose.yml` workflow reads only the fixed `medlearn-control`
+bucket, verifies exact intake bytes, loads a repository-controlled bundle, and create-only writes a
+deterministic proposal and review. A leased `ProposalExecutionRecord` makes at-least-once dispatch
+resumable without claiming exactly-once execution. It does not approve or commit a LearningCapture.
 
 ```powershell
 cd worker

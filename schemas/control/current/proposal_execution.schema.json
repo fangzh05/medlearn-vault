@@ -1,0 +1,135 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "execution_version": {
+      "const": "0.1.0",
+      "default": "0.1.0",
+      "title": "Execution Version",
+      "type": "string"
+    },
+    "job_id": {
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$",
+      "title": "Job Id",
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "running",
+        "succeeded",
+        "blocked",
+        "failed"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "lease_owner": {
+      "anyOf": [
+        {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Lease Owner"
+    },
+    "lease_expires_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Lease Expires At"
+    },
+    "proposal_id": {
+      "anyOf": [
+        {
+          "pattern": "^proposal_[a-f0-9]{32}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Proposal Id"
+    },
+    "proposal_digest": {
+      "anyOf": [
+        {
+          "pattern": "^sha256:[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Proposal Digest"
+    },
+    "review_digest": {
+      "anyOf": [
+        {
+          "pattern": "^sha256:[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Review Digest"
+    },
+    "workflow_run_id": {
+      "anyOf": [
+        {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Workflow Run Id"
+    },
+    "error_code": {
+      "anyOf": [
+        {
+          "pattern": "^[A-Z][A-Z0-9_]{0,127}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Error Code"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "updated_at": {
+      "format": "date-time",
+      "title": "Updated At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "job_id",
+    "status",
+    "created_at",
+    "updated_at"
+  ],
+  "title": "ProposalExecutionRecord",
+  "type": "object"
+}

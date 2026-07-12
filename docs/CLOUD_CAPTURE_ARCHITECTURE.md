@@ -11,7 +11,7 @@ The first replaceable, single-user intake adapter is:
 
 ```text
 IntakeEnvelope → Cloudflare Worker → medlearn-control R2
-→ fixed GitHub workflow dispatch → future proposal producer
+→ fixed GitHub workflow dispatch → idempotent proposal producer
 ```
 
 ChatGPT Work's built-in model owns language understanding and structured extraction. Its
@@ -35,15 +35,31 @@ An idempotency claim fixes one `job_id` and intake digest. Every retry repairs a
 job before continuing. Dispatch uses a conditional 30-second lease: one concurrent caller owns the
 attempt, expired/interrupted leases and failed attempts are retryable, and accepted handoffs advance
 to `dispatched` with compare-and-swap. This is at-least-once dispatch, not an exactly-once claim;
-the future workflow must deduplicate by `job_id`. Allowed forward status transitions are
+the proposal workflow deduplicates by `job_id`. Allowed forward status transitions are
 `received → dispatched|failed|expired`, `dispatched → running|failed|expired`, and
-`running → succeeded|blocked|failed|expired`; `failed → dispatched|expired` supports recovery.
+`running → succeeded|blocked|failed|expired`; `failed → received → dispatched|failed` supports
+recovery without creating an invalid leased failure record.
 Terminal `succeeded`, `blocked`, and `expired` records reject stale overwrites.
 
 All `/v1/*` responses are `Cache-Control: no-store` and vary on Authorization. Missing or weak
 secrets/bindings fail closed with sanitized `503 SERVICE_MISCONFIGURED`.
 
 These services are replaceable adapters, not core dependencies. This slice intentionally contains
-no GitHub workflow implementation, approval, commit, Vault write, Obsidian integration, Skill,
+one proposal-only GitHub workflow but no approval, commit, Vault write, Obsidian integration, Skill,
 iOS Shortcut, MCP, user accounts, tenants, D1, or Durable Objects. The `medlearn-vault` bucket is
 not bound or accessed.
+
+## Proposal workflow
+
+`medlearn-propose.yml` accepts only `job_id`, `intake_object_key`, and `intake_digest`. Repository,
+ref, bucket, bundle path, workflow, and permissions are not client inputs. It validates the stored
+JobRecord, exact IntakeEnvelope bytes, and configured ContractBundle before leasing
+`v1/executions/<job_id>.json`.
+
+The bundle path comes only from repository variable `MEDLEARN_PROPOSE_BUNDLE_PATH`. Empty,
+absolute, traversing, escaping-symlink, missing, and invalid bundle directories fail closed. There
+is deliberately no GERD or COPD production fallback.
+
+The workflow advances `dispatched → running`, then create-only writes proposal JSON and review
+Markdown. Ready proposals finish as `succeeded`; review-blocked proposals finish as `blocked`
+while the workflow itself succeeds. It uses no Actions artifact or step summary.

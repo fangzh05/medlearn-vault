@@ -23,6 +23,14 @@ Worker/Python contract. The intake digest hashes exact HTTP bytes. After verific
 CaptureDraft JSON, and reports the canonical draft digest. `CaptureProposal.draft_digest` continues
 to mean only that canonical CaptureDraft digest.
 
+`ProposalExecutionRecord` 0.1.0 is a control-plane record, not a persistent medical aggregate. It
+leases proposal production by `job_id`, records only output identities and digests, and ends as
+`succeeded`, `blocked`, or sanitized `failed`. Terminal reruns recompute deterministic bytes and
+verify the existing proposal and review; mismatched bytes are `PROPOSAL_COLLISION`.
+
+JobRecord remains 0.2.0. `succeeded` and `blocked` require both `proposal_id` and
+`workflow_run_id`; `failed` requires `error_code`; terminal records cannot retain dispatch leases.
+
 Concept terms for an observed misconception and `correction_terms` are resolved independently.
 Authoritative correction matching uses the correction terms and requires an exact statement and
 concept-set match to an active supported source-backed or verified-reference claim.

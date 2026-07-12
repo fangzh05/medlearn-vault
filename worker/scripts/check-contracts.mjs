@@ -8,7 +8,7 @@ const read = (path) => JSON.parse(readFileSync(new URL(path, import.meta.url), "
 const ajv = new Ajv({ strict: false, allErrors: true });
 addFormats(ajv);
 const envelopeSchema = read("../../schemas/workflow/current/intake_envelope.schema.json");
-const jobSchema = read("../contracts/job-record.schema.json");
+const jobSchema = read("../../schemas/control/current/job_record.schema.json");
 const fixture = read("../../examples/intake/manual-copd.json");
 const generatedUrl = new URL("../src/generated/intake-validator.js", import.meta.url);
 const normalizeEol = (text) => text.replace(/\r\n/g, "\n");
