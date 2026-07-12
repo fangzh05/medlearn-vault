@@ -15,3 +15,4 @@ coverage/
 .dev.vars.*
 .env
 .env.*
+**/.obsidian/plugins/remotely-save/data.json
