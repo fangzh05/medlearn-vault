@@ -9,7 +9,7 @@ permanent identifiers, matching fingerprints, versioned JSON Schema, a small CLI
 tests, and CI. It performs no Vault writes and contains no LLM, database, Obsidian,
 or document-ingestion integration.
 
-Version 0.8.3 accepts an untrusted, structured `CaptureDraft` (workflow contract 0.3.0),
+Version 0.8.4 accepts an untrusted, structured `CaptureDraft` (workflow contract 0.3.0),
 reconciles it deterministically against a `ContractBundle`, and emits a reviewable
 `CaptureProposal`. ChatGPT Work performs language understanding; MedLearn calls no LLM API.
 Drafts contain only context, message IDs, short evidence excerpts, and extracted candidates—not
@@ -40,9 +40,9 @@ one immutable decision slot: the first create-only decision wins and an opposite
 stored. It does not load or mutate the
 bundle and still performs no LearningCapture, Vault, Obsidian, artifact, or commit write.
 
-`medlearn-approve.yml` is the bounded, manually dispatched control-plane approval runner. Its
-documentation prepares a separate `medlearn-vault` R2 publication plane for future Remotely Save
-synchronization, but this release does not write it or include any Vault credential.
+`medlearn-approve.yml` is the bounded, manually dispatched control-plane approval runner. It
+requires an explicit decision and exact proposal-ID confirmation before exposing its fixed
+control-plane credentials. This release adds no Vault access or credential.
 
 `medlearn-verify-approval.yml` attests an existing Approval, Proposal, Job, Execution, and Review
 through fixed `medlearn-control` keys. It is read-only: it writes no attestation object, does not

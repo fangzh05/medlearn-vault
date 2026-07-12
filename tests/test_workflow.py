@@ -1109,21 +1109,15 @@ def test_workflow_yaml_has_fixed_minimal_authority() -> None:
         "cancel-in-progress": "false",
     }
     propose_job = data["jobs"]["propose"]
+    assert propose_job["if"] == "github.ref == 'refs/heads/main'"
     assert propose_job["timeout-minutes"] == "15"
-    assert set(propose_job["env"]) == {
-        "CONTROL_R2_ENDPOINT",
-        "CONTROL_R2_ACCESS_KEY_ID",
-        "CONTROL_R2_SECRET_ACCESS_KEY",
-        "MEDLEARN_PROPOSE_BUNDLE_PATH",
-    }
-    assert propose_job["env"]["MEDLEARN_PROPOSE_BUNDLE_PATH"] == (
-        "${{ vars.MEDLEARN_PROPOSE_BUNDLE_PATH }}"
-    )
+    assert "env" not in propose_job
     action_steps = [step for step in propose_job["steps"] if "uses" in step]
     assert action_steps
     assert all(re.fullmatch(r"[^@]+@[0-9a-f]{40}", step["uses"]) for step in action_steps)
     checkout = next(step for step in action_steps if step["uses"].startswith("actions/checkout@"))
     assert checkout["with"]["persist-credentials"] == "false"
+    assert checkout["with"]["ref"] == "main"
     install_step = next(
         step for step in propose_job["steps"] if "--require-hashes" in step.get("run", "")
     )
@@ -1136,10 +1130,30 @@ def test_workflow_yaml_has_fixed_minimal_authority() -> None:
     )
     assert "${{ inputs." not in build_step["run"]
     assert set(build_step["env"]) == {
+        "CONTROL_R2_ENDPOINT",
+        "CONTROL_R2_ACCESS_KEY_ID",
+        "CONTROL_R2_SECRET_ACCESS_KEY",
+        "MEDLEARN_PROPOSE_BUNDLE_PATH",
         "MEDLEARN_JOB_ID",
         "MEDLEARN_INTAKE_OBJECT_KEY",
         "MEDLEARN_INTAKE_DIGEST",
     }
+    assert build_step["env"]["MEDLEARN_PROPOSE_BUNDLE_PATH"] == (
+        "${{ vars.MEDLEARN_PROPOSE_BUNDLE_PATH }}"
+    )
+    assert {
+        "CONTROL_R2_ENDPOINT",
+        "CONTROL_R2_ACCESS_KEY_ID",
+        "CONTROL_R2_SECRET_ACCESS_KEY",
+    } <= set(build_step["env"])
+    for step in propose_job["steps"]:
+        if step is not build_step:
+            assert not {
+                "CONTROL_R2_ENDPOINT",
+                "CONTROL_R2_ACCESS_KEY_ID",
+                "CONTROL_R2_SECRET_ACCESS_KEY",
+                "MEDLEARN_PROPOSE_BUNDLE_PATH",
+            } & set(step.get("env", {}))
     assert "actions/upload-artifact" not in text
     assert "GITHUB_STEP_SUMMARY" not in text
     assert "ACTIONS_STEP_DEBUG" not in text
@@ -1160,6 +1174,7 @@ def test_approval_workflow_yaml_is_control_only_and_argument_safe() -> None:
         "proposal_id",
         "proposal_object_digest",
         "expected_base_bundle_digest",
+        "confirmation",
         "decision",
         "rejection_code",
     }
@@ -1167,8 +1182,8 @@ def test_approval_workflow_yaml_is_control_only_and_argument_safe() -> None:
         "description": "Immutable decision for this Proposal",
         "required": "true",
         "type": "choice",
-        "options": ["approved", "rejected"],
-        "default": "approved",
+        "options": ["select_decision", "approved", "rejected"],
+        "default": "select_decision",
     }
     assert dispatch["inputs"]["rejection_code"] == {
         "description": "Required uppercase code when decision is rejected",
@@ -1182,17 +1197,15 @@ def test_approval_workflow_yaml_is_control_only_and_argument_safe() -> None:
         "cancel-in-progress": "false",
     }
     approve_job = data["jobs"]["approve"]
+    assert approve_job["if"] == "github.ref == 'refs/heads/main'"
     assert approve_job["timeout-minutes"] == "10"
-    assert set(approve_job["env"]) == {
-        "CONTROL_R2_ENDPOINT",
-        "CONTROL_R2_ACCESS_KEY_ID",
-        "CONTROL_R2_SECRET_ACCESS_KEY",
-    }
+    assert "env" not in approve_job
     action_steps = [step for step in approve_job["steps"] if "uses" in step]
     assert action_steps
     assert all(re.fullmatch(r"[^@]+@[0-9a-f]{40}", step["uses"]) for step in action_steps)
     checkout = next(step for step in action_steps if step["uses"].startswith("actions/checkout@"))
     assert checkout["with"]["persist-credentials"] == "false"
+    assert checkout["with"]["ref"] == "main"
     install_step = next(
         step for step in approve_job["steps"] if "--require-hashes" in step.get("run", "")
     )
@@ -1200,6 +1213,19 @@ def test_approval_workflow_yaml_is_control_only_and_argument_safe() -> None:
         "python -m pip install --require-hashes -r requirements/workflow.txt",
         "python -m pip install --no-build-isolation --no-deps .",
     ]
+    preflight = next(
+        step
+        for step in approve_job["steps"]
+        if step.get("name") == "Validate approval confirmation"
+    )
+    assert set(preflight["env"]) == {
+        "MEDLEARN_PROPOSAL_ID",
+        "MEDLEARN_CONFIRMATION",
+        "MEDLEARN_DECISION",
+    }
+    assert "APPROVAL_DECISION_REQUIRED" in preflight["run"]
+    assert "APPROVAL_CONFIRMATION_MISMATCH" in preflight["run"]
+    assert "medlearn" not in preflight["run"]
     run_step = next(
         step
         for step in approve_job["steps"]
@@ -1210,6 +1236,19 @@ def test_approval_workflow_yaml_is_control_only_and_argument_safe() -> None:
     assert "${{ inputs." not in run_step["run"]
     assert 'if [[ -n "$MEDLEARN_REJECTION_CODE" ]]; then' in run_step["run"]
     assert 'args+=(--rejection-code "$MEDLEARN_REJECTION_CODE")' in run_step["run"]
+    assert {
+        "CONTROL_R2_ENDPOINT",
+        "CONTROL_R2_ACCESS_KEY_ID",
+        "CONTROL_R2_SECRET_ACCESS_KEY",
+    } <= set(run_step["env"])
+    assert "MEDLEARN_CONFIRMATION" not in run_step["env"]
+    for step in approve_job["steps"]:
+        if step is not run_step:
+            assert not {
+                "CONTROL_R2_ENDPOINT",
+                "CONTROL_R2_ACCESS_KEY_ID",
+                "CONTROL_R2_SECRET_ACCESS_KEY",
+            } & set(step.get("env", {}))
     assert "actions/upload-artifact" not in text
     assert "GITHUB_STEP_SUMMARY" not in text
     assert not re.search(r"run:\s*.*\$\{\{\s*inputs\.", text)
@@ -1219,7 +1258,7 @@ def test_approval_workflow_yaml_is_control_only_and_argument_safe() -> None:
         "CONTROL_R2_SECRET_ACCESS_KEY",
     }
     assert not re.search(r"(?:MEDLEARN_VAULT|VAULT_R2|RCLONE)", text, re.IGNORECASE)
-    assert not re.search(r"(?:endpoint|bucket|object_key|repository|ref|workflow)\s*:", text)
+    assert not re.search(r"(?:endpoint|bucket|object_key|repository|workflow)\s*:", text)
     for forbidden in ("medlearn-vault", "obsidian", "remotely save", "d1", "vps", "git commit"):
         assert forbidden not in text.lower()
 
