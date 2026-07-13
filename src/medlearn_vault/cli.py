@@ -245,11 +245,15 @@ def sync_install_windows(
 def sync_schedule_install(
     interval_minutes: Annotated[int, typer.Option("--interval-minutes")] = 15,
     what_if: Annotated[bool, typer.Option("--what-if")] = False,
+    elevated: Annotated[bool, typer.Option("--elevated")] = False,
     json_output: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
     try:
         _sync_output(
-            install_schedule(interval_minutes=interval_minutes, what_if=what_if), json_output
+            install_schedule(
+                interval_minutes=interval_minutes, what_if=what_if, elevated=elevated
+            ),
+            json_output,
         )
     except SyncError as exc:
         _sync_error(exc, json_output)
@@ -264,9 +268,12 @@ def sync_schedule_status(json_output: Annotated[bool, typer.Option("--json")] = 
 
 
 @sync_schedule_app.command("remove")
-def sync_schedule_remove(json_output: Annotated[bool, typer.Option("--json")] = False) -> None:
+def sync_schedule_remove(
+    elevated: Annotated[bool, typer.Option("--elevated")] = False,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
     try:
-        _sync_output(remove_schedule(), json_output)
+        _sync_output(remove_schedule(elevated=elevated), json_output)
     except SyncError as exc:
         _sync_error(exc, json_output)
 

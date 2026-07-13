@@ -85,6 +85,38 @@ def test_sync_error_json_is_compact_ascii_without_traceback(
     assert json.loads(output) == {"error_code": "SYNC_INSTALL_FAILURE", "status": "error"}
 
 
+def test_sync_schedule_elevation_is_explicit(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[dict[str, object]] = []
+
+    def install(**kwargs: object) -> dict[str, object]:
+        calls.append(kwargs)
+        return {"status": "installed"}
+
+    monkeypatch.setattr(cli, "install_schedule", install)
+    assert runner.invoke(app, ["sync", "schedule", "install", "--json"]).exit_code == 0
+    assert runner.invoke(
+        app, ["sync", "schedule", "install", "--elevated", "--json"]
+    ).exit_code == 0
+    assert calls == [
+        {"interval_minutes": 15, "what_if": False, "elevated": False},
+        {"interval_minutes": 15, "what_if": False, "elevated": True},
+    ]
+
+
+def test_sync_schedule_elevation_required_json(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fail(**_: object) -> dict[str, object]:
+        raise SyncError("SYNC_SCHEDULE_ELEVATION_REQUIRED")
+
+    monkeypatch.setattr(cli, "install_schedule", fail)
+    result = runner.invoke(app, ["sync", "schedule", "install", "--json"])
+
+    assert result.exit_code == 1
+    assert json.loads(result.stdout) == {
+        "error_code": "SYNC_SCHEDULE_ELEVATION_REQUIRED",
+        "status": "error",
+    }
+
+
 @pytest.mark.parametrize(
     ("command", "service"),
     [

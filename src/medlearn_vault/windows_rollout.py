@@ -21,6 +21,7 @@ from medlearn_vault.windows_secrets import load_token
 TASK_NAME = "MedLearn Vault Sync"
 DEFAULT_INTERVAL_MINUTES = 15
 LOG_RETENTION_COUNT = 50
+_ACCESS_DENIED_EXIT = 5
 
 
 @dataclass(frozen=True)
@@ -349,6 +350,58 @@ def _schedule_ready(item: SyncPaths) -> None:
     load_token(item.credential)
 
 
+def _is_access_denied(exc: BaseException) -> bool:
+    if getattr(exc, "winerror", None) == _ACCESS_DENIED_EXIT:
+        return True
+    if isinstance(exc, subprocess.CalledProcessError):
+        return exc.returncode == _ACCESS_DENIED_EXIT
+    return False
+
+
+def _run_task_script(
+    script: str, root: Path, *, elevated: bool
+) -> subprocess.CompletedProcess[str]:
+    command = ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command"]
+    if not elevated:
+        return subprocess.run(command + [script], capture_output=True, text=True, check=True)
+
+    helper = root / f".medlearn-schedule-{uuid.uuid4().hex}.ps1"
+    _atomic_text(helper, script)
+    arguments = _windows_action_args(
+        ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(helper)]
+    )
+    launcher = (
+        "$ErrorActionPreference = 'Stop'; $process = Start-Process -FilePath 'powershell.exe'"
+        f" -ArgumentList {_powershell_quote(arguments)} -Verb RunAs -Wait -PassThru;"
+        " exit $process.ExitCode"
+    )
+    try:
+        return subprocess.run(command + [launcher], capture_output=True, text=True, check=True)
+    finally:
+        helper.unlink(missing_ok=True)
+
+
+def _registration_script(action_args: str, interval_minutes: int) -> str:
+    return (
+        "$ErrorActionPreference = 'Stop'; $action = New-ScheduledTaskAction"
+        " -Execute 'powershell.exe'"
+        " -Argument "
+        + _powershell_quote(action_args)
+        + "; $logon = New-ScheduledTaskTrigger -AtLogOn"
+        + "; $start = (Get-Date).AddMinutes(1)"
+        + "; $repeat = New-ScheduledTaskTrigger -Once -At $start"
+        + f" -RepetitionInterval (New-TimeSpan -Minutes {interval_minutes})"
+        + " -RepetitionDuration (New-TimeSpan -Days 3650)"
+        + "; $settings = New-ScheduledTaskSettingsSet"
+        + " -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 5)"
+        + "; $user = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name"
+        + "; try { Register-ScheduledTask -TaskName 'MedLearn Vault Sync' -Action $action"
+        + " -Trigger @($logon,$repeat) -Settings $settings -User $user"
+        + " -RunLevel Limited -Force | Out-Null; exit 0 } catch {"
+        + " if ($_.FullyQualifiedErrorId -match '0x80070005') { exit 5 }; exit 1 }"
+    )
+
+
 # ---------------------------------------------------------------------------
 # install_schedule — uses subprocess.list2cmdline for the action argument
 # ---------------------------------------------------------------------------
@@ -358,6 +411,7 @@ def install_schedule(
     *,
     interval_minutes: int = DEFAULT_INTERVAL_MINUTES,
     what_if: bool = False,
+    elevated: bool = False,
     p: SyncPaths | None = None,
 ) -> dict[str, object]:
     item = p or paths()
@@ -381,37 +435,23 @@ def install_schedule(
     # 1.  Serialize for the Windows command line (powershell.exe argv).
     action_args = _windows_action_args([str(v) for v in arguments])
 
-    # 2.  Embed the serialized string inside the PowerShell source.
-    #     _powershell_quote wraps in single quotes and escapes internal '.
-    script = (
-        "$action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "
-        + _powershell_quote(action_args)
-        + "; $logon = New-ScheduledTaskTrigger -AtLogOn"
-        + "; $start = (Get-Date).AddMinutes(1)"
-        + "; $repeat = New-ScheduledTaskTrigger -Once -At $start"
-        + f" -RepetitionInterval (New-TimeSpan -Minutes {interval_minutes})"
-        + " -RepetitionDuration (New-TimeSpan -Days 3650)"
-        + "; $settings = New-ScheduledTaskSettingsSet"
-        + " -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 5)"
-        + "; $principal = New-ScheduledTaskPrincipal -UserId "
-        + "([System.Security.Principal.WindowsIdentity]::GetCurrent().Name)"
-        + " -LogonType Interactive -RunLevel Limited"
-        + "; Register-ScheduledTask -TaskName 'MedLearn Vault Sync' -Action $action"
-        + " -Trigger @($logon,$repeat) -Settings $settings -Principal $principal -Force | Out-Null"
-    )
+    script = _registration_script(action_args, interval_minutes)
     try:
         _atomic_json(schedule_metadata, definition)
         _atomic_text(wrapper, scheduled_wrapper(item.home, client))
-        subprocess.run(
-            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script], check=True
-        )
+        _run_task_script(script, wrapper.parent, elevated=elevated)
     except (OSError, subprocess.SubprocessError) as exc:
         try:
             _restore_file(schedule_metadata, old_metadata)
             _restore_file(wrapper, old_wrapper)
         except OSError:
             pass
-        raise SyncError("SYNC_SCHEDULE_FAILURE") from exc
+        code = (
+            "SYNC_SCHEDULE_ELEVATION_REQUIRED"
+            if _is_access_denied(exc) and not elevated
+            else "SYNC_SCHEDULE_FAILURE"
+        )
+        raise SyncError(code) from exc
     return {"status": "installed", **definition}
 
 
@@ -448,6 +488,10 @@ $result = @{{
     last_task_result = 0
     executable = $action.Execute
     arguments = $action.Arguments
+    principal_user_id = $task.Principal.UserId
+    principal_logon_type = $task.Principal.LogonType.ToString()
+    principal_run_level = $task.Principal.RunLevel.ToString()
+    trigger_count = @($task.Triggers).Count
 }}
 if ($info) {{
     if ($info.LastRunTime -and $info.LastRunTime.Year -gt 2000) {{
@@ -521,6 +565,7 @@ if (-not $task) {{
 try {{
     Unregister-ScheduledTask -TaskName '{TASK_NAME}' -Confirm:$false
 }} catch {{
+    if ($_.FullyQualifiedErrorId -match '0x80070005') {{ exit 5 }}
     Write-Output 'VERIFY_FAILED'
     exit 2
 }}
@@ -534,24 +579,35 @@ exit 0
 """
 
 
-def remove_schedule() -> dict[str, object]:
+def remove_schedule(*, elevated: bool = False) -> dict[str, object]:
     if sys.platform != "win32":
         raise SyncError("SYNC_UNSUPPORTED_PLATFORM")
 
     schedule_metadata_path = install_root() / "schedule.json"
     wrapper_path = install_root() / "run-scheduled.ps1"
 
-    try:
-        ps_cmd = [
-            "powershell.exe", "-NoProfile", "-NonInteractive",
-            "-Command", _remove_schedule_script(),
-        ]
-        proc = subprocess.run(
-            ps_cmd, capture_output=True, text=True, check=True, timeout=15,
-        )
-        status = proc.stdout.strip()
-    except subprocess.CalledProcessError as exc:
-        raise SyncError("SYNC_SCHEDULE_FAILURE") from exc
+    if elevated:
+        try:
+            was_registered = bool(schedule_status().get("registered"))
+            _run_task_script(_remove_schedule_script(), wrapper_path.parent, elevated=True)
+            if schedule_status().get("registered"):
+                raise SyncError("SYNC_SCHEDULE_FAILURE")
+        except SyncError:
+            raise
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise SyncError("SYNC_SCHEDULE_FAILURE") from exc
+        status = "REMOVED" if was_registered else "ABSENT"
+    else:
+        try:
+            proc = _run_task_script(_remove_schedule_script(), wrapper_path.parent, elevated=False)
+            status = proc.stdout.strip()
+        except (OSError, subprocess.SubprocessError) as exc:
+            code = (
+                "SYNC_SCHEDULE_ELEVATION_REQUIRED"
+                if _is_access_denied(exc)
+                else "SYNC_SCHEDULE_FAILURE"
+            )
+            raise SyncError(code) from exc
 
     if status == "ABSENT":
         # Task was never registered or already removed — clean up stale local

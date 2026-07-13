@@ -331,6 +331,7 @@ def test_schedule_registers_and_removes_without_vault_writes(
 
     monkeypatch.setattr(windows_rollout.subprocess, "run", run)
     installed = windows_rollout.install_schedule(p=home)
+    elevated_installed = windows_rollout.install_schedule(p=home, elevated=True)
 
     # Removal: mock PowerShell to return REMOVED
     def run_remove(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
@@ -342,6 +343,7 @@ def test_schedule_registers_and_removes_without_vault_writes(
     removed = windows_rollout.remove_schedule()
 
     assert installed["status"] == "installed"
+    assert elevated_installed["status"] == "installed"
     assert removed["status"] == "removed"
     assert all("token" not in " ".join(command).lower() for command in [])  # already verified
     assert not (Path(config.vault_path) / "MedLearn").exists()
@@ -354,6 +356,16 @@ def test_schedule_registers_and_removes_without_vault_writes(
         # wrapper path, not a bare PowerShell-quoted path.
         assert "-File" in register_script
         assert "run-scheduled.ps1" in register_script
+        assert "-User $user" in register_script
+        assert "-RunLevel Limited" in register_script
+        assert "New-ScheduledTaskPrincipal" not in register_script
+        assert "Start-Process" not in register_script
+        assert "-Verb RunAs" not in register_script
+        elevated_launcher = captured_scripts[1]
+        assert "Start-Process" in elevated_launcher
+        assert "-Verb RunAs" in elevated_launcher
+        assert "token" not in elevated_launcher.lower()
+        assert not list(root.glob(".medlearn-schedule-*.ps1"))
 
 
 def test_failed_schedule_registration_restores_previous_definition(
@@ -387,11 +399,15 @@ def test_failed_schedule_registration_restores_previous_definition(
     wrapper.write_bytes(old_wrapper)
 
     def fail(*_: object, **__: object) -> None:
-        raise subprocess.CalledProcessError(1, "powershell.exe")
+        raise subprocess.CalledProcessError(5, "powershell.exe", stderr="Access is denied.")
 
     monkeypatch.setattr(windows_rollout.subprocess, "run", fail)
-    with pytest.raises(SyncError, match="SYNC_SCHEDULE_FAILURE"):
+    with pytest.raises(SyncError, match="SYNC_SCHEDULE_ELEVATION_REQUIRED"):
         windows_rollout.install_schedule(p=home)
+    assert metadata.read_bytes() == old_metadata
+    assert wrapper.read_bytes() == old_wrapper
+    with pytest.raises(SyncError, match="SYNC_SCHEDULE_FAILURE"):
+        windows_rollout.install_schedule(p=home, elevated=True)
     assert metadata.read_bytes() == old_metadata
     assert wrapper.read_bytes() == old_wrapper
 
@@ -604,6 +620,9 @@ class TestActionArgumentInRegisteredScript:
         assert "sync client" in inner
         # The space-containing path must be double-quoted inside.
         assert '"' in inner
+        assert "-User $user" in script
+        assert "-RunLevel Limited" in script
+        assert "New-ScheduledTaskPrincipal" not in script
 
     def test_chinese_path_survives_full_round_trip(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -642,6 +661,8 @@ class TestActionArgumentInRegisteredScript:
         assert "同步" in script
         assert "客户端" in script
         assert "run-scheduled.ps1" in script
+        assert "-User $user" in script
+        assert "-RunLevel Limited" in script
 
 
 # ===================================================================
@@ -689,6 +710,10 @@ class TestScheduleStatus:
                 '-NoProfile -NonInteractive -ExecutionPolicy Bypass '
                 '-File "C:\\wrapper.ps1"'
             ),
+            "principal_user_id": "test-user",
+            "principal_logon_type": "Interactive",
+            "principal_run_level": "Limited",
+            "trigger_count": 2,
         }
 
         def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
@@ -706,6 +731,10 @@ class TestScheduleStatus:
         assert status["next_run_time"] == "2026-07-13T08:15:00.0000000+08:00"
         assert status["last_task_result"] == 0
         assert status["executable"] == "powershell.exe"
+        assert status["principal_user_id"] == "test-user"
+        assert status["principal_logon_type"] == "Interactive"
+        assert status["principal_run_level"] == "Limited"
+        assert status["trigger_count"] == 2
 
     def test_task_running_state(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -991,7 +1020,7 @@ class TestScheduleRemoval:
             raise subprocess.CalledProcessError(5, "powershell.exe", stderr="Access is denied.")
 
         monkeypatch.setattr(windows_rollout.subprocess, "run", run)
-        with pytest.raises(SyncError, match="SYNC_SCHEDULE_FAILURE"):
+        with pytest.raises(SyncError, match="SYNC_SCHEDULE_ELEVATION_REQUIRED"):
             windows_rollout.remove_schedule()
         assert (root / "schedule.json").exists()
 
@@ -1310,6 +1339,24 @@ class TestAcceptanceScriptHardening:
         assert '$Script:TaskCreatedByThisRun = $true' in source, (
             "TaskCreatedByThisRun must be set to $true after successful registration"
         )
+
+    def test_task_registration_verifies_limited_current_user_definition(self) -> None:
+        source = _full_acceptance_source(_acceptance_script())
+        assert "TaskPrincipalVerified" in source
+        assert "TaskDefinitionVerified" in source
+        assert "LogonType.ToString() -ne 'Interactive'" in source
+        assert "RunLevel.ToString() -ne 'Limited'" in source
+        assert "MSFT_TaskLogonTrigger" in source
+        assert "MSFT_TaskTimeTrigger" in source
+        assert "run-scheduled.ps1" in source
+
+    def test_acceptance_escalates_only_the_schedule_step_when_required(self) -> None:
+        source = _full_acceptance_source(_acceptance_script())
+        assert "SYNC_SCHEDULE_ELEVATION_REQUIRED" in source
+        assert "Type ELEVATE to approve registration only" in source
+        assert "sync schedule install --interval-minutes 15 --elevated --json" in source
+        assert "TaskInstalledWithElevation" in source
+        assert "sync', 'schedule', 'remove', '--json'" in source
 
     def test_cleanup_conditional_on_task_created(self) -> None:
         """Cleanup must only remove task when created by this run."""

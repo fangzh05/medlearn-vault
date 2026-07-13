@@ -65,12 +65,27 @@ After a successful first pull, use `& $client sync pull --json` for ordinary man
 client with the configured `MEDLEARN_HOME`, limits runs to five minutes, ignores overlapping task
 starts, and also relies on the per-state-directory client lock. Registration is blocked until
 configuration, DPAPI authentication, a successful dry-run, and a successful first real pull exist.
+It registers for the current user with Interactive logon and RunLevel Limited. Client installation,
+configuration, login, and manual pulls never require Administrator privileges; some machine policies
+may require one-time UAC approval for this optional registration or removal only.
 
 ```powershell
 & $client sync schedule install --what-if --json
 & $client sync schedule install --interval-minutes 15 --json
 & $client sync schedule status --json
 & $client sync schedule remove --json
+```
+
+If machine policy returns `SYNC_SCHEDULE_ELEVATION_REQUIRED`, client installation, configuration,
+login, and manual `sync pull` remain non-admin. Re-run only the optional task operation below and
+approve its UAC prompt; it elevates a generated local registration/removal script, never the whole
+client or acceptance workflow. The task still runs as the original current user with Interactive
+logon and RunLevel Limited. No token, DPAPI data, or environment dump is passed to the elevated
+process.
+
+```powershell
+& $client sync schedule install --interval-minutes 15 --elevated --json
+& $client sync schedule remove --elevated --json
 ```
 
 Removing the task never deletes Vault content. The latest 50 UTF-8-without-BOM JSON lines are retained
@@ -102,6 +117,10 @@ When the task is present:
 | `last_task_result` | HRESULT of the last execution (`0` = success) |
 | `executable` | `"powershell.exe"` |
 | `arguments` | The Windows command-line argument string |
+| `principal_user_id` | Registered current-user identity |
+| `principal_logon_type` | `Interactive` |
+| `principal_run_level` | `Limited` |
+| `trigger_count` | Logon plus periodic time trigger count |
 | `wrapper_path` | Configured path to `run-scheduled.ps1` (from local metadata) |
 | `interval_minutes` | Configured repetition interval (from local metadata) |
 

@@ -260,6 +260,8 @@ $Gate = @{
     FirstPullCompleted      = $false
     TaskPreflightPassed     = $false
     TaskInstalled           = $false
+    TaskPrincipalVerified   = $false
+    TaskDefinitionVerified  = $false
     TaskStatusValid         = $false
     TaskStarted             = $false
     TaskObserved            = $false
@@ -348,6 +350,7 @@ $ObsidianDir = Join-Path $VaultPath '.obsidian'
 
 # Track whether THIS invocation created the task.
 $Script:TaskCreatedByThisRun = $false
+$Script:TaskInstalledWithElevation = $false
 
 # ---------------------------------------------------------------------------
 # Safe emergency task cleanup — only called when we created the task and
@@ -385,7 +388,9 @@ function Invoke-ControlledCleanup {
     if ($Script:TaskCreatedByThisRun) {
         Write-Host '  Removing scheduled task (created by this run)...'
         try {
-            $removeResult = & $clientExe sync schedule remove --json 2>&1
+            $removeArgs = @('sync', 'schedule', 'remove', '--json')
+            if ($Script:TaskInstalledWithElevation) { $removeArgs += '--elevated' }
+            $removeResult = & $clientExe @removeArgs 2>&1
             if ($LASTEXITCODE -ne 0) {
                 throw "sync schedule remove exited $LASTEXITCODE : $removeResult"
             }
@@ -558,7 +563,20 @@ try {
 
     # Real install.
     $scheduleResult = & $clientExe sync schedule install --interval-minutes 15 --json 2>&1
-    if ($LASTEXITCODE -ne 0) { throw "Schedule install failed: $scheduleResult" }
+    if ($LASTEXITCODE -ne 0) {
+        $scheduleError = ($scheduleResult | Out-String).Trim() | ConvertFrom-Json
+        if ($scheduleError.error_code -ne 'SYNC_SCHEDULE_ELEVATION_REQUIRED') {
+            throw "Schedule install failed: $scheduleResult"
+        }
+        Write-Host '  Task Scheduler requires one-time UAC approval for registration.' -ForegroundColor Yellow
+        $approveElevation = Read-Host 'Type ELEVATE to approve registration only (or anything else to abort)'
+        if ($approveElevation -ne 'ELEVATE') {
+            throw 'Scheduled Task registration was not approved.'
+        }
+        $scheduleResult = & $clientExe sync schedule install --interval-minutes 15 --elevated --json 2>&1
+        if ($LASTEXITCODE -ne 0) { throw "Elevated schedule install failed: $scheduleResult" }
+        $Script:TaskInstalledWithElevation = $true
+    }
     $scheduleInstalledObj = ($scheduleResult | Out-String).Trim() | ConvertFrom-Json
     Write-Host "  schedule status: $($scheduleInstalledObj.status)"
 
@@ -566,6 +584,30 @@ try {
     if (-not (Test-AcceptanceTaskExists)) {
         throw "Task registration reported success but task not found via Get-ScheduledTask."
     }
+    $registeredTask = Get-ScheduledTask -TaskName $Script:TaskName -ErrorAction Stop
+    $currentIdentity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $currentAccount = $currentIdentity.Split('\')[-1]
+    if ($registeredTask.Principal.UserId -notin @($currentIdentity, $currentAccount)) {
+        throw "Task principal is not the current user: $($registeredTask.Principal.UserId)"
+    }
+    if ($registeredTask.Principal.LogonType.ToString() -ne 'Interactive') {
+        throw "Task LogonType is not Interactive: $($registeredTask.Principal.LogonType)"
+    }
+    if ($registeredTask.Principal.RunLevel.ToString() -ne 'Limited') {
+        throw "Task RunLevel is not Limited: $($registeredTask.Principal.RunLevel)"
+    }
+    Set-Gate 'TaskPrincipalVerified'
+    $triggerTypes = @($registeredTask.Triggers | ForEach-Object { $_.CimClass.CimClassName })
+    if ('MSFT_TaskLogonTrigger' -notin $triggerTypes -or 'MSFT_TaskTimeTrigger' -notin $triggerTypes) {
+        throw "Task triggers are incomplete: $($triggerTypes -join ', ')"
+    }
+    $expectedWrapperPath = Join-Path $InstallRoot 'run-scheduled.ps1'
+    $registeredAction = $registeredTask.Actions | Select-Object -First 1
+    if ($registeredAction.Execute -notmatch '(?i)powershell\.exe$' -or
+        $registeredAction.Arguments -notmatch [regex]::Escape($expectedWrapperPath)) {
+        throw 'Task action does not invoke the expected scheduled wrapper.'
+    }
+    Set-Gate 'TaskDefinitionVerified'
     $Script:TaskCreatedByThisRun = $true
     Set-Gate 'TaskInstalled'
 
@@ -584,6 +626,8 @@ try {
     Write-Host "  next_run_time    : $($statusObj.next_run_time)"
     Write-Host "  last_task_result : $($statusObj.last_task_result)"
     Write-Host "  executable       : $($statusObj.executable)"
+    Write-Host "  principal        : $($statusObj.principal_user_id) / $($statusObj.principal_logon_type) / $($statusObj.principal_run_level)"
+    Write-Host "  trigger_count    : $($statusObj.trigger_count)"
     if ($statusObj.registered -ne $true) {
         throw 'Task is not registered after install (structured status).'
     }
@@ -871,7 +915,9 @@ try {
         Write-Host ''
         Write-Host '=== Emergency cleanup: removing task created by this run ===' -ForegroundColor Yellow
         try {
-            $emergency = & $clientExe sync schedule remove --json 2>&1
+            $emergencyArgs = @('sync', 'schedule', 'remove', '--json')
+            if ($Script:TaskInstalledWithElevation) { $emergencyArgs += '--elevated' }
+            $emergency = & $clientExe @emergencyArgs 2>&1
             if ($LASTEXITCODE -eq 0) {
                 $verifyEm = Get-ScheduledTask -TaskName $Script:TaskName -ErrorAction SilentlyContinue
                 if ($verifyEm) {
