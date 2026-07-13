@@ -292,6 +292,21 @@ def _windows_action_args(arguments: list[str]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# VBScript string literal encoding
+# ---------------------------------------------------------------------------
+# Encodes a Python string as a safe VBScript double-quoted string literal.
+# VBScript escapes a literal double-quote by doubling it ("").
+# This function wraps the result in double quotes.
+#
+# Used ONLY when generating .vbs source where a command line must appear as a
+# VBScript string (e.g. command = "<safe encoded command>").
+
+
+def _vbs_string_literal(value: str) -> str:
+    return '"' + value.replace('"', '""') + '"'
+
+
+# ---------------------------------------------------------------------------
 # Scheduled Task wrapper (.ps1)
 # ---------------------------------------------------------------------------
 
@@ -306,6 +321,47 @@ def scheduled_wrapper(home: Path, client: Path) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Scheduled Task VBScript launcher (.vbs)
+# ---------------------------------------------------------------------------
+
+
+def scheduled_vbs_wrapper(ps1_path: Path) -> str:
+    """Return the source code for run-scheduled.vbs.
+
+    The VBS launcher invokes powershell.exe with window style 0 (hidden) and
+    waits for it to complete, then propagates the real exit code.
+
+    The PowerShell command is built via subprocess.list2cmdline (correct
+    Windows argv serialization) and then safely encoded as a VBScript string
+    literal.  No token, credential path, or environment variable content is
+    embedded.
+    """
+    powershell_args = [
+        "powershell.exe",
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        str(ps1_path),
+    ]
+    ps_command = subprocess.list2cmdline(powershell_args)
+    vbs_command = _vbs_string_literal(ps_command)
+    return (
+        "Option Explicit\n"
+        "\n"
+        "Dim shell\n"
+        "Dim exitCode\n"
+        "Dim command\n"
+        "\n"
+        "Set shell = CreateObject(\"WScript.Shell\")\n"
+        f"command = {vbs_command}\n"
+        "exitCode = shell.Run(command, 0, True)\n"
+        "WScript.Quit exitCode\n"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Task definition (pure data — no quoting applied to the arguments list)
 # ---------------------------------------------------------------------------
 
@@ -313,21 +369,21 @@ def scheduled_wrapper(home: Path, client: Path) -> str:
 def task_definition(home: Path, client: Path, interval_minutes: int) -> dict[str, object]:
     if not 5 <= interval_minutes <= 1440:
         raise SyncError("SYNC_INVALID_SCHEDULE")
-    wrapper = install_root() / "run-scheduled.ps1"
+    root = install_root()
+    wrapper = root / "run-scheduled.ps1"
+    launcher = root / "run-scheduled.vbs"
     return {
         "task_name": TASK_NAME,
-        "command": "powershell.exe",
+        "command": "wscript.exe",
         "arguments": [
-            "-NoProfile",
-            "-NonInteractive",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-            str(wrapper),
+            "//B",
+            "//Nologo",
+            str(launcher),
         ],
         "client_executable": str(client),
         "medlearn_home": str(home),
         "wrapper_path": str(wrapper),
+        "launcher_path": str(launcher),
         "interval_minutes": interval_minutes,
         "triggers": ["AtLogOn", f"Every {interval_minutes} minutes"],
         "multiple_instances": "IgnoreNew",
@@ -381,10 +437,10 @@ def _run_task_script(
         helper.unlink(missing_ok=True)
 
 
-def _registration_script(action_args: str, interval_minutes: int) -> str:
+def _registration_script(executable: str, action_args: str, interval_minutes: int) -> str:
     return (
         "$ErrorActionPreference = 'Stop'; $action = New-ScheduledTaskAction"
-        " -Execute 'powershell.exe'"
+        f" -Execute {_powershell_quote(executable)}"
         " -Argument "
         + _powershell_quote(action_args)
         + "; $logon = New-ScheduledTaskTrigger -AtLogOn"
@@ -425,25 +481,30 @@ def install_schedule(
     if not client.is_file():
         raise SyncError("SYNC_INSTALL_INCOMPLETE")
     wrapper = install_root() / "run-scheduled.ps1"
+    launcher = install_root() / "run-scheduled.vbs"
     schedule_metadata = install_root() / "schedule.json"
     old_metadata = schedule_metadata.read_bytes() if schedule_metadata.is_file() else None
     old_wrapper = wrapper.read_bytes() if wrapper.is_file() else None
+    old_launcher = launcher.read_bytes() if launcher.is_file() else None
     arguments = definition["arguments"]
-    if not isinstance(arguments, list):
+    command = definition["command"]
+    if not isinstance(arguments, list) or not isinstance(command, str):
         raise SyncError("SYNC_STATE_FAILURE")
 
-    # 1.  Serialize for the Windows command line (powershell.exe argv).
+    # 1.  Serialize for the Windows command line (wscript.exe argv).
     action_args = _windows_action_args([str(v) for v in arguments])
 
-    script = _registration_script(action_args, interval_minutes)
+    script = _registration_script(str(command), action_args, interval_minutes)
     try:
         _atomic_json(schedule_metadata, definition)
         _atomic_text(wrapper, scheduled_wrapper(item.home, client))
+        _atomic_text(launcher, scheduled_vbs_wrapper(wrapper))
         _run_task_script(script, wrapper.parent, elevated=elevated)
     except (OSError, subprocess.SubprocessError) as exc:
         try:
             _restore_file(schedule_metadata, old_metadata)
             _restore_file(wrapper, old_wrapper)
+            _restore_file(launcher, old_launcher)
         except OSError:
             pass
         code = (
@@ -537,7 +598,13 @@ def schedule_status() -> dict[str, object]:
 
     # Merge locally configured values where the task may not carry them.
     if result.get("registered") and meta:
-        for key in ("wrapper_path", "interval_minutes", "medlearn_home", "client_executable"):
+        for key in (
+            "wrapper_path",
+            "launcher_path",
+            "interval_minutes",
+            "medlearn_home",
+            "client_executable",
+        ):
             value = meta.get(key)
             if value is not None and key not in result:
                 result[key] = value
@@ -585,6 +652,7 @@ def remove_schedule(*, elevated: bool = False) -> dict[str, object]:
 
     schedule_metadata_path = install_root() / "schedule.json"
     wrapper_path = install_root() / "run-scheduled.ps1"
+    launcher_path = install_root() / "run-scheduled.vbs"
 
     if elevated:
         try:
@@ -614,6 +682,7 @@ def remove_schedule(*, elevated: bool = False) -> dict[str, object]:
         # files but do not treat this as an error.
         schedule_metadata_path.unlink(missing_ok=True)
         wrapper_path.unlink(missing_ok=True)
+        launcher_path.unlink(missing_ok=True)
         return {"status": "already_absent", "task_name": TASK_NAME}
 
     if status == "VERIFY_FAILED":
@@ -625,6 +694,7 @@ def remove_schedule(*, elevated: bool = False) -> dict[str, object]:
         # Only now is it safe to delete local schedule state.
         schedule_metadata_path.unlink(missing_ok=True)
         wrapper_path.unlink(missing_ok=True)
+        launcher_path.unlink(missing_ok=True)
         return {"status": "removed", "task_name": TASK_NAME}
 
     # Unknown output — treat as failure and preserve local state.
