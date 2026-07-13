@@ -249,8 +249,39 @@ def install_windows(
     return {"status": "installed", **asdict(plan), "network_download": False}
 
 
+# ---------------------------------------------------------------------------
+# PowerShell source-code quoting
+# ---------------------------------------------------------------------------
+# Escapes a Python string for safe embedding inside a PowerShell single-quoted
+# string literal.  Single quotes are doubled; the result is wrapped in ''.
+# Use this ONLY when generating .ps1 source where the value must appear as a
+# PowerShell string (e.g. $env:MEDLEARN_HOME = '...' or & '...').
+
+
 def _powershell_quote(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
+
+
+# ---------------------------------------------------------------------------
+# Windows process command-line serialization
+# ---------------------------------------------------------------------------
+# Serializes a list of argv tokens into a single command-line string using the
+# standard Windows quoting rules (double-quotes arguments containing spaces or
+# tabs; backslash-escapes trailing backslashes before a double quote).
+#
+# This is the correct serializer for the argument list that will be consumed by
+# the eventual powershell.exe child process.  It is intentionally *not*
+# _powershell_quote — PowerShell single-quote rules are not Windows argv rules.
+
+
+def _windows_action_args(arguments: list[str]) -> str:
+    """Return the Windows command-line string for a powershell.exe argument list."""
+    return subprocess.list2cmdline(arguments)
+
+
+# ---------------------------------------------------------------------------
+# Scheduled Task wrapper (.ps1)
+# ---------------------------------------------------------------------------
 
 
 def scheduled_wrapper(home: Path, client: Path) -> str:
@@ -260,6 +291,11 @@ def scheduled_wrapper(home: Path, client: Path) -> str:
         f"& {_powershell_quote(str(client))} sync pull --scheduled --timeout 60\n"
         "exit $LASTEXITCODE\n"
     )
+
+
+# ---------------------------------------------------------------------------
+# Task definition (pure data — no quoting applied to the arguments list)
+# ---------------------------------------------------------------------------
 
 
 def task_definition(home: Path, client: Path, interval_minutes: int) -> dict[str, object]:
@@ -275,10 +311,12 @@ def task_definition(home: Path, client: Path, interval_minutes: int) -> dict[str
             "-ExecutionPolicy",
             "Bypass",
             "-File",
-            _powershell_quote(str(wrapper)),
+            str(wrapper),
         ],
         "client_executable": str(client),
         "medlearn_home": str(home),
+        "wrapper_path": str(wrapper),
+        "interval_minutes": interval_minutes,
         "triggers": ["AtLogOn", f"Every {interval_minutes} minutes"],
         "multiple_instances": "IgnoreNew",
         "execution_time_limit_minutes": 5,
@@ -287,12 +325,22 @@ def task_definition(home: Path, client: Path, interval_minutes: int) -> dict[str
     }
 
 
+# ---------------------------------------------------------------------------
+# Schedule prerequisites
+# ---------------------------------------------------------------------------
+
+
 def _schedule_ready(item: SyncPaths) -> None:
     config = load_config(item)
     rollout = load_rollout(config, item)
     if rollout is None or not rollout.dry_run_succeeded or not rollout.first_pull_completed:
         raise SyncError("SYNC_FIRST_PULL_REQUIRED")
     load_token(item.credential)
+
+
+# ---------------------------------------------------------------------------
+# install_schedule — uses subprocess.list2cmdline for the action argument
+# ---------------------------------------------------------------------------
 
 
 def install_schedule(
@@ -318,9 +366,15 @@ def install_schedule(
     arguments = definition["arguments"]
     if not isinstance(arguments, list):
         raise SyncError("SYNC_STATE_FAILURE")
+
+    # 1.  Serialize for the Windows command line (powershell.exe argv).
+    action_args = _windows_action_args([str(v) for v in arguments])
+
+    # 2.  Embed the serialized string inside the PowerShell source.
+    #     _powershell_quote wraps in single quotes and escapes internal '.
     script = (
         "$action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "
-        + _powershell_quote(" ".join(str(value) for value in arguments))
+        + _powershell_quote(action_args)
         + "; $logon = New-ScheduledTaskTrigger -AtLogOn"
         + "; $start = (Get-Date).AddMinutes(1)"
         + "; $repeat = New-ScheduledTaskTrigger -Once -At $start"
@@ -350,26 +404,161 @@ def install_schedule(
     return {"status": "installed", **definition}
 
 
+# ---------------------------------------------------------------------------
+# schedule_status — locale-independent structured inspection via PowerShell
+# ---------------------------------------------------------------------------
+
+
+def _schedule_status_script() -> str:
+    """PowerShell script that returns JSON describing the scheduled task.
+
+    Returns a JSON object whether or not the task exists.  Never parses
+    localized ``schtasks.exe`` table output.
+    """
+    return rf"""
+$ErrorActionPreference = 'Stop'
+$task = Get-ScheduledTask -TaskName '{TASK_NAME}' -ErrorAction SilentlyContinue
+if (-not $task) {{
+    $result = @{{
+        task_name = '{TASK_NAME}'
+        registered = $false
+    }}
+    $result | ConvertTo-Json -Compress
+    exit 0
+}}
+$info = Get-ScheduledTaskInfo -TaskName '{TASK_NAME}' -ErrorAction SilentlyContinue
+$action = $task.Actions | Select-Object -First 1
+$result = @{{
+    task_name = $task.TaskName
+    registered = $true
+    state = $task.State.ToString()
+    last_run_time = $null
+    next_run_time = $null
+    last_task_result = 0
+    executable = $action.Execute
+    arguments = $action.Arguments
+}}
+if ($info) {{
+    if ($info.LastRunTime -and $info.LastRunTime.Year -gt 2000) {{
+        $result.last_run_time = $info.LastRunTime.ToString('o')
+    }}
+    if ($info.NextRunTime -and $info.NextRunTime.Year -lt 9999) {{
+        $result.next_run_time = $info.NextRunTime.ToString('o')
+    }}
+    $result.last_task_result = $info.LastTaskResult
+}}
+$result | ConvertTo-Json -Compress
+"""
+
+
 def schedule_status() -> dict[str, object]:
     if sys.platform != "win32":
         raise SyncError("SYNC_UNSUPPORTED_PLATFORM")
-    result = subprocess.run(
-        ["schtasks.exe", "/Query", "/TN", TASK_NAME], capture_output=True, text=True, check=False
-    )
-    return {"task_name": TASK_NAME, "registered": result.returncode == 0}
+
+    # Read local metadata for configured values that survive task absence.
+    schedule_meta_path = install_root() / "schedule.json"
+    try:
+        meta_raw = json.loads(schedule_meta_path.read_text(encoding="utf-8"))
+        meta: dict[str, object] = meta_raw if isinstance(meta_raw, dict) else {}
+    except (OSError, ValueError):
+        meta = {}
+
+    try:
+        ps_cmd = [
+            "powershell.exe", "-NoProfile", "-NonInteractive",
+            "-Command", _schedule_status_script(),
+        ]
+        proc = subprocess.run(
+            ps_cmd, capture_output=True, text=True, check=True, timeout=15,
+        )
+        result: dict[str, object] = json.loads(proc.stdout)
+    except subprocess.CalledProcessError as exc:
+        raise SyncError("SYNC_SCHEDULE_FAILURE") from exc
+    except json.JSONDecodeError as exc:
+        raise SyncError("SYNC_SCHEDULE_FAILURE") from exc
+
+    if not isinstance(result, dict):
+        raise SyncError("SYNC_SCHEDULE_FAILURE")
+
+    # Merge locally configured values where the task may not carry them.
+    if result.get("registered") and meta:
+        for key in ("wrapper_path", "interval_minutes", "medlearn_home", "client_executable"):
+            value = meta.get(key)
+            if value is not None and key not in result:
+                result[key] = value
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# remove_schedule — explicit idempotent removal with verification
+# ---------------------------------------------------------------------------
+
+
+def _remove_schedule_script() -> str:
+    """PowerShell script: check existence → unregister → verify absence.
+
+    Returns a single token on stdout: ABSENT | REMOVED | VERIFY_FAILED.
+    """
+    return rf"""
+$ErrorActionPreference = 'Stop'
+$task = Get-ScheduledTask -TaskName '{TASK_NAME}' -ErrorAction SilentlyContinue
+if (-not $task) {{
+    Write-Output 'ABSENT'
+    exit 0
+}}
+try {{
+    Unregister-ScheduledTask -TaskName '{TASK_NAME}' -Confirm:$false
+}} catch {{
+    Write-Output 'VERIFY_FAILED'
+    exit 2
+}}
+$verify = Get-ScheduledTask -TaskName '{TASK_NAME}' -ErrorAction SilentlyContinue
+if ($verify) {{
+    Write-Output 'VERIFY_FAILED'
+    exit 2
+}}
+Write-Output 'REMOVED'
+exit 0
+"""
 
 
 def remove_schedule() -> dict[str, object]:
     if sys.platform != "win32":
         raise SyncError("SYNC_UNSUPPORTED_PLATFORM")
-    result = subprocess.run(
-        ["schtasks.exe", "/Delete", "/TN", TASK_NAME, "/F"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if result.returncode not in {0, 1}:
+
+    schedule_metadata_path = install_root() / "schedule.json"
+    wrapper_path = install_root() / "run-scheduled.ps1"
+
+    try:
+        ps_cmd = [
+            "powershell.exe", "-NoProfile", "-NonInteractive",
+            "-Command", _remove_schedule_script(),
+        ]
+        proc = subprocess.run(
+            ps_cmd, capture_output=True, text=True, check=True, timeout=15,
+        )
+        status = proc.stdout.strip()
+    except subprocess.CalledProcessError as exc:
+        raise SyncError("SYNC_SCHEDULE_FAILURE") from exc
+
+    if status == "ABSENT":
+        # Task was never registered or already removed — clean up stale local
+        # files but do not treat this as an error.
+        schedule_metadata_path.unlink(missing_ok=True)
+        wrapper_path.unlink(missing_ok=True)
+        return {"status": "already_absent", "task_name": TASK_NAME}
+
+    if status == "VERIFY_FAILED":
+        # Do NOT delete local metadata — the task may still be present and we
+        # cannot confirm removal.
         raise SyncError("SYNC_SCHEDULE_FAILURE")
-    install_root().joinpath("schedule.json").unlink(missing_ok=True)
-    install_root().joinpath("run-scheduled.ps1").unlink(missing_ok=True)
-    return {"status": "removed", "task_name": TASK_NAME}
+
+    if status == "REMOVED":
+        # Only now is it safe to delete local schedule state.
+        schedule_metadata_path.unlink(missing_ok=True)
+        wrapper_path.unlink(missing_ok=True)
+        return {"status": "removed", "task_name": TASK_NAME}
+
+    # Unknown output — treat as failure and preserve local state.
+    raise SyncError("SYNC_SCHEDULE_FAILURE")
