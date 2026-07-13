@@ -10,6 +10,7 @@ import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from email.message import Message
 from pathlib import Path, PurePosixPath
 from typing import Protocol, cast
@@ -24,6 +25,7 @@ from medlearn_vault.sync_models import (
     ManagedArtifact,
     Manifest,
     ManifestArtifact,
+    RolloutState,
     SyncConfig,
     SyncError,
     SyncState,
@@ -55,6 +57,14 @@ class SyncPaths:
     def lock(self) -> Path:
         return self.home / "sync.lock"
 
+    @property
+    def rollout(self) -> Path:
+        return self.home / "rollout.json"
+
+    @property
+    def scheduled_log(self) -> Path:
+        return self.home / "scheduled-results.jsonl"
+
 
 class SyncResponse(Protocol):
     headers: Message
@@ -68,11 +78,17 @@ class SyncResponse(Protocol):
 
 def paths() -> SyncPaths:
     value = os.environ.get("MEDLEARN_HOME")
-    home = Path(value) if value else Path(os.environ.get("LOCALAPPDATA", "")) / "MedLearn" / "sync"
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if value:
+        home = Path(value)
+    elif local_app_data:
+        home = Path(local_app_data) / "MedLearn" / "sync"
+    else:
+        raise SyncError("SYNC_STATE_FAILURE")
     return SyncPaths(home)
 
 
-def _atomic_json(path: Path, model: SyncConfig | SyncState) -> None:
+def _atomic_json(path: Path, model: SyncConfig | SyncState | RolloutState) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     data = (
         json.dumps(
@@ -91,7 +107,9 @@ def _atomic_json(path: Path, model: SyncConfig | SyncState) -> None:
         Path(name).unlink(missing_ok=True)
 
 
-def _read_model(path: Path, cls: type[SyncConfig] | type[SyncState]) -> SyncConfig | SyncState:
+def _read_model(
+    path: Path, cls: type[SyncConfig] | type[SyncState] | type[RolloutState]
+) -> SyncConfig | SyncState | RolloutState:
     try:
         return cls.model_validate_json(path.read_bytes())
     except (OSError, ValidationError, ValueError) as exc:
@@ -127,6 +145,17 @@ def load_state(
     return model
 
 
+def load_rollout(config: SyncConfig, p: SyncPaths | None = None) -> RolloutState | None:
+    item = p or paths()
+    if not item.rollout.exists():
+        return None
+    model = _read_model(item.rollout, RolloutState)
+    assert isinstance(model, RolloutState)
+    if model.endpoint != config.endpoint or model.vault_path != config.vault_path:
+        raise SyncError("SYNC_STATE_FAILURE")
+    return model
+
+
 def _is_reparse(path: Path) -> bool:
     try:
         attributes = getattr(path.stat(follow_symlinks=False), "st_file_attributes", 0)
@@ -135,10 +164,22 @@ def _is_reparse(path: Path) -> bool:
         return path.is_symlink()
 
 
+def _same_or_nested(left: Path, right: Path) -> bool:
+    try:
+        left.relative_to(right)
+    except ValueError:
+        return False
+    return True
+
+
 def validate_endpoint(endpoint: str) -> str:
     from urllib.parse import urlsplit
 
-    parsed = urlsplit(endpoint)
+    try:
+        parsed = urlsplit(endpoint)
+        port = parsed.port
+    except ValueError as exc:
+        raise SyncError("SYNC_INVALID_ENDPOINT") from exc
     test_http = os.environ.get("MEDLEARN_SYNC_TESTING") == "1"
     allowed_loopback = parsed.hostname in {"127.0.0.1", "localhost"}
     if (
@@ -147,6 +188,7 @@ def validate_endpoint(endpoint: str) -> str:
         or not parsed.hostname
         or parsed.username
         or parsed.password
+        or port is None and ":" in parsed.netloc.rsplit("]", 1)[-1]
         or parsed.query
         or parsed.fragment
         or parsed.path not in {"", "/"}
@@ -161,10 +203,24 @@ def configure(endpoint: str, vault: Path, p: SyncPaths | None = None) -> SyncCon
         root = vault.resolve(strict=True)
     except OSError as exc:
         raise SyncError("SYNC_INVALID_VAULT") from exc
-    if not root.is_dir() or not (root / ".obsidian").is_dir() or _is_reparse(vault):
+    item = p or paths()
+    install_root = _installation_root().resolve()
+    try:
+        item.home.resolve().relative_to(root)
+        state_inside_vault = True
+    except ValueError:
+        state_inside_vault = False
+    if (
+        not root.is_dir()
+        or not (root / ".obsidian").is_dir()
+        or _is_reparse(vault)
+        or (root / ".git").exists()
+        or _same_or_nested(root, install_root)
+        or _same_or_nested(install_root, root)
+        or state_inside_vault
+    ):
         raise SyncError("SYNC_INVALID_VAULT")
     config = SyncConfig(endpoint=normalized, vault_path=str(root))
-    item = p or paths()
     previous = load_config(item) if item.config.exists() else None
     _atomic_json(item.config, config)
     try:
@@ -173,7 +229,15 @@ def configure(endpoint: str, vault: Path, p: SyncPaths | None = None) -> SyncCon
         raise SyncError("SYNC_STATE_FAILURE") from exc
     if previous != config:
         item.state.unlink(missing_ok=True)
+        item.rollout.unlink(missing_ok=True)
     return config
+
+
+def _installation_root() -> Path:
+    value = os.environ.get("MEDLEARN_SYNC_INSTALL_ROOT")
+    if value:
+        return Path(value)
+    return Path(os.environ.get("LOCALAPPDATA", "")) / "MedLearn" / "sync-client"
 
 
 class _NoRedirect(HTTPRedirectHandler):
@@ -445,6 +509,7 @@ def status(p: SyncPaths | None = None) -> dict[str, object]:
     item = p or paths()
     config = load_config(item)
     state = load_state(config, item)
+    rollout = load_rollout(config, item)
     try:
         load_token(item.credential)
         authenticated = True
@@ -459,21 +524,39 @@ def status(p: SyncPaths | None = None) -> dict[str, object]:
         "obsidian_vault": (Path(config.vault_path) / ".obsidian").is_dir(),
         "state_available": state is not None,
         "manifest_artifact_count": len(state.manifest_artifacts) if state else 0,
+        "dry_run_succeeded": rollout.dry_run_succeeded if rollout else False,
+        "first_pull_completed": rollout.first_pull_completed if rollout else False,
     }
 
 
 def pull(
-    *, dry_run: bool = False, timeout: float = 30, p: SyncPaths | None = None
+    *,
+    dry_run: bool = False,
+    confirm_first_pull: bool = False,
+    scheduled: bool = False,
+    timeout: float = 30,
+    p: SyncPaths | None = None,
 ) -> dict[str, object]:
     if timeout <= 0:
         raise SyncError("SYNC_NETWORK_FAILURE")
     item = p or paths()
     config = load_config(item)
     state = load_state(config, item)
+    rollout = load_rollout(config, item)
     token = load_token(item.credential)
     root = Path(config.vault_path)
     if not root.is_dir() or not (root / ".obsidian").is_dir() or _is_reparse(root):
         raise SyncError("SYNC_INVALID_VAULT")
+    if dry_run and confirm_first_pull:
+        raise SyncError("SYNC_INVALID_OPERATION")
+    if not dry_run:
+        if rollout is None or not rollout.dry_run_succeeded:
+            raise SyncError("SYNC_DRY_RUN_REQUIRED")
+        if not rollout.first_pull_completed:
+            if scheduled:
+                raise SyncError("SYNC_FIRST_PULL_REQUIRED")
+            if not confirm_first_pull:
+                raise SyncError("SYNC_FIRST_PULL_CONFIRMATION_REQUIRED")
     with _lock(item.lock):
         manifest, etag, manifest_status = _manifest(config, token, state, timeout)
         _check_rollback(state, manifest)
@@ -526,7 +609,17 @@ def pull(
             else:
                 conflicts += 1
                 conflict_paths.append(artifact.path)
-        if not dry_run:
+        if dry_run:
+            _atomic_json(
+                item.rollout,
+                RolloutState(
+                    endpoint=config.endpoint,
+                    vault_path=config.vault_path,
+                    dry_run_succeeded=True,
+                    first_pull_completed=rollout.first_pull_completed if rollout else False,
+                ),
+            )
+        else:
             _atomic_json(
                 item.state,
                 SyncState(
@@ -535,6 +628,16 @@ def pull(
                     manifest_etag=etag,
                     manifest_artifacts=manifest.artifacts,
                     managed_artifacts=managed,
+                ),
+            )
+            _atomic_json(
+                item.rollout,
+                RolloutState(
+                    endpoint=config.endpoint,
+                    vault_path=config.vault_path,
+                    dry_run_succeeded=True,
+                    first_pull_completed=(rollout.first_pull_completed if rollout else False)
+                    or conflicts == 0,
                 ),
             )
         return {
@@ -547,3 +650,88 @@ def pull(
             "conflict_paths": sorted(conflict_paths),
             "would_download_count": would_download if dry_run else 0,
         }
+
+
+def scheduled_pull(*, timeout: float = 60, p: SyncPaths | None = None) -> dict[str, object]:
+    """Run one scheduled pull and persist only a bounded, sanitized result."""
+
+    item = p or paths()
+    try:
+        result = pull(timeout=timeout, scheduled=True, p=item)
+    except SyncError as exc:
+        _write_scheduled_result(item, error_code=exc.code)
+        raise
+    _write_scheduled_result(item, result=result)
+    return result
+
+
+def _write_scheduled_result(
+    item: SyncPaths, *, result: dict[str, object] | None = None, error_code: str | None = None
+) -> None:
+    record: dict[str, object] = {
+        "timestamp": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "client_version": __version__,
+    }
+    if error_code is not None:
+        record.update({"status": "error", "error_code": error_code})
+    else:
+        assert result is not None
+        conflict_paths = result["conflict_paths"]
+        if not isinstance(conflict_paths, list):
+            raise SyncError("SYNC_STATE_FAILURE")
+
+        def count(name: str) -> int:
+            value = result[name]
+            if not isinstance(value, int):
+                raise SyncError("SYNC_STATE_FAILURE")
+            return value
+
+        record.update(
+            {
+                "status": str(result["status"]),
+                "manifest_status": str(result["manifest_status"]),
+                "remote_count": count("remote_count"),
+                "downloaded_count": count("downloaded_count"),
+                "unchanged_count": count("unchanged_count"),
+                "conflict_count": count("conflict_count"),
+                "conflict_paths": [
+                    str(path)
+                    for path in conflict_paths
+                    if str(path).startswith("MedLearn/") and "\n" not in str(path)
+                ],
+            }
+        )
+    existing: list[str] = []
+    try:
+        for line in item.scheduled_log.read_text(encoding="utf-8").splitlines():
+            parsed = json.loads(line)
+            if isinstance(parsed, dict) and set(parsed).issubset(
+                {
+                    "timestamp",
+                    "client_version",
+                    "status",
+                    "error_code",
+                    "manifest_status",
+                    "remote_count",
+                    "downloaded_count",
+                    "unchanged_count",
+                    "conflict_count",
+                    "conflict_paths",
+                }
+            ):
+                existing.append(
+                    json.dumps(parsed, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                )
+    except (OSError, ValueError, json.JSONDecodeError):
+        existing = []
+    existing.append(json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
+    item.scheduled_log.parent.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(prefix=".scheduled-results.", suffix=".tmp", dir=item.home)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write("\n".join(existing[-50:]) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(name, item.scheduled_log)
+    finally:
+        Path(name).unlink(missing_ok=True)

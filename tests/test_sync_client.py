@@ -110,7 +110,9 @@ def test_pull_is_idempotent_and_only_writes_medlearn(
     monkeypatch.setattr(sync_client, "load_token", lambda _: "x" * 32)
     monkeypatch.setattr(sync_client, "_manifest", lambda *_: (manifest, ETAG, "downloaded"))
     monkeypatch.setattr(sync_client, "_download", lambda _, __, item, ___, ____: content[item.path])
-    first = sync_client.pull(p=sync_client.paths())
+    dry_run = sync_client.pull(dry_run=True, p=sync_client.paths())
+    assert dry_run["would_download_count"] == 2
+    first = sync_client.pull(confirm_first_pull=True, p=sync_client.paths())
     assert first["downloaded_count"] == 2
     assert (root / artifacts[1].path).read_bytes() == json_body
     assert not (root / ".obsidian" / "anything").exists()
@@ -143,7 +145,8 @@ def test_conflicting_local_file_is_not_overwritten(
             "downloaded",
         ),
     )
-    result = sync_client.pull(p=sync_client.paths())
+    sync_client.pull(dry_run=True, p=sync_client.paths())
+    result = sync_client.pull(confirm_first_pull=True, p=sync_client.paths())
     assert result["conflict_count"] == 1
     assert target.read_bytes() == b"user edited\n"
 
@@ -374,6 +377,13 @@ def test_reparse_target_is_not_downgraded_to_conflict(
     )
     target = root / item.path
     target.parent.mkdir(parents=True)
+    monkeypatch.setattr(sync_client, "load_token", lambda _: "x" * 32)
+    monkeypatch.setattr(
+        sync_client,
+        "_manifest",
+        lambda *_: (Manifest(manifest_version="0.1.0", artifacts=[item]), ETAG, "downloaded"),
+    )
+    sync_client.pull(dry_run=True, p=sync_client.paths())
     outside = tmp_path / "outside"
     if directory:
         outside.mkdir()
@@ -383,14 +393,8 @@ def test_reparse_target_is_not_downgraded_to_conflict(
         target.symlink_to(outside, target_is_directory=directory)
     except OSError:
         pytest.skip("symlink privilege unavailable")
-    monkeypatch.setattr(sync_client, "load_token", lambda _: "x" * 32)
-    monkeypatch.setattr(
-        sync_client,
-        "_manifest",
-        lambda *_: (Manifest(manifest_version="0.1.0", artifacts=[item]), ETAG, "downloaded"),
-    )
     with pytest.raises(SyncError, match="SYNC_LOCAL_PATH_UNSAFE"):
-        sync_client.pull(p=sync_client.paths())
+        sync_client.pull(confirm_first_pull=True, p=sync_client.paths())
 
 
 def test_parent_reparse_mock_is_not_treated_as_a_conflict(
@@ -453,5 +457,6 @@ def test_directory_conflict_reports_manifest_relative_path(
         "_manifest",
         lambda *_: (Manifest(manifest_version="0.1.0", artifacts=[item]), ETAG, "downloaded"),
     )
-    result = sync_client.pull(p=sync_client.paths())
+    sync_client.pull(dry_run=True, p=sync_client.paths())
+    result = sync_client.pull(confirm_first_pull=True, p=sync_client.paths())
     assert result["conflict_paths"] == [item.path]

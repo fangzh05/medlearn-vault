@@ -73,9 +73,12 @@ are fully isolated. This release does NOT implement a Windows/Obsidian sync clie
 write/delete/modify capabilities on the Vault API. See `docs/publication-contracts.md` and
 `docs/migrations/0.11.0-vault-read-api.md`.
 
-Version 0.12.0 adds a Windows-only, read-only `medlearn sync` client. It reads the existing
-authenticated Worker manifest, verifies every manifest and artifact digest, and writes only
-`MedLearn/` inside an existing local Obsidian Vault. See [Windows sync](docs/windows-sync.md).
+Version 0.13.0 adds a production-safe Windows rollout for the read-only `medlearn sync` client.
+It installs from a trusted local wheel bundle into a user-scoped virtual environment, requires a
+dry-run and explicit first-pull confirmation, and can optionally register a bounded Scheduled Task.
+It still reads the existing authenticated Worker manifest, verifies every manifest and artifact
+digest, and writes only `MedLearn/` inside an existing local Obsidian Vault. See
+[Windows sync](docs/windows-sync.md).
 
 `medlearn-synthetic-intake.yml` submits a fixed, excerpt-free synthetic fixture through the real
 Worker intake path, waits for Proposal completion, and reports only sanitized Proposal provenance

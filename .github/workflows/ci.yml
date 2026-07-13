@@ -70,17 +70,49 @@ jobs:
           cache-dependency-path: requirements/ci.txt
       - run: python -m pip install --require-hashes -r requirements/ci.txt
       - run: python -m pip install --no-build-isolation --no-deps .
-      - run: python -m pytest -q tests/test_sync_client.py tests/test_sync_cli.py tests/test_windows_secrets.py
+      - run: python -m pytest -q tests/test_sync_client.py tests/test_sync_cli.py tests/test_windows_secrets.py tests/test_windows_rollout.py
       - run: python -m pytest -q
+      - run: python -m pip wheel --require-hashes -r requirements/ci.txt --wheel-dir wheelhouse
       - run: python -m pip wheel --no-build-isolation --no-deps --wheel-dir wheelhouse .
-      - name: Wheel install and CLI smoke test
+      - name: Isolated Windows installer JSON smoke test
         shell: pwsh
         run: |
-          $wheel = Get-ChildItem wheelhouse\*.whl | Select-Object -First 1
+          $wheel = Get-ChildItem wheelhouse\medlearn_vault-*.whl | Select-Object -First 1
           if ($null -eq $wheel) { throw "wheel not found" }
           python -m pip install --force-reinstall --no-deps $wheel.FullName
           medlearn --version
           medlearn sync --help
+          $installRoot = Join-Path $env:RUNNER_TEMP "medlearn sync 用户"
+          $env:MEDLEARN_SYNC_INSTALL_ROOT = $installRoot
+          $previousPythonIoEncoding = $env:PYTHONIOENCODING
+          $env:PYTHONIOENCODING = 'cp1252:strict'
+          $stderrPath = Join-Path $env:RUNNER_TEMP 'medlearn-sync-installer.stderr'
+          try {
+            $rawText = (& medlearn sync install-windows --wheel $wheel.FullName --json 2> $stderrPath | Out-String).Trim()
+            if ($LASTEXITCODE -ne 0) { throw "install failed: $rawText" }
+            $installedResult = $rawText | ConvertFrom-Json
+            if ($rawText | Select-String -Pattern "Looking in links|Processing|Successfully installed|\[notice\]") {
+              throw "installer JSON output was contaminated"
+            }
+            if ($rawText.ToCharArray() | Where-Object { [int][char]$_ -gt 127 }) {
+              throw "installer JSON output was not ASCII-safe"
+            }
+            if ((Get-Content -Raw $stderrPath -ErrorAction SilentlyContinue) -match 'Traceback') {
+              throw "installer wrote a traceback to stderr"
+            }
+            $installed = $installedResult.executable
+            if (-not (Test-Path $installed -PathType Leaf)) { throw "installed executable not found: $installed" }
+            & $installed --version
+            if ($LASTEXITCODE -ne 0) { throw "installed executable --version failed" }
+          } finally {
+            Remove-Item -LiteralPath $installRoot -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $stderrPath -Force -ErrorAction SilentlyContinue
+            if ($null -eq $previousPythonIoEncoding) {
+              Remove-Item Env:PYTHONIOENCODING -ErrorAction SilentlyContinue
+            } else {
+              $env:PYTHONIOENCODING = $previousPythonIoEncoding
+            }
+          }
       - name: Sync status smoke test
         shell: pwsh
         run: |
@@ -89,3 +121,4 @@ jobs:
           New-Item -ItemType Directory -Force (Join-Path $vault ".obsidian") | Out-Null
           medlearn sync configure --endpoint "https://example.invalid" --vault $vault
           medlearn sync status --json
+          medlearn sync schedule install --what-if --json
