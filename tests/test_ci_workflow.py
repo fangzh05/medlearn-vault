@@ -8,7 +8,7 @@ def test_ci_workflow_is_pinned_reproducible_and_secret_free() -> None:
     text = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
     data = yaml.load(text, Loader=yaml.BaseLoader)
     assert data["permissions"] == {"contents": "read"}
-    assert "secrets." not in text
+    assert re.search(r"\$\{\{\s*secrets\.", text) is None
     assert "actions/upload-artifact" not in text
     assert "GITHUB_STEP_SUMMARY" not in text
     assert "set -x" not in text
@@ -29,6 +29,13 @@ def test_ci_workflow_is_pinned_reproducible_and_secret_free() -> None:
     assert "medlearn bundle validate examples/copd" in commands
     assert "pip wheel --no-build-isolation --no-deps" in commands
     assert "medlearn --help" in commands and "medlearn doctor" in commands
+
+    windows = data["jobs"]["windows-sync-quality"]
+    windows_commands = "\n".join(step.get("run", "") for step in windows["steps"])
+    targeted = "tests/test_sync_client.py tests/test_sync_cli.py tests/test_windows_secrets.py"
+    assert targeted in windows_commands
+    assert "Get-ChildItem wheelhouse\\*.whl" in windows_commands
+    assert "medlearn --version" in windows_commands
 
     worker = data["jobs"]["worker-quality"]
     worker_commands = "\n".join(step.get("run", "") for step in worker["steps"])

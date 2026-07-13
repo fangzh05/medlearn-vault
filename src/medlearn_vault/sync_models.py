@@ -98,5 +98,14 @@ class SyncState(StrictModel):
     def valid_state(self) -> SyncState:
         if not re.fullmatch(r'"sha256:[a-f0-9]{64}"', self.manifest_etag):
             raise ValueError("invalid manifest ETag")
-        Manifest(manifest_version="0.1.0", artifacts=self.manifest_artifacts)
+        manifest = Manifest(manifest_version="0.1.0", artifacts=self.manifest_artifacts)
+        artifacts = {artifact.path: artifact for artifact in manifest.artifacts}
+        for path, managed in self.managed_artifacts.items():
+            artifact = artifacts.get(path)
+            if artifact is None or (
+                managed.content_digest != artifact.content_digest
+                or managed.media_type != artifact.media_type
+                or managed.byte_length != artifact.byte_length
+            ):
+                raise ValueError("managed artifact does not match manifest")
         return self

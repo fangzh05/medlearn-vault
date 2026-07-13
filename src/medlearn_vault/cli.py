@@ -3,7 +3,7 @@ import os
 import platform
 import sys
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, NoReturn
 
 import typer
 from pydantic import BaseModel, ValidationError
@@ -145,7 +145,7 @@ def _sync_output(value: dict[str, object], json_output: bool) -> None:
         )
 
 
-def _sync_error(exc: SyncError, json_output: bool) -> None:
+def _sync_error(exc: SyncError, json_output: bool) -> NoReturn:
     _sync_output({"status": "error", "error_code": exc.code}, json_output)
     raise typer.Exit(3 if exc.code == "SYNC_LOCAL_CONFLICT" else 1) from exc
 

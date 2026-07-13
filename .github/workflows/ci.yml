@@ -70,11 +70,17 @@ jobs:
           cache-dependency-path: requirements/ci.txt
       - run: python -m pip install --require-hashes -r requirements/ci.txt
       - run: python -m pip install --no-build-isolation --no-deps .
-      - run: python -m pytest -q tests/test_sync_client.py tests/test_sync_cli.py
+      - run: python -m pytest -q tests/test_sync_client.py tests/test_sync_cli.py tests/test_windows_secrets.py
       - run: python -m pytest -q
       - run: python -m pip wheel --no-build-isolation --no-deps --wheel-dir wheelhouse .
-      - run: python -m pip install --force-reinstall --no-deps wheelhouse/*.whl
-      - run: medlearn sync --help
+      - name: Wheel install and CLI smoke test
+        shell: pwsh
+        run: |
+          $wheel = Get-ChildItem wheelhouse\*.whl | Select-Object -First 1
+          if ($null -eq $wheel) { throw "wheel not found" }
+          python -m pip install --force-reinstall --no-deps $wheel.FullName
+          medlearn --version
+          medlearn sync --help
       - name: Sync status smoke test
         shell: pwsh
         run: |

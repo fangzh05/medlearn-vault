@@ -11,6 +11,12 @@ def test_env_token_override(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert load_token(tmp_path / "credential.bin") == "x" * 32
 
 
+def test_short_env_token_is_rejected(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MEDLEARN_SYNC_TOKEN", "short")
+    with pytest.raises(SyncError, match="SYNC_CREDENTIAL_FAILURE"):
+        load_token(tmp_path / "credential.bin")
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="DPAPI is a Windows feature")
 def test_dpapi_round_trip_is_not_plaintext(tmp_path) -> None:
     path = tmp_path / "credential.bin"
@@ -20,6 +26,14 @@ def test_dpapi_round_trip_is_not_plaintext(tmp_path) -> None:
     assert load_token(path) == token
     delete_token(path)
     assert not path.exists()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="DPAPI is a Windows feature")
+def test_dpapi_damaged_ciphertext_fails_closed(tmp_path) -> None:
+    path = tmp_path / "credential.bin"
+    path.write_bytes(b"damaged")
+    with pytest.raises(SyncError, match="SYNC_CREDENTIAL_FAILURE"):
+        load_token(path)
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Windows has DPAPI")

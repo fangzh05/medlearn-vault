@@ -129,9 +129,8 @@ def load_state(
 
 def _is_reparse(path: Path) -> bool:
     try:
-        return path.is_symlink() or bool(
-            path.stat(follow_symlinks=False).st_file_attributes & 0x400
-        )
+        attributes = getattr(path.stat(follow_symlinks=False), "st_file_attributes", 0)
+        return path.is_symlink() or bool(attributes & 0x400)
     except (AttributeError, OSError):
         return path.is_symlink()
 
@@ -168,6 +167,10 @@ def configure(endpoint: str, vault: Path, p: SyncPaths | None = None) -> SyncCon
     item = p or paths()
     previous = load_config(item) if item.config.exists() else None
     _atomic_json(item.config, config)
+    try:
+        item.lock.touch(exist_ok=True)
+    except OSError as exc:
+        raise SyncError("SYNC_STATE_FAILURE") from exc
     if previous != config:
         item.state.unlink(missing_ok=True)
     return config
@@ -176,7 +179,7 @@ def configure(endpoint: str, vault: Path, p: SyncPaths | None = None) -> SyncCon
 class _NoRedirect(HTTPRedirectHandler):
     def redirect_request(
         self, req: Request, fp: object, code: int, msg: str, headers: object, newurl: str
-    ) -> None:
+    ) -> Request | None:
         return None
 
 
@@ -236,6 +239,8 @@ def _manifest(
         if exc.code in {401, 403}:
             raise SyncError("SYNC_AUTH_FAILED") from exc
         raise SyncError("SYNC_NETWORK_FAILURE") from exc
+    except (URLError, TimeoutError, OSError) as exc:
+        raise SyncError("SYNC_NETWORK_FAILURE") from exc
     try:
         if response.getcode() != 200:
             raise SyncError("SYNC_MANIFEST_PROTOCOL_ERROR")
@@ -288,12 +293,22 @@ def _target(root: Path, artifact: ManifestArtifact) -> Path:
         target.relative_to(managed)
     except ValueError as exc:
         raise SyncError("SYNC_LOCAL_PATH_UNSAFE") from exc
+    _validate_target_parent(root, target)
+    return target
+
+
+def _path_exists(path: Path) -> bool:
+    return path.exists() or _is_reparse(path)
+
+
+def _validate_target_parent(root: Path, target: Path) -> None:
+    if _is_reparse(root) or not root.is_dir():
+        raise SyncError("SYNC_LOCAL_PATH_UNSAFE")
     current = root
     for part in target.relative_to(root).parts[:-1]:
         current = current / part
-        if current.exists() and (_is_reparse(current) or not current.is_dir()):
+        if _path_exists(current) and (_is_reparse(current) or not current.is_dir()):
             raise SyncError("SYNC_LOCAL_PATH_UNSAFE")
-    return target
 
 
 def _file_matches(path: Path, artifact: ManifestArtifact) -> bool:
@@ -350,8 +365,10 @@ def _download(
             response.close()
 
 
-def _atomic_create(target: Path, body: bytes, artifact: ManifestArtifact) -> str:
+def _atomic_create(root: Path, target: Path, body: bytes, artifact: ManifestArtifact) -> str:
+    _validate_target_parent(root, target)
     target.parent.mkdir(parents=True, exist_ok=True)
+    _validate_target_parent(root, target)
     fd, name = tempfile.mkstemp(
         prefix=f".{target.name}.medlearn-", suffix=".tmp", dir=target.parent
     )
@@ -364,6 +381,7 @@ def _atomic_create(target: Path, body: bytes, artifact: ManifestArtifact) -> str
         if not _file_matches(temporary, artifact):
             raise SyncError("SYNC_LOCAL_WRITE_FAILURE")
         try:
+            _validate_target_parent(root, target)
             os.link(temporary, target)
             return "downloaded"
         except FileExistsError:
@@ -376,12 +394,12 @@ def _atomic_create(target: Path, body: bytes, artifact: ManifestArtifact) -> str
 
 @contextmanager
 def _lock(path: Path) -> Iterator[None]:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    handle = path.open("a+b")
     try:
-        handle.seek(0)
-        handle.write(b"0")
-        handle.flush()
+        handle = path.open("r+b")
+    except OSError as exc:
+        raise SyncError("SYNC_STATE_FAILURE") from exc
+    acquired = False
+    try:
         handle.seek(0)
         try:
             if sys.platform == "win32":
@@ -394,18 +412,20 @@ def _lock(path: Path) -> Iterator[None]:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError as exc:
             raise SyncError("SYNC_ALREADY_RUNNING") from exc
+        acquired = True
         yield
     finally:
         try:
-            handle.seek(0)
-            if sys.platform == "win32":
-                import msvcrt
+            if acquired:
+                handle.seek(0)
+                if sys.platform == "win32":
+                    import msvcrt
 
-                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-            else:
-                import fcntl
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
 
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
         finally:
             handle.close()
 
@@ -425,9 +445,14 @@ def status(p: SyncPaths | None = None) -> dict[str, object]:
     item = p or paths()
     config = load_config(item)
     state = load_state(config, item)
+    try:
+        load_token(item.credential)
+        authenticated = True
+    except SyncError:
+        authenticated = False
     return {
         "configured": True,
-        "authenticated": bool(os.environ.get("MEDLEARN_SYNC_TOKEN")) or item.credential.is_file(),
+        "authenticated": authenticated,
         "endpoint": config.endpoint,
         "vault": config.vault_path,
         "vault_exists": Path(config.vault_path).is_dir(),
@@ -453,14 +478,18 @@ def pull(
         manifest, etag, manifest_status = _manifest(config, token, state, timeout)
         _check_rollback(state, manifest)
         downloaded = unchanged = conflicts = would_download = total = 0
+        conflict_paths: list[str] = []
         managed: dict[str, ManagedArtifact] = {}
         for artifact in manifest.artifacts:
             target = _target(root, artifact)
-            if target.exists() or target.is_symlink():
+            if _path_exists(target):
+                if _is_reparse(target):
+                    raise SyncError("SYNC_LOCAL_PATH_UNSAFE")
                 if target.is_dir():
                     conflicts += 1
+                    conflict_paths.append(artifact.path)
                     continue
-                if _file_matches(target, artifact):
+                if target.is_file() and _file_matches(target, artifact):
                     unchanged += 1
                     managed[artifact.path] = ManagedArtifact(
                         content_digest=artifact.content_digest,
@@ -468,13 +497,16 @@ def pull(
                         byte_length=artifact.byte_length,
                     )
                     continue
-                conflicts += 1
-                continue
+                if target.is_file():
+                    conflicts += 1
+                    conflict_paths.append(artifact.path)
+                    continue
+                raise SyncError("SYNC_LOCAL_PATH_UNSAFE")
             would_download += 1
             if dry_run:
                 continue
             result = _atomic_create(
-                target, _download(config, token, artifact, timeout, total), artifact
+                root, target, _download(config, token, artifact, timeout, total), artifact
             )
             total += artifact.byte_length
             if result == "downloaded":
@@ -493,6 +525,7 @@ def pull(
                 )
             else:
                 conflicts += 1
+                conflict_paths.append(artifact.path)
         if not dry_run:
             _atomic_json(
                 item.state,
@@ -511,5 +544,6 @@ def pull(
             "downloaded_count": downloaded,
             "unchanged_count": unchanged,
             "conflict_count": conflicts,
+            "conflict_paths": sorted(conflict_paths),
             "would_download_count": would_download if dry_run else 0,
         }
