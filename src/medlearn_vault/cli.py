@@ -30,6 +30,7 @@ from medlearn_vault.domain import (
     MedicalClaim,
     SourceDocument,
 )
+from medlearn_vault.handoff import MedLearnHandoff
 from medlearn_vault.preview import (
     PreviewBuildError,
     PreviewRequest,
@@ -109,6 +110,7 @@ WORKFLOW_SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "capture_draft": CaptureDraft,
     "capture_proposal": CaptureProposal,
     "intake_envelope": IntakeEnvelope,
+    "medlearn_handoff": MedLearnHandoff,
 }
 CONTROL_SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "proposal_approval": ProposalApprovalRecord,
@@ -250,9 +252,7 @@ def sync_schedule_install(
 ) -> None:
     try:
         _sync_output(
-            install_schedule(
-                interval_minutes=interval_minutes, what_if=what_if, elevated=elevated
-            ),
+            install_schedule(interval_minutes=interval_minutes, what_if=what_if, elevated=elevated),
             json_output,
         )
     except SyncError as exc:

@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import jobSchema from "../../schemas/control/current/job_record.schema.json";
 import { buildManifest, handle, transitionJob, type Env, type JobRecord, type Stored } from "../src/index";
 import intakeSchema from "../../schemas/workflow/current/intake_envelope.schema.json";
+import handoffSchema from "../../schemas/workflow/current/medlearn_handoff.schema.json";
 
 class Bucket {
   objects = new Map<string, { text: string; etag: string; contentType?: string }>();
@@ -82,6 +83,7 @@ class Bucket {
 
 
 const token = "ingest-secret-that-is-at-least-32-bytes";
+const workToken = "work-secret-that-is-at-least-32-bytes";
 const fixtureBytes = readFileSync(resolve("../examples/intake/manual-copd.json"));
 const fixtureText = fixtureBytes.toString("utf8");
 let bucket: Bucket;
@@ -104,6 +106,25 @@ function capture(body: string = fixtureText, key = "key-1") {
   });
 }
 
+function handoff() {
+  return {
+    handoff_version: "0.1.0",
+    session: { title: "血液系统复习", discipline_id: "medicine", course_id: "internal_medicine", chapter_id: "hematology", session_started_at: "2026-07-13T20:41:00+08:00", captured_at: "2026-07-14T00:20:00+08:00" },
+    learning_goals: [] as string[],
+    evidence_messages: [{ local_id: "e001", role: "user", observed_at: null, excerpt: "GPI 锚和 CD55 CD59", purpose: "knowledge_answer" }],
+    concepts: [{ name: "阵发性睡眠性血红蛋白尿", preferred_english: "paroxysmal nocturnal hemoglobinuria", concept_type: "disease", scope_note: null, evidence_local_ids: ["e001"] }],
+    claims: [{ statement: "PIGA 异常导致 GPI 锚缺失", claim_type: "mechanism", concept_terms: ["PNH", "PIGA"], evidence_local_ids: ["e001"], question_priority: "medium" }],
+    learner_evidence: [{ concept_terms: ["PNH"], evidence_type: "correct_independent", confidence: 0.9, rationale: "用户独立回答", evidence_local_ids: ["e001"] }],
+    misconceptions: [],
+    unresolved_questions: [],
+    unfinished_topics: [] as { title: string; evidence_local_ids: string[] }[],
+  };
+}
+
+function mcp(method: string, params: Record<string, unknown> = {}, auth = workToken) {
+  return request("/mcp", { method: "POST", headers: { authorization: `Bearer ${auth}`, "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }) });
+}
+
 async function digest(text: string) {
   const bytes = new TextEncoder().encode(text);
   const hash = await crypto.subtle.digest("SHA-256", bytes);
@@ -115,6 +136,7 @@ beforeEach(() => {
   env = {
     CONTROL_BUCKET: bucket as unknown as R2Bucket,
     MEDLEARN_INGEST_TOKEN: token,
+    MEDLEARN_WORK_TOKEN: workToken,
     GITHUB_ACTIONS_DISPATCH_TOKEN: "github-secret",
   };
   dispatch = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
@@ -320,6 +342,95 @@ describe("security boundary", () => {
   });
 });
 
+describe("Chat Project Source MCP handoff", () => {
+  it("exposes only submit_learning_handoff and validates the shared schema", async () => {
+    const ajv = new Ajv({ strict: false });
+    addFormats(ajv);
+    expect(ajv.compile(handoffSchema)(handoff())).toBe(true);
+    const response = await handle(mcp("tools/list"), env);
+    const body = await response.json<{ result: { tools: { name: string; inputSchema: object }[] } }>();
+    expect(body.result.tools.map((tool) => tool.name)).toEqual(["submit_learning_handoff"]);
+    expect(ajv.compile(body.result.tools[0].inputSchema)( { handoff: handoff() } )).toBe(true);
+  });
+
+  it("submits deterministic bytes with one job and a stable result", async () => {
+    const args = { name: "submit_learning_handoff", arguments: { handoff: handoff() } };
+    const first = await handle(mcp("tools/call", args), env);
+    const second = await handle(mcp("tools/call", args), env);
+    expect(first.status).toBe(200);
+    const a = await first.json<{ result: { structuredContent: { job_id: string; intake_digest: string } } }>();
+    const b = await second.json<{ result: { structuredContent: { job_id: string; intake_digest: string } } }>();
+    expect(a.result.structuredContent).toEqual(b.result.structuredContent);
+    expect(a.result.structuredContent.intake_digest).toMatch(/^sha256:[a-f0-9]{64}$/);
+    const stored = [...bucket.objects.entries()].find(([key]) => key.startsWith("v1/intakes/"));
+    expect(stored).toBeDefined();
+    const draft = JSON.parse(stored![1].text).draft;
+    expect(draft.context.source_id).toMatch(/^source_[a-f0-9]{32}$/);
+    expect(draft.evidence_messages[0].observed_at).toBe("2026-07-14T00:20:00+08:00");
+  });
+
+  it("fails rather than dropping unmappable learning goals or unfinished topics", async () => {
+    for (const update of [
+      (value: ReturnType<typeof handoff>) => { value.learning_goals = ["理解 PNH"]; },
+      (value: ReturnType<typeof handoff>) => { value.unfinished_topics = [{ title: "流式", evidence_local_ids: ["e001"] }]; },
+    ]) {
+      const value = handoff();
+      update(value);
+      const response = await handle(mcp("tools/call", {
+        name: "submit_learning_handoff", arguments: { handoff: value },
+      }), env);
+      expect((await response.json<{ error: { message: string } }>()).error.message)
+        .toBe("HANDOFF_CONVERSION_FAILURE");
+    }
+  });
+
+  it.each([
+    ["duplicate", (value: ReturnType<typeof handoff>) => { value.evidence_messages.push({ ...value.evidence_messages[0] }); }, "HANDOFF_DUPLICATE_LOCAL_ID"],
+    ["dangling", (value: ReturnType<typeof handoff>) => { value.claims[0].evidence_local_ids = ["missing"]; }, "HANDOFF_DANGLING_EVIDENCE_REFERENCE"],
+    ["unsupported", (value: ReturnType<typeof handoff>) => { value.handoff_version = "9.9.9"; }, "HANDOFF_UNSUPPORTED_VERSION"],
+  ])("returns a stable error for %s input", async (_name, mutate, code) => {
+    const value = handoff();
+    mutate(value);
+    const response = await handle(mcp("tools/call", { name: "submit_learning_handoff", arguments: { handoff: value } }), env);
+    const body = await response.json<{ error: { message: string } }>();
+    expect(body.error.message).toBe(code);
+  });
+
+  it("requires the dedicated work secret and never exposes it", async () => {
+    const response = await handle(mcp("tools/list", {}, token), env);
+    const text = await response.text();
+    expect(response.status).toBe(401);
+    expect(text).not.toContain(workToken);
+    expect(text).not.toContain(token);
+  });
+
+  it("rejects an unrecognized tool and the work token on the ingest route", async () => {
+    const unknown = await handle(mcp("tools/call", { name: "read_project_sources", arguments: {} }), env);
+    expect((await unknown.json<{ error: { message: string } }>()).error.message).toBe("HANDOFF_SCHEMA_INVALID");
+    expect((await handle(request("/v1/jobs/x", { headers: { authorization: `Bearer ${workToken}` } }), env)).status).toBe(401);
+  });
+
+  it("does not persist the work token and does not require it for health or intake", async () => {
+    const response = await handle(mcp("tools/call", {
+      name: "submit_learning_handoff", arguments: { handoff: handoff() },
+    }), env);
+    expect((await response.text())).not.toContain(workToken);
+    expect([...bucket.objects.values()].map((item) => item.text).join("\n")).not.toContain(workToken);
+    const noWork = { ...env, MEDLEARN_WORK_TOKEN: undefined };
+    expect((await handle(request("/health"), noWork)).status).toBe(200);
+    expect((await handle(capture(fixtureText, "no-work"), noWork)).status).toBe(202);
+  });
+
+  it("rejects an oversized MCP body before parsing it", async () => {
+    const response = await handle(request("/mcp", {
+      method: "POST", headers: { authorization: `Bearer ${workToken}`, "content-type": "application/json" },
+      body: "x".repeat(256 * 1024 + 1),
+    }), env);
+    expect(response.status).toBe(413);
+    expect(await response.json()).toEqual({ error: "HANDOFF_SCHEMA_INVALID" });
+  });
+});
+
 // ── vault read API ─────────────────────────────────────────────────
 
 function vaultAuth(token: string) {
@@ -410,10 +521,10 @@ describe("vault read API", () => {
     expect(response.headers.get("cache-control")).toBe("no-store");
   });
 
-  it("rejects ingest token for vault route", async () => {
+  it.each([token, workToken])("rejects non-sync token for vault route", async (otherToken) => {
     const { env: vaultEnv } = setupVaultEnv();
     const response = await handle(
-      request("/v1/vault/manifest", { headers: vaultAuth(token) }),
+      request("/v1/vault/manifest", { headers: vaultAuth(otherToken) }),
       vaultEnv,
     );
     expect(response.status).toBe(401);
