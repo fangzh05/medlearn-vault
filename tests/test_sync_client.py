@@ -377,6 +377,13 @@ def test_reparse_target_is_not_downgraded_to_conflict(
     )
     target = root / item.path
     target.parent.mkdir(parents=True)
+    monkeypatch.setattr(sync_client, "load_token", lambda _: "x" * 32)
+    monkeypatch.setattr(
+        sync_client,
+        "_manifest",
+        lambda *_: (Manifest(manifest_version="0.1.0", artifacts=[item]), ETAG, "downloaded"),
+    )
+    sync_client.pull(dry_run=True, p=sync_client.paths())
     outside = tmp_path / "outside"
     if directory:
         outside.mkdir()
@@ -386,14 +393,8 @@ def test_reparse_target_is_not_downgraded_to_conflict(
         target.symlink_to(outside, target_is_directory=directory)
     except OSError:
         pytest.skip("symlink privilege unavailable")
-    monkeypatch.setattr(sync_client, "load_token", lambda _: "x" * 32)
-    monkeypatch.setattr(
-        sync_client,
-        "_manifest",
-        lambda *_: (Manifest(manifest_version="0.1.0", artifacts=[item]), ETAG, "downloaded"),
-    )
     with pytest.raises(SyncError, match="SYNC_LOCAL_PATH_UNSAFE"):
-        sync_client.pull(p=sync_client.paths())
+        sync_client.pull(confirm_first_pull=True, p=sync_client.paths())
 
 
 def test_parent_reparse_mock_is_not_treated_as_a_conflict(

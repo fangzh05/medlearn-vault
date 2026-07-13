@@ -173,8 +173,13 @@ def test_first_pull_requires_dry_run_confirmation_and_blocks_schedule(
     sync_client.pull(dry_run=True, p=home)
     with pytest.raises(SyncError, match="SYNC_FIRST_PULL_CONFIRMATION_REQUIRED"):
         sync_client.pull(p=home)
-    with pytest.raises(SyncError, match="SYNC_FIRST_PULL_REQUIRED"):
+    monkeypatch.setenv("MEDLEARN_SYNC_INSTALL_ROOT", str(tmp_path / "sync-client"))
+    with pytest.raises(SyncError) as schedule_error:
         windows_rollout.install_schedule(p=home)
+    expected = (
+        "SYNC_FIRST_PULL_REQUIRED" if sys.platform == "win32" else "SYNC_UNSUPPORTED_PLATFORM"
+    )
+    assert schedule_error.value.code == expected
     sync_client.pull(confirm_first_pull=True, p=home)
     rollout = sync_client.load_rollout(sync_client.load_config(home), home)
     assert rollout and rollout.first_pull_completed
