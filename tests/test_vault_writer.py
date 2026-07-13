@@ -6,6 +6,7 @@ import json
 import pytest
 from test_workflow import NOW, ROOT, MemoryStore, seed_proposal
 
+from medlearn_vault.cli import app
 from medlearn_vault.publication import (
     VaultPublicationPlan,
     canonical_publication_plan_json,
@@ -148,7 +149,8 @@ def test_writer_never_calls_renderer_or_bundle() -> None:
     writer = VaultPublicationWriter(store, vault)
     # Writer has no bundle_path argument — it cannot access a bundle
     writer.run(plan.publication_plan_id, plan_digest, "job-approval-source")
-    assert len(vault.creates) == 2
+    # 2 artifacts + 1 receipt = 3 vault creates
+    assert len(vault.creates) == 3
 
 
 def test_first_run_two_created() -> None:
@@ -611,9 +613,13 @@ def test_writer_creates_only_vault_keys() -> None:
     plan_digest = _sha256(plan_body)
     writer = VaultPublicationWriter(store, vault)
     writer.run(plan.publication_plan_id, plan_digest, "job-approval-source")
-    # Vault store has the two artifacts
-    assert len(vault.creates) == 2
-    for key in vault.creates:
+    # Vault store has the two artifacts plus one receipt
+    assert len(vault.creates) == 3
+    artifact_creates = [k for k in vault.creates if not k.startswith("v1/")]
+    receipt_creates = [k for k in vault.creates if k.startswith("v1/")]
+    assert len(artifact_creates) == 2
+    assert len(receipt_creates) == 1
+    for key in artifact_creates:
         assert key.startswith("MedLearn/")
 
 
@@ -663,6 +669,328 @@ def test_invalid_input_format() -> None:
     writer = VaultPublicationWriter(store, vault)
     with pytest.raises(WorkflowError, match="INVALID_VAULT_PUBLICATION_INPUT"):
         writer.run("bad-id", "bad-digest", "bad-job")
+
+
+# ── Receipt ──────────────────────────────────────────────────────────
+
+
+def test_receipt_canonical_bytes_deterministic() -> None:
+    from medlearn_vault.publication import (
+        build_vault_publication_receipt,
+        canonical_vault_publication_receipt_json,
+    )
+
+    store = MemoryStore()
+    plan, plan_body, _ = _build_plan(store)
+    receipt = build_vault_publication_receipt(plan)
+    b1 = canonical_vault_publication_receipt_json(receipt)
+    b2 = canonical_vault_publication_receipt_json(receipt)
+    assert b1 == b2
+    assert b1.endswith(b"\n")
+    assert b"\r" not in b1
+    assert not b1.startswith(b"\xef\xbb\xbf")
+    # No timestamps, no random IDs
+    text = b1.decode("utf-8")
+    assert '"decided_at"' not in text
+    assert '"workflow_run_id"' not in text
+    assert '"source_job_id"' not in text
+    assert '"github_actor"' not in text
+
+
+def test_receipt_fields_match_plan_artifacts() -> None:
+    from medlearn_vault.publication import build_vault_publication_receipt
+
+    store = MemoryStore()
+    plan, plan_body, _ = _build_plan(store)
+    receipt = build_vault_publication_receipt(plan)
+    assert receipt.receipt_version == "0.1.0"
+    assert receipt.publication_plan_id == plan.publication_plan_id
+    assert receipt.capture_id == plan.capture_id
+    for i, artifact in enumerate(plan.artifacts):
+        assert receipt.artifacts[i].path == artifact.path
+        assert receipt.artifacts[i].media_type == artifact.media_type
+        assert receipt.artifacts[i].content_digest == artifact.content_digest
+        assert receipt.artifacts[i].byte_length == artifact.byte_length
+
+
+def test_receipt_created_after_both_artifacts() -> None:
+    store = MemoryStore()
+    vault = MemoryVaultStore()
+    plan, plan_body, _ = _build_plan(store)
+    plan_digest = _sha256(plan_body)
+    writer = VaultPublicationWriter(store, vault)
+    result = writer.run(plan.publication_plan_id, plan_digest, "job-approval-source")
+    assert result.receipt_status == "created"
+    # Receipt stored at correct key
+    receipt_key = f"v1/publications/{plan.publication_plan_id}.json"
+    assert receipt_key in vault.objects
+    assert vault.objects[receipt_key].content_type == "application/json; charset=utf-8"
+
+
+def test_receipt_not_created_when_json_artifact_fails() -> None:
+    store = MemoryStore()
+    vault = MemoryVaultStore()
+    plan, plan_body, _ = _build_plan(store)
+    plan_digest = _sha256(plan_body)
+    vault._fail_create = plan.artifacts[0].path
+    writer = VaultPublicationWriter(store, vault)
+    with pytest.raises(WorkflowError, match="VAULT_STORE_FAILURE"):
+        writer.run(plan.publication_plan_id, plan_digest, "job-approval-source")
+    receipt_key = f"v1/publications/{plan.publication_plan_id}.json"
+    assert receipt_key not in vault.objects
+
+
+def test_receipt_not_created_when_md_artifact_fails() -> None:
+    store = MemoryStore()
+    vault = MemoryVaultStore()
+    plan, plan_body, _ = _build_plan(store)
+    plan_digest = _sha256(plan_body)
+    vault._fail_create = plan.artifacts[1].path
+    writer = VaultPublicationWriter(store, vault)
+    with pytest.raises(WorkflowError, match="VAULT_STORE_FAILURE"):
+        writer.run(plan.publication_plan_id, plan_digest, "job-approval-source")
+    receipt_key = f"v1/publications/{plan.publication_plan_id}.json"
+    assert receipt_key not in vault.objects
+
+
+def test_receipt_not_created_on_artifact_conflict() -> None:
+    store = MemoryStore()
+    vault = MemoryVaultStore()
+    plan, plan_body, _ = _build_plan(store)
+    plan_digest = _sha256(plan_body)
+    json_key = plan.artifacts[0].path
+    vault.seed(json_key, b"different\n", content_type=plan.artifacts[0].media_type)
+    writer = VaultPublicationWriter(store, vault)
+    with pytest.raises(WorkflowError, match="VAULT_ARTIFACT_CONFLICT"):
+        writer.run(plan.publication_plan_id, plan_digest, "job-approval-source")
+    receipt_key = f"v1/publications/{plan.publication_plan_id}.json"
+    assert receipt_key not in vault.objects
+
+
+def test_receipt_created_after_partial_recovery() -> None:
+    store = MemoryStore()
+    vault = MemoryVaultStore()
+    plan, plan_body, _ = _build_plan(store)
+    plan_digest = _sha256(plan_body)
+    md_artifact = plan.artifacts[1]
+    vault._fail_create = md_artifact.path
+    writer = VaultPublicationWriter(store, vault)
+    with pytest.raises(WorkflowError):
+        writer.run(plan.publication_plan_id, plan_digest, "job-approval-source")
+
+    vault._fail_create = None
+    result = writer.run(plan.publication_plan_id, plan_digest, "job-approval-source")
+    assert result.receipt_status == "created"
+    receipt_key = f"v1/publications/{plan.publication_plan_id}.json"
+    assert receipt_key in vault.objects
+
+
+def test_receipt_reused_when_exists_and_matches() -> None:
+    store = MemoryStore()
+    vault = MemoryVaultStore()
+    plan, plan_body, _ = _build_plan(store)
+    plan_digest = _sha256(plan_body)
+    writer = VaultPublicationWriter(store, vault)
+    first = writer.run(plan.publication_plan_id, plan_digest, "job-approval-source")
+    assert first.receipt_status == "created"
+
+    second = writer.run(plan.publication_plan_id, plan_digest, "job-approval-source")
+    assert second.receipt_status == "reused"
+    assert second.created_paths == ()
+    assert len(second.reused_paths) == 2
+
+
+def test_receipt_content_conflict() -> None:
+    store = MemoryStore()
+    vault = MemoryVaultStore()
+    plan, plan_body, _ = _build_plan(store)
+    plan_digest = _sha256(plan_body)
+    receipt_key = f"v1/publications/{plan.publication_plan_id}.json"
+
+    # Seed a receipt with wrong body
+    vault.seed(
+        receipt_key, b"wrong receipt bytes\n",
+        content_type="application/json; charset=utf-8",
+    )
+    writer = VaultPublicationWriter(store, vault)
+    with pytest.raises(WorkflowError, match="VAULT_PUBLICATION_RECEIPT_CONFLICT"):
+        writer.run(plan.publication_plan_id, plan_digest, "job-approval-source")
+
+
+def test_receipt_content_type_conflict() -> None:
+    from medlearn_vault.publication import (
+        build_vault_publication_receipt,
+        canonical_vault_publication_receipt_json,
+    )
+
+    store = MemoryStore()
+    vault = MemoryVaultStore()
+    plan, plan_body, _ = _build_plan(store)
+    plan_digest = _sha256(plan_body)
+    receipt = build_vault_publication_receipt(plan)
+    receipt_body = canonical_vault_publication_receipt_json(receipt)
+    receipt_key = f"v1/publications/{plan.publication_plan_id}.json"
+
+    # Seed same body but wrong Content-Type
+    vault.seed(receipt_key, receipt_body, content_type="application/octet-stream")
+    writer = VaultPublicationWriter(store, vault)
+    with pytest.raises(WorkflowError, match="VAULT_PUBLICATION_RECEIPT_CONFLICT"):
+        writer.run(plan.publication_plan_id, plan_digest, "job-approval-source")
+
+
+def test_receipt_store_failure() -> None:
+    store = MemoryStore()
+    vault = MemoryVaultStore()
+    plan, plan_body, _ = _build_plan(store)
+    plan_digest = _sha256(plan_body)
+    receipt_key = f"v1/publications/{plan.publication_plan_id}.json"
+    vault._fail_create = receipt_key
+    writer = VaultPublicationWriter(store, vault)
+    with pytest.raises(WorkflowError, match="VAULT_STORE_FAILURE"):
+        writer.run(plan.publication_plan_id, plan_digest, "job-approval-source")
+
+
+def test_receipt_only_at_last_step() -> None:
+    """Receipt is only created as the final step after both artifacts."""
+    store = MemoryStore()
+    vault = MemoryVaultStore()
+    plan, plan_body, _ = _build_plan(store)
+    plan_digest = _sha256(plan_body)
+    # Verify receipt is created after both artifacts
+    writer = VaultPublicationWriter(store, vault)
+    writer.run(plan.publication_plan_id, plan_digest, "job-approval-source")
+    assert len(vault.creates) == 3  # 2 artifacts + 1 receipt
+    # Receipt must be the last create
+    receipt_key = f"v1/publications/{plan.publication_plan_id}.json"
+    assert vault.creates[-1] == receipt_key
+
+
+def test_artifact_count_semantics_unchanged() -> None:
+    """created_count and reused_count only count the two formal artifacts, never the receipt."""
+    store = MemoryStore()
+    vault = MemoryVaultStore()
+    plan, plan_body, _ = _build_plan(store)
+    plan_digest = _sha256(plan_body)
+    writer = VaultPublicationWriter(store, vault)
+    result = writer.run(plan.publication_plan_id, plan_digest, "job-approval-source")
+    assert len(result.created_paths) == 2
+    assert len(result.reused_paths) == 0
+
+    result2 = writer.run(plan.publication_plan_id, plan_digest, "job-approval-source")
+    assert len(result2.created_paths) == 0
+    assert len(result2.reused_paths) == 2
+
+
+def test_cli_output_receipt_status_created(monkeypatch: pytest.MonkeyPatch) -> None:
+    from typer.testing import CliRunner
+
+    store = MemoryStore()
+    vault = MemoryVaultStore()
+
+    class FakeControlStore:
+        def get(self, key: str) -> StoredObject | None:
+            return store.get(key)
+
+    class FakeVaultStore:
+        def __init__(self, *args: object) -> None: ...
+        def get(self, key: str) -> VaultStoredObject | None:
+            return vault.get(key)
+        def create(self, key: str, body: bytes, *, content_type: str) -> bool:
+            return vault.create(key, body, content_type=content_type)
+
+    plan, plan_body, _ = _build_plan(store)
+    plan_digest = _sha256(plan_body)
+
+    runner = CliRunner()
+    monkeypatch.setattr(
+        "medlearn_vault.cli.S3ReadOnlyObjectStore", lambda *a: FakeControlStore()
+    )
+    monkeypatch.setattr(
+        "medlearn_vault.vault_writer.S3VaultObjectStore", lambda *a: FakeVaultStore()
+    )
+    result = runner.invoke(
+        app,
+        [
+            "workflow", "publish-vault",
+            plan.publication_plan_id,
+            plan_digest,
+            "job-approval-source",
+        ],
+        env={
+            "CONTROL_R2_ENDPOINT": "x", "CONTROL_R2_ACCESS_KEY_ID": "x",
+            "CONTROL_R2_SECRET_ACCESS_KEY": "x",
+            "VAULT_R2_ENDPOINT": "x", "VAULT_R2_ACCESS_KEY_ID": "x",
+            "VAULT_R2_SECRET_ACCESS_KEY": "x",
+        },
+    )
+    assert result.exit_code == 0
+    assert "receipt_status=created" in result.stdout
+    assert "created_count=2" in result.stdout
+    assert "reused_count=0" in result.stdout
+
+
+def test_cli_output_receipt_status_reused(monkeypatch: pytest.MonkeyPatch) -> None:
+    from typer.testing import CliRunner
+
+    store = MemoryStore()
+    vault = MemoryVaultStore()
+
+    class FakeControlStore:
+        def get(self, key: str) -> StoredObject | None:
+            return store.get(key)
+
+    class FakeVaultStore:
+        def __init__(self, *args: object) -> None: ...
+        def get(self, key: str) -> VaultStoredObject | None:
+            return vault.get(key)
+        def create(self, key: str, body: bytes, *, content_type: str) -> bool:
+            return vault.create(key, body, content_type=content_type)
+
+    plan, plan_body, _ = _build_plan(store)
+    plan_digest = _sha256(plan_body)
+
+    # First run
+    VaultPublicationWriter(store, vault).run(
+        plan.publication_plan_id, plan_digest, "job-approval-source"
+    )
+
+    runner = CliRunner()
+    monkeypatch.setattr(
+        "medlearn_vault.cli.S3ReadOnlyObjectStore", lambda *a: FakeControlStore()
+    )
+    monkeypatch.setattr(
+        "medlearn_vault.vault_writer.S3VaultObjectStore", lambda *a: FakeVaultStore()
+    )
+    result = runner.invoke(
+        app,
+        [
+            "workflow", "publish-vault",
+            plan.publication_plan_id,
+            plan_digest,
+            "job-approval-source",
+        ],
+        env={
+            "CONTROL_R2_ENDPOINT": "x", "CONTROL_R2_ACCESS_KEY_ID": "x",
+            "CONTROL_R2_SECRET_ACCESS_KEY": "x",
+            "VAULT_R2_ENDPOINT": "x", "VAULT_R2_ACCESS_KEY_ID": "x",
+            "VAULT_R2_SECRET_ACCESS_KEY": "x",
+        },
+    )
+    assert result.exit_code == 0
+    assert "receipt_status=reused" in result.stdout
+    assert "created_count=0" in result.stdout
+    assert "reused_count=2" in result.stdout
+
+
+def test_writer_no_overwrite_delete_rename() -> None:
+    """Writer protocol must not expose overwrite, delete, or rename."""
+    import medlearn_vault.vault_writer as vw
+
+    protocol_methods = {name for name in dir(vw.VaultObjectStore) if not name.startswith("_")}
+    assert "get" in protocol_methods
+    assert "create" in protocol_methods
+    for banned in ("put", "delete", "overwrite", "rename", "copy", "compare_and_swap", "list"):
+        assert banned not in protocol_methods
 
 
 # ── CLI smoke ────────────────────────────────────────────────────────
@@ -741,6 +1069,6 @@ def test_publish_vault_workflow_is_main_only_and_scoped() -> None:
 # ── version ──────────────────────────────────────────────────────────
 
 
-def test_package_version_is_0_10() -> None:
+def test_package_version_is_0_11() -> None:
     from medlearn_vault import __version__ as v
-    assert v == "0.10.0"
+    assert v == "0.11.0"

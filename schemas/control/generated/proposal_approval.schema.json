@@ -1,0 +1,106 @@
+{
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "decision": {
+            "const": "approved"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "rejection_code": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "decision": {
+            "const": "rejected"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "rejection_code": {
+            "pattern": "^[A-Z][A-Z0-9_]{0,127}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "rejection_code"
+        ]
+      }
+    }
+  ],
+  "description": "Immutable control-plane decision bound to one exact proposal and base.",
+  "properties": {
+    "approval_version": {
+      "const": "0.1.0",
+      "default": "0.1.0",
+      "title": "Approval Version",
+      "type": "string"
+    },
+    "approval_id": {
+      "pattern": "^approval_[a-f0-9]{32}$",
+      "title": "Approval Id",
+      "type": "string"
+    },
+    "proposal_id": {
+      "pattern": "^proposal_[a-f0-9]{32}$",
+      "title": "Proposal Id",
+      "type": "string"
+    },
+    "proposal_object_digest": {
+      "pattern": "^sha256:[a-f0-9]{64}$",
+      "title": "Proposal Object Digest",
+      "type": "string"
+    },
+    "expected_base_bundle_digest": {
+      "pattern": "^sha256:[a-f0-9]{64}$",
+      "title": "Expected Base Bundle Digest",
+      "type": "string"
+    },
+    "decision": {
+      "enum": [
+        "approved",
+        "rejected"
+      ],
+      "title": "Decision",
+      "type": "string"
+    },
+    "decided_at": {
+      "format": "date-time",
+      "title": "Decided At",
+      "type": "string"
+    },
+    "rejection_code": {
+      "anyOf": [
+        {
+          "pattern": "^[A-Z][A-Z0-9_]{0,127}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Rejection Code"
+    }
+  },
+  "required": [
+    "approval_id",
+    "proposal_id",
+    "proposal_object_digest",
+    "expected_base_bundle_digest",
+    "decision",
+    "decided_at"
+  ],
+  "title": "ProposalApprovalRecord",
+  "type": "object"
+}

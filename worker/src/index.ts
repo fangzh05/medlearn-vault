@@ -2,7 +2,9 @@ import validateEnvelope from "./generated/intake-validator.js";
 
 export interface Env {
   CONTROL_BUCKET?: R2Bucket;
+  VAULT_BUCKET?: R2Bucket;
   MEDLEARN_INGEST_TOKEN?: string;
+  MEDLEARN_SYNC_TOKEN?: string;
   GITHUB_ACTIONS_DISPATCH_TOKEN?: string;
 }
 
@@ -10,6 +12,11 @@ interface Config {
   CONTROL_BUCKET: R2Bucket;
   MEDLEARN_INGEST_TOKEN: string;
   GITHUB_ACTIONS_DISPATCH_TOKEN: string;
+}
+
+interface VaultConfig {
+  VAULT_BUCKET: R2Bucket;
+  MEDLEARN_SYNC_TOKEN: string;
 }
 
 type Status = "received" | "dispatched" | "running" | "succeeded" | "blocked" | "failed" | "expired";
@@ -68,9 +75,20 @@ function config(env: Env): Config | null {
   return { CONTROL_BUCKET: env.CONTROL_BUCKET, MEDLEARN_INGEST_TOKEN: token, GITHUB_ACTIONS_DISPATCH_TOKEN: github };
 }
 
-async function sha256(value: ArrayBuffer | string): Promise<string> {
-  const bytes = typeof value === "string" ? new TextEncoder().encode(value) : value;
-  return [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))]
+function vaultConfig(env: Env): VaultConfig | null {
+  const token = env.MEDLEARN_SYNC_TOKEN;
+  if (!env.VAULT_BUCKET || typeof env.VAULT_BUCKET.get !== "function") return null;
+  if (typeof token !== "string" || token.length < 32) return null;
+  return { VAULT_BUCKET: env.VAULT_BUCKET, MEDLEARN_SYNC_TOKEN: token };
+}
+
+async function sha256(value: ArrayBuffer | Uint8Array | string): Promise<string> {
+  const bytes: Uint8Array = typeof value === "string"
+    ? new TextEncoder().encode(value)
+    : value instanceof Uint8Array ? value : new Uint8Array(value);
+  // Get a fresh ArrayBuffer copy for type compatibility
+  const buf = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+  return [...new Uint8Array(await crypto.subtle.digest("SHA-256", buf as ArrayBuffer))]
     .map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
@@ -280,11 +298,322 @@ async function routeV1(request: Request, env: Config, url: URL): Promise<Respons
   return reply(404, { error: "NOT_FOUND" });
 }
 
+// ── Vault read-only types ────────────────────────────────────────────
+
+interface VaultReceiptArtifact {
+  path: string;
+  media_type: string;
+  content_digest: string;
+  byte_length: number;
+}
+
+interface VaultReceipt {
+  receipt_version: string;
+  publication_plan_id: string;
+  publication_plan_object_digest: string;
+  capture_id: string;
+  artifacts: VaultReceiptArtifact[];
+}
+
+interface ManifestArtifact extends VaultReceiptArtifact {
+  capture_id: string;
+  publication_plan_id: string;
+}
+
+interface VaultManifest {
+  manifest_version: string;
+  artifacts: ManifestArtifact[];
+}
+
+const RECEIPT_PREFIX = "v1/publications/";
+const DIGEST_RE = /^sha256:[a-f0-9]{64}$/;
+const PLAN_ID_RE = /^publication_plan_[a-f0-9]{32}$/;
+const CAPTURE_ID_RE = /^capture_[a-f0-9]{32}$/;
+const RECEIPT_KEY_RE = /^v1\/publications\/(publication_plan_[a-f0-9]{32})\.json$/;
+const RECEIPT_KEYS = ["receipt_version", "publication_plan_id", "publication_plan_object_digest", "capture_id", "artifacts"] as const;
+const ARTIFACT_KEYS = ["path", "media_type", "content_digest", "byte_length"] as const;
+
+function canonicalJsonBytes(obj: unknown): Uint8Array {
+  // Recursively sort keys, compact separators, no trailing newline here
+  const text = JSON.stringify(obj, function replacer(_key, value) {
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      const sorted: Record<string, unknown> = {};
+      for (const k of Object.keys(value).sort()) {
+        sorted[k] = (value as Record<string, unknown>)[k];
+      }
+      return sorted;
+    }
+    return value;
+  });
+  return new TextEncoder().encode(text + "\n");
+}
+
+function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
+  const keys = Object.keys(value);
+  return keys.length === expected.length && expected.every((key) => Object.hasOwn(value, key));
+}
+
+function validArtifactPath(path: string, captureId: string, index: number): boolean {
+  if (path.includes("\\") || path.includes("//") || path.includes("\x00") || path.includes("%") || path.startsWith("/")) return false;
+  if (path.split("/").some((part) => part === "." || part === "..")) return false;
+  if (index === 0) return path === `MedLearn/Data/Captures/${captureId}.json`;
+  const match = path.match(new RegExp(`^MedLearn/Captures/[0-9]{4}/(0[1-9]|1[0-2])/${captureId}\\.md$`));
+  return match !== null;
+}
+
+function validateReceipt(r: Record<string, unknown>): VaultReceipt | null {
+  if (!hasExactKeys(r, RECEIPT_KEYS)) return null;
+  if (r.receipt_version !== "0.1.0") return null;
+  if (typeof r.publication_plan_id !== "string" || !PLAN_ID_RE.test(r.publication_plan_id)) return null;
+  if (typeof r.publication_plan_object_digest !== "string" || !DIGEST_RE.test(r.publication_plan_object_digest)) return null;
+  if (typeof r.capture_id !== "string" || !CAPTURE_ID_RE.test(r.capture_id)) return null;
+  if (!Array.isArray(r.artifacts) || r.artifacts.length !== 2) return null;
+  const artifacts: VaultReceiptArtifact[] = [];
+  for (const [index, a] of r.artifacts.entries()) {
+    if (typeof a !== "object" || a === null) return null;
+    const item = a as Record<string, unknown>;
+    if (!hasExactKeys(item, ARTIFACT_KEYS)) return null;
+    if (typeof item.path !== "string" || !validArtifactPath(item.path, r.capture_id, index)) return null;
+    if (typeof item.media_type !== "string") return null;
+    if (typeof item.content_digest !== "string" || !DIGEST_RE.test(item.content_digest)) return null;
+    if (typeof item.byte_length !== "number" || !Number.isInteger(item.byte_length) || item.byte_length < 1) return null;
+    artifacts.push({
+      path: item.path,
+      media_type: item.media_type,
+      content_digest: item.content_digest,
+      byte_length: item.byte_length,
+    });
+  }
+  if (artifacts[0].media_type !== "application/json; charset=utf-8") return null;
+  if (artifacts[1].media_type !== "text/markdown; charset=utf-8") return null;
+  return {
+    receipt_version: "0.1.0",
+    publication_plan_id: r.publication_plan_id as string,
+    publication_plan_object_digest: r.publication_plan_object_digest as string,
+    capture_id: r.capture_id as string,
+    artifacts,
+  };
+}
+
+async function listAllReceipts(bucket: R2Bucket): Promise<{ receipts: VaultReceipt[]; error?: string }> {
+  const receipts: VaultReceipt[] = [];
+  let cursor: string | undefined;
+  do {
+    const result = await bucket.list({ prefix: RECEIPT_PREFIX, cursor });
+    for (const obj of result.objects) {
+      const keyMatch = obj.key.match(RECEIPT_KEY_RE);
+      if (!keyMatch) return { receipts: [], error: "INVALID_VAULT_PUBLICATION_RECEIPT" };
+      const stored = await bucket.get(obj.key);
+      if (!stored) return { receipts: [], error: "VAULT_STORAGE_UNAVAILABLE" };
+      if (stored.httpMetadata?.contentType !== "application/json; charset=utf-8")
+        return { receipts: [], error: "INVALID_VAULT_PUBLICATION_RECEIPT" };
+      let storedBody: Uint8Array;
+      let parsed: unknown;
+      try {
+        storedBody = new Uint8Array(await stored.arrayBuffer());
+        parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(storedBody));
+      } catch {
+        return { receipts: [], error: "INVALID_VAULT_PUBLICATION_RECEIPT" };
+      }
+      if (typeof parsed !== "object" || parsed === null) {
+        return { receipts: [], error: "INVALID_VAULT_PUBLICATION_RECEIPT" };
+      }
+      const receipt = validateReceipt(parsed as Record<string, unknown>);
+      if (!receipt) {
+        return { receipts: [], error: "INVALID_VAULT_PUBLICATION_RECEIPT" };
+      }
+      if (receipt.publication_plan_id !== keyMatch[1])
+        return { receipts: [], error: "INVALID_VAULT_PUBLICATION_RECEIPT" };
+      // Verify canonical: re-serialize and compare byte-for-byte
+      const canonical = canonicalJsonBytes(parsed as Record<string, unknown>);
+      if (storedBody.length !== canonical.length) {
+        return { receipts: [], error: "INVALID_VAULT_PUBLICATION_RECEIPT" };
+      }
+      for (let i = 0; i < storedBody.length; i++) {
+        if (storedBody[i] !== canonical[i]) {
+          return { receipts: [], error: "INVALID_VAULT_PUBLICATION_RECEIPT" };
+        }
+      }
+      receipts.push(receipt);
+    }
+    cursor = result.truncated ? result.cursor : undefined;
+  } while (cursor);
+  return { receipts };
+}
+
+export function buildManifest(receipts: VaultReceipt[]): { manifest: VaultManifest; error?: string } {
+  const seen = new Map<string, ManifestArtifact>();
+  for (const receipt of [...receipts].sort((a, b) => a.publication_plan_id.localeCompare(b.publication_plan_id))) {
+    for (const artifact of receipt.artifacts) {
+      const existing = seen.get(artifact.path);
+      if (existing) {
+        // Duplicate: must match exactly on all fields
+        if (
+          existing.content_digest !== artifact.content_digest ||
+          existing.byte_length !== artifact.byte_length ||
+          existing.media_type !== artifact.media_type ||
+          existing.capture_id !== receipt.capture_id
+        ) {
+          return { manifest: { manifest_version: "0.1.0", artifacts: [] }, error: "VAULT_MANIFEST_CONFLICT" };
+        }
+        // Identical duplicate — sorted receipt order makes provenance deterministic.
+        continue;
+      }
+      seen.set(artifact.path, {
+        ...artifact,
+        capture_id: receipt.capture_id,
+        publication_plan_id: receipt.publication_plan_id,
+      });
+    }
+  }
+  // Sort by path ascending
+  const artifacts = [...seen.values()].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  return { manifest: { manifest_version: "0.1.0", artifacts } };
+}
+
+function validateFilePath(path: string): string | null {
+  if (!path || path.length === 0) return "INVALID_VAULT_PATH";
+  if (path.length > 1024) return "INVALID_VAULT_PATH";
+  if (!path.startsWith("MedLearn/")) return "INVALID_VAULT_PATH";
+  if (path.includes("\\")) return "INVALID_VAULT_PATH";
+  if (path.includes("//")) return "INVALID_VAULT_PATH";
+  if (path.includes("\x00")) return "INVALID_VAULT_PATH";
+  if (path.includes("./") || path.includes("/.")) return "INVALID_VAULT_PATH";
+  if (path.startsWith("/")) return "INVALID_VAULT_PATH";
+  // Check for invalid percent encoding
+  try {
+    const decoded = decodeURIComponent(path);
+    if (decoded !== path) return "INVALID_VAULT_PATH"; // path should already be decoded
+  } catch {
+    return "INVALID_VAULT_PATH";
+  }
+  // Check for ".." as path component
+  if (path.split("/").some(part => part === ".." || part === ".")) return "INVALID_VAULT_PATH";
+  return null;
+}
+
+async function routeVault(request: Request, env: Env, url: URL): Promise<Response> {
+  const cfg = vaultConfig(env);
+  if (!cfg) return secure(reply(503, { error: "VAULT_SERVICE_MISCONFIGURED" }));
+
+  if (!(await authorized(request, cfg.MEDLEARN_SYNC_TOKEN))) return secure(reply(401, { error: "UNAUTHORIZED" }));
+
+  // GET /v1/vault/manifest
+  if (request.method === "GET" && url.pathname === "/v1/vault/manifest") {
+    const { receipts, error } = await listAllReceipts(cfg.VAULT_BUCKET);
+    if (error) return secure(reply(503, { error }));
+
+    const { manifest, error: manifestError } = buildManifest(receipts);
+    if (manifestError) return secure(reply(503, { error: manifestError }));
+
+    const bodyBytes = canonicalJsonBytes(manifest as unknown as Record<string, unknown>);
+    const body = new TextDecoder().decode(bodyBytes);
+    const etag = `"sha256:${await sha256(bodyBytes)}"`;
+
+    const ifNoneMatch = request.headers.get("if-none-match");
+    if (ifNoneMatch && ifNoneMatch === etag) {
+      return new Response(null, {
+        status: 304,
+        headers: {
+          "etag": etag,
+          "cache-control": "private, no-cache",
+          "vary": "Authorization",
+        },
+      });
+    }
+
+    return new Response(body, {
+      status: 200,
+      headers: {
+        "content-type": "application/json; charset=utf-8",
+        "etag": etag,
+        "cache-control": "private, no-cache",
+        "vary": "Authorization",
+      },
+    });
+  }
+
+  // GET /v1/vault/files?path=<percent-encoded>
+  if (request.method === "GET" && url.pathname === "/v1/vault/files") {
+    const rawPath = url.searchParams.get("path");
+    if (!rawPath) return secure(reply(400, { error: "INVALID_VAULT_PATH" }));
+
+    // Path should already be decoded by URL API, but verify
+    const pathError = validateFilePath(rawPath);
+    if (pathError) return secure(reply(400, { error: pathError }));
+
+    // Look up in manifest to confirm membership
+    const { receipts, error: listError } = await listAllReceipts(cfg.VAULT_BUCKET);
+    if (listError) return secure(reply(503, { error: listError }));
+
+    const { manifest, error: manifestError } = buildManifest(receipts);
+    if (manifestError) return secure(reply(503, { error: manifestError }));
+    const match = manifest.artifacts.find(a => a.path === rawPath);
+    if (!match) return secure(reply(404, { error: "NOT_FOUND" }));
+
+    // Download from R2
+    const object = await cfg.VAULT_BUCKET.get(rawPath);
+    if (!object) return secure(reply(503, { error: "VAULT_ARTIFACT_INTEGRITY_FAILURE" }));
+
+    const objectBody = await object.arrayBuffer();
+
+    // Integrity checks
+    const actualDigest = "sha256:" + await sha256(objectBody);
+    if (actualDigest !== match.content_digest) {
+      return secure(reply(503, { error: "VAULT_ARTIFACT_INTEGRITY_FAILURE" }));
+    }
+    if (objectBody.byteLength !== match.byte_length) {
+      return secure(reply(503, { error: "VAULT_ARTIFACT_INTEGRITY_FAILURE" }));
+    }
+    const objectContentType = object.httpMetadata?.contentType ?? "application/octet-stream";
+    if (objectContentType !== match.media_type) {
+      return secure(reply(503, { error: "VAULT_ARTIFACT_INTEGRITY_FAILURE" }));
+    }
+
+    const artifactEtag = `"${match.content_digest}"`;
+    const ifNoneMatch = request.headers.get("if-none-match");
+    if (ifNoneMatch && ifNoneMatch === artifactEtag) {
+      return new Response(null, {
+        status: 304,
+        headers: {
+          "etag": artifactEtag,
+          "cache-control": "private, no-cache",
+          "vary": "Authorization",
+        },
+      });
+    }
+
+    return new Response(objectBody, {
+      status: 200,
+      headers: {
+        "content-type": match.media_type,
+        "content-length": String(objectBody.byteLength),
+        "etag": artifactEtag,
+        "cache-control": "private, no-cache",
+        "vary": "Authorization",
+      },
+    });
+  }
+
+  return secure(reply(404, { error: "NOT_FOUND" }));
+}
+
 export async function handle(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   if (request.method === "GET" && url.pathname === "/") return reply(200, { service: "medlearn-cloud", status: "ok" });
   if (request.method === "GET" && url.pathname === "/health") return reply(200, { status: "ok" });
   if (!url.pathname.startsWith("/v1/")) return reply(404, { error: "NOT_FOUND" });
+
+  // Vault routes — independent config check, does not affect control routes
+  if (url.pathname.startsWith("/v1/vault/")) {
+    try {
+      return await routeVault(request, env, url);
+    } catch {
+      console.error(JSON.stringify({ stage: "vault_route", error_code: "VAULT_STORAGE_FAILURE" }));
+      return secure(reply(503, { error: "VAULT_STORAGE_UNAVAILABLE" }));
+    }
+  }
+
   const configured = config(env);
   if (!configured) return secure(reply(503, { error: "SERVICE_MISCONFIGURED" }));
   try {

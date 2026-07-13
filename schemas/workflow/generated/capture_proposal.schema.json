@@ -1,0 +1,985 @@
+{
+  "$defs": {
+    "CaptureContext": {
+      "additionalProperties": false,
+      "properties": {
+        "source_id": {
+          "pattern": "^source_[a-f0-9]{32}$",
+          "title": "Source Id",
+          "type": "string"
+        },
+        "session_id": {
+          "pattern": "^[a-z][a-z0-9_:-]{2,127}$",
+          "title": "Session Id",
+          "type": "string"
+        },
+        "discipline_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Discipline Id",
+          "type": "string"
+        },
+        "course_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Course Id"
+        },
+        "chapter_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Chapter Id"
+        },
+        "locale": {
+          "const": "zh-CN",
+          "default": "zh-CN",
+          "title": "Locale",
+          "type": "string"
+        },
+        "session_started_at": {
+          "format": "date-time",
+          "title": "Session Started At",
+          "type": "string"
+        },
+        "captured_at": {
+          "format": "date-time",
+          "title": "Captured At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_id",
+        "session_id",
+        "discipline_id",
+        "session_started_at",
+        "captured_at"
+      ],
+      "title": "CaptureContext",
+      "type": "object"
+    },
+    "ClaimProposal": {
+      "additionalProperties": false,
+      "properties": {
+        "candidate_id": {
+          "pattern": "^candidate_claim_[a-f0-9]{32}$",
+          "title": "Candidate Id",
+          "type": "string"
+        },
+        "statement": {
+          "title": "Statement",
+          "type": "string"
+        },
+        "claim_type": {
+          "title": "Claim Type",
+          "type": "string"
+        },
+        "concept_refs": {
+          "items": {
+            "$ref": "#/$defs/ProposalConceptRef"
+          },
+          "title": "Concept Refs",
+          "type": "array"
+        },
+        "evidence_message_ids": {
+          "items": {
+            "pattern": "^[a-z][a-z0-9_:-]{2,127}$",
+            "type": "string"
+          },
+          "title": "Evidence Message Ids",
+          "type": "array"
+        },
+        "proposed_verification_status": {
+          "const": "unverified_chat",
+          "default": "unverified_chat",
+          "title": "Proposed Verification Status",
+          "type": "string"
+        },
+        "proposed_evidence_state": {
+          "const": "unassessed",
+          "default": "unassessed",
+          "title": "Proposed Evidence State",
+          "type": "string"
+        },
+        "matching_existing_claim_ids": {
+          "default": [],
+          "items": {
+            "pattern": "^claim_[a-f0-9]{32}$",
+            "type": "string"
+          },
+          "title": "Matching Existing Claim Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "candidate_id",
+        "statement",
+        "claim_type",
+        "concept_refs",
+        "evidence_message_ids"
+      ],
+      "title": "ClaimProposal",
+      "type": "object"
+    },
+    "ConceptAlias": {
+      "additionalProperties": false,
+      "properties": {
+        "text": {
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        },
+        "normalized": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Normalized"
+        },
+        "language": {
+          "title": "Language",
+          "type": "string"
+        },
+        "alias_type": {
+          "enum": [
+            "abbreviation",
+            "translation",
+            "synonym",
+            "legacy",
+            "trade_name",
+            "other"
+          ],
+          "title": "Alias Type",
+          "type": "string"
+        },
+        "source_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Id"
+        }
+      },
+      "required": [
+        "text",
+        "language",
+        "alias_type"
+      ],
+      "title": "ConceptAlias",
+      "type": "object"
+    },
+    "ConceptMention": {
+      "additionalProperties": false,
+      "properties": {
+        "surface_text": {
+          "title": "Surface Text",
+          "type": "string"
+        },
+        "candidate_concept_ids": {
+          "default": [],
+          "items": {
+            "pattern": "^concept_[a-f0-9]{32}$",
+            "type": "string"
+          },
+          "title": "Candidate Concept Ids",
+          "type": "array"
+        },
+        "resolved_concept_id": {
+          "anyOf": [
+            {
+              "pattern": "^concept_[a-f0-9]{32}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Resolved Concept Id"
+        },
+        "resolution_status": {
+          "enum": [
+            "resolved",
+            "ambiguous",
+            "new_candidate",
+            "rejected"
+          ],
+          "title": "Resolution Status",
+          "type": "string"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "message_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Message Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "surface_text",
+        "resolution_status",
+        "confidence"
+      ],
+      "title": "ConceptMention",
+      "type": "object"
+    },
+    "ConceptResolutionProposal": {
+      "additionalProperties": false,
+      "properties": {
+        "resolution_id": {
+          "title": "Resolution Id",
+          "type": "string"
+        },
+        "surface_text": {
+          "title": "Surface Text",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "matched",
+            "redirected",
+            "ambiguous",
+            "new_candidate",
+            "review_required",
+            "rejected"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "matched_concept_id": {
+          "anyOf": [
+            {
+              "pattern": "^concept_[a-f0-9]{32}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Matched Concept Id"
+        },
+        "candidate_concept_ids": {
+          "default": [],
+          "items": {
+            "pattern": "^concept_[a-f0-9]{32}$",
+            "type": "string"
+          },
+          "title": "Candidate Concept Ids",
+          "type": "array"
+        },
+        "new_candidate_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "New Candidate Id"
+        },
+        "evidence_message_ids": {
+          "items": {
+            "pattern": "^[a-z][a-z0-9_:-]{2,127}$",
+            "type": "string"
+          },
+          "title": "Evidence Message Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "resolution_id",
+        "surface_text",
+        "status",
+        "evidence_message_ids"
+      ],
+      "title": "ConceptResolutionProposal",
+      "type": "object"
+    },
+    "LearnerEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "evidence_id": {
+          "title": "Evidence Id",
+          "type": "string"
+        },
+        "concept_id": {
+          "pattern": "^concept_[a-f0-9]{32}$",
+          "title": "Concept Id",
+          "type": "string"
+        },
+        "knowledge_unit_id": {
+          "anyOf": [
+            {
+              "pattern": "^unit_[a-f0-9]{32}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Knowledge Unit Id"
+        },
+        "evidence_type": {
+          "enum": [
+            "correct_independent",
+            "correct_after_hint",
+            "guessed_correct",
+            "partial",
+            "unknown",
+            "incorrect",
+            "high_confidence_incorrect",
+            "self_report_only"
+          ],
+          "title": "Evidence Type",
+          "type": "string"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "rationale": {
+          "title": "Rationale",
+          "type": "string"
+        },
+        "message_id": {
+          "title": "Message Id",
+          "type": "string"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "evidence_id",
+        "concept_id",
+        "evidence_type",
+        "confidence",
+        "rationale",
+        "message_id",
+        "observed_at"
+      ],
+      "title": "LearnerEvidence",
+      "type": "object"
+    },
+    "LearningCapture": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.2.0",
+          "default": "1.2.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "session_id": {
+          "pattern": "^[a-z][a-z0-9_:-]{2,127}$",
+          "title": "Session Id",
+          "type": "string"
+        },
+        "source_id": {
+          "pattern": "^source_[a-f0-9]{32}$",
+          "title": "Source Id",
+          "type": "string"
+        },
+        "session_started_at": {
+          "format": "date-time",
+          "title": "Session Started At",
+          "type": "string"
+        },
+        "captured_at": {
+          "format": "date-time",
+          "title": "Captured At",
+          "type": "string"
+        },
+        "discipline_id": {
+          "pattern": "^[a-z][a-z0-9_:-]{2,127}$",
+          "title": "Discipline Id",
+          "type": "string"
+        },
+        "course_id": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z][a-z0-9_:-]{2,127}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Course Id"
+        },
+        "chapter_id": {
+          "anyOf": [
+            {
+              "pattern": "^[a-z][a-z0-9_:-]{2,127}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Chapter Id"
+        },
+        "concept_mentions": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ConceptMention"
+          },
+          "title": "Concept Mentions",
+          "type": "array"
+        },
+        "learner_evidence": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/LearnerEvidence"
+          },
+          "title": "Learner Evidence",
+          "type": "array"
+        },
+        "misconception_observations": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/MisconceptionObservation"
+          },
+          "title": "Misconception Observations",
+          "type": "array"
+        },
+        "open_questions": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/OpenQuestion"
+          },
+          "title": "Open Questions",
+          "type": "array"
+        }
+      },
+      "required": [
+        "session_id",
+        "source_id",
+        "session_started_at",
+        "captured_at",
+        "discipline_id"
+      ],
+      "title": "LearningCapture",
+      "type": "object"
+    },
+    "LearningCaptureCandidate": {
+      "additionalProperties": false,
+      "properties": {
+        "capture": {
+          "$ref": "#/$defs/LearningCapture"
+        },
+        "observations": {
+          "items": {
+            "$ref": "#/$defs/LearningObservationCandidate"
+          },
+          "title": "Observations",
+          "type": "array"
+        }
+      },
+      "required": [
+        "capture",
+        "observations"
+      ],
+      "title": "LearningCaptureCandidate",
+      "type": "object"
+    },
+    "LearningObservationCandidate": {
+      "additionalProperties": false,
+      "properties": {
+        "candidate_id": {
+          "pattern": "^candidate_observation_[a-f0-9]{32}$",
+          "title": "Candidate Id",
+          "type": "string"
+        },
+        "observation_type": {
+          "enum": [
+            "correct_recall",
+            "incorrect_recall",
+            "uncertain",
+            "misconception",
+            "question"
+          ],
+          "title": "Observation Type",
+          "type": "string"
+        },
+        "concept_refs": {
+          "items": {
+            "$ref": "#/$defs/ProposalConceptRef"
+          },
+          "title": "Concept Refs",
+          "type": "array"
+        },
+        "evidence_message_ids": {
+          "items": {
+            "pattern": "^[a-z][a-z0-9_:-]{2,127}$",
+            "type": "string"
+          },
+          "title": "Evidence Message Ids",
+          "type": "array"
+        },
+        "observed_text": {
+          "title": "Observed Text",
+          "type": "string"
+        },
+        "proposed_correction": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Proposed Correction"
+        },
+        "correction_claim_ids": {
+          "default": [],
+          "items": {
+            "pattern": "^claim_[a-f0-9]{32}$",
+            "type": "string"
+          },
+          "title": "Correction Claim Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "candidate_id",
+        "observation_type",
+        "concept_refs",
+        "evidence_message_ids",
+        "observed_text"
+      ],
+      "title": "LearningObservationCandidate",
+      "type": "object"
+    },
+    "MisconceptionObservation": {
+      "additionalProperties": false,
+      "properties": {
+        "observation_id": {
+          "title": "Observation Id",
+          "type": "string"
+        },
+        "concept_ids": {
+          "items": {
+            "pattern": "^concept_[a-f0-9]{32}$",
+            "type": "string"
+          },
+          "title": "Concept Ids",
+          "type": "array"
+        },
+        "discipline_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Discipline Ids",
+          "type": "array"
+        },
+        "observed_error_logic": {
+          "title": "Observed Error Logic",
+          "type": "string"
+        },
+        "proposed_correction": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Proposed Correction"
+        },
+        "correction_claim_ids": {
+          "default": [],
+          "items": {
+            "pattern": "^claim_[a-f0-9]{32}$",
+            "type": "string"
+          },
+          "title": "Correction Claim Ids",
+          "type": "array"
+        },
+        "severity": {
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "title": "Severity",
+          "type": "string"
+        },
+        "evidence_message_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Evidence Message Ids",
+          "type": "array"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "observation_id",
+        "concept_ids",
+        "observed_error_logic",
+        "severity",
+        "evidence_message_ids",
+        "observed_at"
+      ],
+      "title": "MisconceptionObservation",
+      "type": "object"
+    },
+    "NewConceptCandidate": {
+      "additionalProperties": false,
+      "properties": {
+        "candidate_id": {
+          "pattern": "^candidate_concept_[a-f0-9]{32}$",
+          "title": "Candidate Id",
+          "type": "string"
+        },
+        "canonical_name": {
+          "title": "Canonical Name",
+          "type": "string"
+        },
+        "preferred_english": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Preferred English"
+        },
+        "concept_type": {
+          "enum": [
+            "disease",
+            "syndrome",
+            "symptom",
+            "sign",
+            "anatomy",
+            "physiology",
+            "pathology",
+            "mechanism",
+            "investigation",
+            "imaging_sign",
+            "drug",
+            "drug_class",
+            "procedure",
+            "complication",
+            "score",
+            "guideline",
+            "organism",
+            "gene",
+            "biomarker",
+            "other"
+          ],
+          "title": "Concept Type",
+          "type": "string"
+        },
+        "scope_note": {
+          "title": "Scope Note",
+          "type": "string"
+        },
+        "aliases": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ConceptAlias"
+          },
+          "title": "Aliases",
+          "type": "array"
+        },
+        "evidence_message_ids": {
+          "items": {
+            "pattern": "^[a-z][a-z0-9_:-]{2,127}$",
+            "type": "string"
+          },
+          "title": "Evidence Message Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "candidate_id",
+        "canonical_name",
+        "concept_type",
+        "scope_note",
+        "evidence_message_ids"
+      ],
+      "title": "NewConceptCandidate",
+      "type": "object"
+    },
+    "OpenQuestion": {
+      "additionalProperties": false,
+      "properties": {
+        "question_id": {
+          "title": "Question Id",
+          "type": "string"
+        },
+        "text": {
+          "title": "Text",
+          "type": "string"
+        },
+        "concept_ids": {
+          "items": {
+            "pattern": "^concept_[a-f0-9]{32}$",
+            "type": "string"
+          },
+          "title": "Concept Ids",
+          "type": "array"
+        },
+        "discipline_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Discipline Id"
+        },
+        "priority": {
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "title": "Priority",
+          "type": "string"
+        }
+      },
+      "required": [
+        "question_id",
+        "text",
+        "concept_ids",
+        "priority"
+      ],
+      "title": "OpenQuestion",
+      "type": "object"
+    },
+    "ProposalConceptRef": {
+      "additionalProperties": false,
+      "properties": {
+        "concept_id": {
+          "anyOf": [
+            {
+              "pattern": "^concept_[a-f0-9]{32}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Concept Id"
+        },
+        "candidate_id": {
+          "anyOf": [
+            {
+              "pattern": "^candidate_concept_[a-f0-9]{32}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Candidate Id"
+        }
+      },
+      "title": "ProposalConceptRef",
+      "type": "object"
+    },
+    "ProposalIssue": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "title": "Code",
+          "type": "string"
+        },
+        "severity": {
+          "enum": [
+            "error",
+            "warning",
+            "review"
+          ],
+          "title": "Severity",
+          "type": "string"
+        },
+        "field": {
+          "title": "Field",
+          "type": "string"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "candidate_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Candidate Id"
+        },
+        "target_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Target Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "code",
+        "severity",
+        "field",
+        "message"
+      ],
+      "title": "ProposalIssue",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "proposal_version": {
+      "const": "0.3.0",
+      "default": "0.3.0",
+      "title": "Proposal Version",
+      "type": "string"
+    },
+    "proposal_id": {
+      "pattern": "^proposal_[a-f0-9]{32}$",
+      "title": "Proposal Id",
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "ready_for_review",
+        "blocked"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "draft_digest": {
+      "pattern": "^sha256:[a-f0-9]{64}$",
+      "title": "Draft Digest",
+      "type": "string"
+    },
+    "base_bundle_digest": {
+      "pattern": "^sha256:[a-f0-9]{64}$",
+      "title": "Base Bundle Digest",
+      "type": "string"
+    },
+    "proposal_digest": {
+      "pattern": "^sha256:[a-f0-9]{64}$",
+      "title": "Proposal Digest",
+      "type": "string"
+    },
+    "context": {
+      "$ref": "#/$defs/CaptureContext"
+    },
+    "concept_resolutions": {
+      "items": {
+        "$ref": "#/$defs/ConceptResolutionProposal"
+      },
+      "title": "Concept Resolutions",
+      "type": "array"
+    },
+    "new_concept_candidates": {
+      "items": {
+        "$ref": "#/$defs/NewConceptCandidate"
+      },
+      "title": "New Concept Candidates",
+      "type": "array"
+    },
+    "claim_proposals": {
+      "items": {
+        "$ref": "#/$defs/ClaimProposal"
+      },
+      "title": "Claim Proposals",
+      "type": "array"
+    },
+    "learning_capture_candidate": {
+      "$ref": "#/$defs/LearningCaptureCandidate"
+    },
+    "issues": {
+      "items": {
+        "$ref": "#/$defs/ProposalIssue"
+      },
+      "title": "Issues",
+      "type": "array"
+    }
+  },
+  "required": [
+    "proposal_id",
+    "status",
+    "draft_digest",
+    "base_bundle_digest",
+    "proposal_digest",
+    "context",
+    "concept_resolutions",
+    "new_concept_candidates",
+    "claim_proposals",
+    "learning_capture_candidate",
+    "issues"
+  ],
+  "title": "CaptureProposal",
+  "type": "object"
+}

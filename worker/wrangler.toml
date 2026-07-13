@@ -5,3 +5,7 @@ compatibility_date = "2026-07-11"
 [[r2_buckets]]
 binding = "CONTROL_BUCKET"
 bucket_name = "medlearn-control"
+
+[[r2_buckets]]
+binding = "VAULT_BUCKET"
+bucket_name = "medlearn-vault"

@@ -36,7 +36,7 @@ from medlearn_vault.preview import (
     build_preview_plan,
     render_markdown,
 )
-from medlearn_vault.publication import VaultPublicationPlan
+from medlearn_vault.publication import VaultPublicationPlan, VaultPublicationReceipt
 from medlearn_vault.workflow import (
     ApprovalAttestor,
     ApprovalOrchestrator,
@@ -86,6 +86,7 @@ CONTROL_SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "job_record": JobRecord,
     "proposal_execution": ProposalExecutionRecord,
     "vault_publication_plan": VaultPublicationPlan,
+    "vault_publication_receipt": VaultPublicationReceipt,
 }
 
 
@@ -391,7 +392,8 @@ def workflow_publish_vault(
         f"publication_plan_object_digest={result.publication_plan_object_digest} "
         f"capture_id={result.capture_id} "
         f"created_count={len(result.created_paths)} "
-        f"reused_count={len(result.reused_paths)}"
+        f"reused_count={len(result.reused_paths)} "
+        f"receipt_status={result.receipt_status}"
     )
 
 

@@ -44,3 +44,31 @@ permission. Submit a synthetic intake and verify the job, execution, proposal, a
 
 No approval, LearningCapture commit, Vault bucket access, Obsidian sync, or mobile intake setup is
 part of this deployment.
+
+## Vault read API (0.11.0)
+
+PR #19 adds two read-only Vault endpoints to the Worker. Deploy with:
+
+```toml
+[[r2_buckets]]
+binding = "VAULT_BUCKET"
+bucket_name = "medlearn-vault"
+```
+
+Configure the Worker secret `MEDLEARN_SYNC_TOKEN` (≥32 chars). This token is separate from
+`MEDLEARN_INGEST_TOKEN` and must not be shared with any intake or control-plane workflow.
+
+The Worker's `VAULT_BUCKET` binding and `MEDLEARN_SYNC_TOKEN` are independent of control-plane
+configuration. Missing Vault configuration returns 503 `VAULT_SERVICE_MISCONFIGURED` on vault
+routes only; `/health` and intake routes are unaffected.
+
+Vault endpoints:
+
+- `GET /v1/vault/manifest` — deterministic manifest from immutable receipts
+- `GET /v1/vault/files?path=<percent-encoded>` — download with integrity verification
+
+Both require `Authorization: Bearer <MEDLEARN_SYNC_TOKEN>`. The Vault API is strictly read-only;
+`put`, `delete`, and multipart upload are never called on `VAULT_BUCKET`.
+
+This release does not set `MEDLEARN_SYNC_TOKEN` in production. Windows/Obsidian client landing
+is deferred to PR #20.
