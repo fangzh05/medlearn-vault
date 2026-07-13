@@ -21,7 +21,9 @@ from medlearn_vault.publication import (
     DIGEST_PATTERN,
     PLAN_ID_PATTERN,
     VaultPublicationPlan,
+    build_vault_publication_receipt,
     canonical_publication_plan_json,
+    canonical_vault_publication_receipt_json,
     publication_plan_object_digest,
 )
 from medlearn_vault.workflow import (
@@ -138,6 +140,7 @@ class VaultPublicationResult(DomainModel):
     capture_id: str
     created_paths: tuple[str, ...] = ()
     reused_paths: tuple[str, ...] = ()
+    receipt_status: str = "none"  # "created" | "reused" | "none"
 
 
 def _sha256(data: bytes) -> str:
@@ -261,10 +264,45 @@ class VaultPublicationWriter:
                 raise WorkflowError("VAULT_ARTIFACT_CONFLICT")
             reused_paths.append(key)
 
+        # ── 6. Create immutable publication receipt (last step) ──
+        receipt = build_vault_publication_receipt(plan)
+        receipt_body = canonical_vault_publication_receipt_json(receipt)
+        receipt_key = f"v1/publications/{plan.publication_plan_id}.json"
+        receipt_status = "none"
+
+        try:
+            if self.vault_store.create(
+                receipt_key,
+                receipt_body,
+                content_type="application/json; charset=utf-8",
+            ):
+                receipt_status = "created"
+            else:
+                # Receipt key exists — verify winner matches exactly
+                try:
+                    winner = self.vault_store.get(receipt_key)
+                except WorkflowError:
+                    raise
+                except Exception as exc:
+                    raise WorkflowError("VAULT_STORE_FAILURE") from exc
+                if winner is None:
+                    raise WorkflowError("VAULT_STORE_FAILURE")
+                if (
+                    winner.body != receipt_body
+                    or winner.content_type != "application/json; charset=utf-8"
+                ):
+                    raise WorkflowError("VAULT_PUBLICATION_RECEIPT_CONFLICT")
+                receipt_status = "reused"
+        except WorkflowError:
+            raise
+        except Exception as exc:
+            raise WorkflowError("VAULT_STORE_FAILURE") from exc
+
         return VaultPublicationResult(
             publication_plan_id=plan.publication_plan_id,
             publication_plan_object_digest=plan_digest,
             capture_id=plan.capture_id,
             created_paths=tuple(created_paths),
             reused_paths=tuple(reused_paths),
+            receipt_status=receipt_status,
         )

@@ -192,6 +192,84 @@ def publication_plan_object_digest(plan: VaultPublicationPlan) -> str:
     return _digest(canonical_publication_plan_json(plan))
 
 
+# ── Vault Publication Receipt ─────────────────────────────────────────────
+
+
+class VaultPublicationReceiptArtifact(DomainModel):
+    """Immutable identity of one published artifact — content is never embedded."""
+
+    path: str
+    media_type: str
+    content_digest: str = Field(pattern=DIGEST_PATTERN)
+    byte_length: int = Field(ge=1)
+
+
+class VaultPublicationReceipt(DomainModel):
+    """Deterministic, immutable proof that two artifacts were published.
+
+    Stored at v1/publications/<publication_plan_id>.json in medlearn-vault.
+    Never contains timestamps, random IDs, workflow run IDs, GitHub actors,
+    mutable state, local paths, or credential information.
+    """
+
+    receipt_version: Literal["0.1.0"]
+    publication_plan_id: str = Field(pattern=PLAN_ID_PATTERN)
+    publication_plan_object_digest: str = Field(pattern=DIGEST_PATTERN)
+    capture_id: str = Field(pattern=CAPTURE_ID_PATTERN)
+    artifacts: tuple[VaultPublicationReceiptArtifact, ...] = Field(min_length=2, max_length=2)
+
+    @model_validator(mode="after")
+    def validate_matches_plan(self) -> VaultPublicationReceipt:
+        if len(self.artifacts) != 2:
+            raise ValueError("receipt must have exactly 2 artifacts")
+        json_artifact = self.artifacts[0]
+        md_artifact = self.artifacts[1]
+        if json_artifact.media_type != "application/json; charset=utf-8":
+            raise ValueError("first receipt artifact must be JSON")
+        if md_artifact.media_type != "text/markdown; charset=utf-8":
+            raise ValueError("second receipt artifact must be Markdown")
+        if not json_artifact.path.startswith("MedLearn/Data/Captures/"):
+            raise ValueError("JSON artifact path must be in MedLearn/Data/Captures/")
+        if not md_artifact.path.startswith("MedLearn/Captures/"):
+            raise ValueError("Markdown artifact path must be in MedLearn/Captures/")
+        if json_artifact.path == md_artifact.path:
+            raise ValueError("receipt artifact paths must be unique")
+        return self
+
+
+def _receipt_artifact_from_plan_artifact(
+    artifact: VaultPublicationArtifact,
+) -> VaultPublicationReceiptArtifact:
+    return VaultPublicationReceiptArtifact(
+        path=artifact.path,
+        media_type=artifact.media_type,
+        content_digest=artifact.content_digest,
+        byte_length=artifact.byte_length,
+    )
+
+
+def build_vault_publication_receipt(plan: VaultPublicationPlan) -> VaultPublicationReceipt:
+    """Build a deterministic receipt from a validated publication plan."""
+    return VaultPublicationReceipt(
+        receipt_version="0.1.0",
+        publication_plan_id=plan.publication_plan_id,
+        publication_plan_object_digest=publication_plan_object_digest(plan),
+        capture_id=plan.capture_id,
+        artifacts=tuple(
+            _receipt_artifact_from_plan_artifact(a) for a in plan.artifacts
+        ),
+    )
+
+
+def canonical_vault_publication_receipt_json(receipt: VaultPublicationReceipt) -> bytes:
+    """Canonical JSON for a receipt: UTF-8, sorted keys, compact separators, one LF."""
+    return _bytes(receipt) + b"\n"
+
+
+def vault_publication_receipt_object_digest(receipt: VaultPublicationReceipt) -> str:
+    return _digest(canonical_vault_publication_receipt_json(receipt))
+
+
 def _yaml(value: str) -> str:
     return json.dumps(value, ensure_ascii=False)
 

@@ -61,7 +61,17 @@ planned artifact bytes to `medlearn-vault` R2 using create-only semantics. See
 
 `medlearn-publish-vault.yml` runs only from `main` and scopes separate `CONTROL_R2_*` and
 `VAULT_R2_*` credentials so no single step holds both control-plane and vault write access.
-No manifest, synchronisation client, or Obsidian integration exists.
+
+Version 0.11.0 adds the immutable `VaultPublicationReceipt` and authenticated read-only Worker
+API. After artifact publication, the writer create-only writes a deterministic receipt at
+`v1/publications/<publication_plan_id>.json` in `medlearn-vault`. The Worker exposes two new
+read-only Vault endpoints: `GET /v1/vault/manifest` (deterministic listing of all published
+artifacts from immutable receipts) and `GET /v1/vault/files?path=...` (download with digest,
+byte-length, and media-type integrity verification). Both support `If-None-Match`/`ETag` with
+SHA-256 ETags. Vault auth uses a separate `MEDLEARN_SYNC_TOKEN`; ingest and vault credentials
+are fully isolated. This release does NOT implement a Windows/Obsidian sync client or any
+write/delete/modify capabilities on the Vault API. See `docs/publication-contracts.md` and
+`docs/migrations/0.11.0-vault-read-api.md`.
 
 `medlearn-synthetic-intake.yml` submits a fixed, excerpt-free synthetic fixture through the real
 Worker intake path, waits for Proposal completion, and reports only sanitized Proposal provenance

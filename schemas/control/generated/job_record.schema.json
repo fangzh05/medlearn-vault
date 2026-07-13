@@ -1,0 +1,188 @@
+{
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "enum": [
+              "succeeded",
+              "blocked"
+            ]
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "proposal_id",
+          "workflow_run_id"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "failed"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "error_code"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "enum": [
+              "succeeded",
+              "blocked",
+              "failed",
+              "expired"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "dispatch_lease_id": {
+            "type": "null"
+          },
+          "dispatch_lease_expires_at": {
+            "type": "null"
+          }
+        }
+      }
+    }
+  ],
+  "properties": {
+    "job_version": {
+      "const": "0.2.0",
+      "default": "0.2.0",
+      "title": "Job Version",
+      "type": "string"
+    },
+    "job_id": {
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$",
+      "title": "Job Id",
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "received",
+        "dispatched",
+        "running",
+        "succeeded",
+        "blocked",
+        "failed",
+        "expired"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "intake_digest": {
+      "pattern": "^sha256:[a-f0-9]{64}$",
+      "title": "Intake Digest",
+      "type": "string"
+    },
+    "intake_object_key": {
+      "pattern": "^v1/intakes/sha256/[a-f0-9]{64}\\.json$",
+      "title": "Intake Object Key",
+      "type": "string"
+    },
+    "proposal_id": {
+      "anyOf": [
+        {
+          "pattern": "^proposal_[a-f0-9]{32}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Proposal Id"
+    },
+    "workflow_run_id": {
+      "anyOf": [
+        {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Workflow Run Id"
+    },
+    "dispatch_attempt": {
+      "minimum": 0,
+      "title": "Dispatch Attempt",
+      "type": "integer"
+    },
+    "dispatch_lease_id": {
+      "anyOf": [
+        {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Dispatch Lease Id"
+    },
+    "dispatch_lease_expires_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Dispatch Lease Expires At"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "updated_at": {
+      "format": "date-time",
+      "title": "Updated At",
+      "type": "string"
+    },
+    "error_code": {
+      "anyOf": [
+        {
+          "pattern": "^[A-Z][A-Z0-9_]{0,127}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Error Code"
+    }
+  },
+  "required": [
+    "job_id",
+    "status",
+    "intake_digest",
+    "intake_object_key",
+    "dispatch_attempt",
+    "created_at",
+    "updated_at"
+  ],
+  "title": "JobRecord",
+  "type": "object"
+}

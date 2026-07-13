@@ -60,6 +60,7 @@ planned bytes.
 - `PUBLICATION_PLAN_OBJECT_DIGEST_MISMATCH`
 - `PUBLICATION_PLAN_PROVENANCE_MISMATCH`
 - `VAULT_ARTIFACT_CONFLICT`
+- `VAULT_PUBLICATION_RECEIPT_CONFLICT`
 - `VAULT_STORE_FAILURE`
 - `CONTROL_STORE_FAILURE`
 
@@ -80,3 +81,78 @@ First `medlearn-plan-publication` run from main (squash merge of PR #17):
 - **capture_object_digest**: `sha256:a0a71c75e894b2c358e9bb62b242b6eef279f75b03b6c82b993a0dacd30e446e`
 - **markdown_digest**: `sha256:e458a4bd6e260e1ad3b53227e9b341ef1cb27cb219054d724133d4f8a95d75ba`
 - **reused**: `false`
+
+## Vault publication receipt (0.11.0)
+
+`VaultPublicationReceipt` 0.1.0 is an immutable, deterministic proof of publication stored at
+`v1/publications/<publication_plan_id>.json` in `medlearn-vault`. It contains no timestamps,
+random IDs, workflow run IDs, GitHub actors, mutable state, local paths, or credentials.
+
+### Fields
+
+- `receipt_version`: `"0.1.0"`
+- `publication_plan_id`: matches the source plan
+- `publication_plan_object_digest`: SHA-256 of canonical plan JSON
+- `capture_id`: the capture identity
+- `artifacts`: array of `{path, media_type, content_digest, byte_length}` — content is never embedded
+
+### Write order
+
+The writer creates the receipt as the final step:
+
+1. Validate PublicationPlan
+2. Fresh attestation
+3. Write JSON artifact
+4. Write Markdown artifact
+5. Verify both artifacts succeeded without conflict
+6. Create receipt (create-only)
+
+If any artifact write fails or conflicts, the receipt is NOT created. The receipt itself uses
+create-only semantics: identical existing receipt → `reused`; different body or Content-Type →
+`VAULT_PUBLICATION_RECEIPT_CONFLICT`.
+
+### Receipt identity
+
+Receipt has no separate random ID. Its storage key is its identity:
+`v1/publications/<publication_plan_id>.json`. Canonical JSON: UTF-8, sorted keys, compact
+separators, exactly one LF terminator, no BOM, no CRLF.
+
+### Count semantics
+
+`created_count` and `reused_count` count only the two formal artifacts, never the receipt.
+`receipt_status` is a separate field: `created` or `reused`.
+
+## Vault read API (0.11.0)
+
+The Worker exposes two authenticated read-only Vault endpoints. See `docs/cloud-deployment.md`
+for deployment configuration.
+
+### GET /v1/vault/manifest
+
+- Auth: `Bearer <MEDLEARN_SYNC_TOKEN>`
+- Reads all receipts under `v1/publications/` with full R2 pagination
+- Rejects malformed, non-canonical, or schema-invalid receipts (`INVALID_VAULT_PUBLICATION_RECEIPT`)
+- Deterministic artifact list sorted by path ascending
+- Exact duplicate (same path, digest, length, media type) → deduplicated
+- Conflicting duplicate (same path, different fields) → `VAULT_MANIFEST_CONFLICT`
+- Response: canonical JSON with `manifest_version: "0.1.0"` and `artifacts` array
+- `ETag`: `"sha256:<hex>"` of exact manifest bytes; supports `If-None-Match` → 304
+- Headers: `Content-Type: application/json; charset=utf-8`, `Cache-Control: private, no-cache`, `Vary: Authorization`
+
+### GET /v1/vault/files?path=<percent-encoded-path>
+
+- Auth: `Bearer <MEDLEARN_SYNC_TOKEN>`
+- Path validation: must start with `MedLearn/`, reject `..`, `.`, `\`, NUL, `//`, absolute paths
+- Only serves paths present in the receipt manifest (manifest membership check)
+- Integrity verification: SHA-256 digest, byte length, and Content-Type must all match manifest
+- Any mismatch → `VAULT_ARTIFACT_INTEGRITY_FAILURE`, no partial bytes returned
+- `ETag`: `"<content_digest>"`; supports `If-None-Match` → 304
+- Returns exact R2 object bytes with manifest `media_type` as Content-Type
+- No transcoding, re-serialization, BOM addition, or template processing
+
+### Security
+
+- Vault routes use separate `MEDLEARN_SYNC_TOKEN`; ingest token is rejected
+- Vault routes never call `put`, `delete`, or multipart upload
+- Error responses never leak internal keys, tokens, or bucket names
+- `Vary: Authorization` on all responses

@@ -1,0 +1,78 @@
+{
+  "$defs": {
+    "VaultPublicationReceiptArtifact": {
+      "additionalProperties": false,
+      "description": "Immutable identity of one published artifact — content is never embedded.",
+      "properties": {
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "media_type": {
+          "title": "Media Type",
+          "type": "string"
+        },
+        "content_digest": {
+          "pattern": "^sha256:[a-f0-9]{64}$",
+          "title": "Content Digest",
+          "type": "string"
+        },
+        "byte_length": {
+          "minimum": 1,
+          "title": "Byte Length",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "path",
+        "media_type",
+        "content_digest",
+        "byte_length"
+      ],
+      "title": "VaultPublicationReceiptArtifact",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Deterministic, immutable proof that two artifacts were published.\n\nStored at v1/publications/<publication_plan_id>.json in medlearn-vault.\nNever contains timestamps, random IDs, workflow run IDs, GitHub actors,\nmutable state, local paths, or credential information.",
+  "properties": {
+    "receipt_version": {
+      "const": "0.1.0",
+      "title": "Receipt Version",
+      "type": "string"
+    },
+    "publication_plan_id": {
+      "pattern": "^publication_plan_[a-f0-9]{32}$",
+      "title": "Publication Plan Id",
+      "type": "string"
+    },
+    "publication_plan_object_digest": {
+      "pattern": "^sha256:[a-f0-9]{64}$",
+      "title": "Publication Plan Object Digest",
+      "type": "string"
+    },
+    "capture_id": {
+      "pattern": "^capture_[a-f0-9]{32}$",
+      "title": "Capture Id",
+      "type": "string"
+    },
+    "artifacts": {
+      "items": {
+        "$ref": "#/$defs/VaultPublicationReceiptArtifact"
+      },
+      "maxItems": 2,
+      "minItems": 2,
+      "title": "Artifacts",
+      "type": "array"
+    }
+  },
+  "required": [
+    "receipt_version",
+    "publication_plan_id",
+    "publication_plan_object_digest",
+    "capture_id",
+    "artifacts"
+  ],
+  "title": "VaultPublicationReceipt",
+  "type": "object"
+}
