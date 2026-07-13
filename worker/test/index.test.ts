@@ -4,15 +4,18 @@ import Ajv from "ajv/dist/2020.js";
 import addFormats from "ajv-formats";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import jobSchema from "../../schemas/control/current/job_record.schema.json";
-import { handle, transitionJob, type Env, type JobRecord, type Stored } from "../src/index";
+import { buildManifest, handle, transitionJob, type Env, type JobRecord, type Stored } from "../src/index";
 import intakeSchema from "../../schemas/workflow/current/intake_envelope.schema.json";
 
 class Bucket {
   objects = new Map<string, { text: string; etag: string; contentType?: string }>();
+  getCalls = new Map<string, number>();
+  listedMissing = new Set<string>();
   failNextPrefix?: string;
   private revision = 0;
 
   async get(key: string) {
+    this.getCalls.set(key, (this.getCalls.get(key) ?? 0) + 1);
     const object = this.objects.get(key);
     return object === undefined ? null : {
       etag: object.etag,
@@ -43,7 +46,7 @@ class Bucket {
 
   async list(opts?: { prefix?: string; cursor?: string }) {
     const prefix = opts?.prefix ?? "";
-    const keys = [...this.objects.keys()].filter(k => k.startsWith(prefix)).sort();
+    const keys = [...new Set([...this.objects.keys(), ...this.listedMissing])].filter(k => k.startsWith(prefix)).sort();
     const cursorIdx = opts?.cursor ? keys.indexOf(opts.cursor) + 1 : 0;
     const pageKeys = keys.slice(cursorIdx, cursorIdx + 3); // page size 3 for pagination tests
     // Cursor is the LAST item in this page (R2 convention)
@@ -58,7 +61,11 @@ class Bucket {
   }
 
   seed(key: string, text: string, contentType?: string) {
-    this.objects.set(key, { text, etag: `"etag-${++this.revision}"`, contentType });
+    this.objects.set(key, {
+      text,
+      etag: `"etag-${++this.revision}"`,
+      contentType: contentType ?? (key.startsWith("v1/publications/") ? "application/json; charset=utf-8" : undefined),
+    });
   }
 }
 
@@ -343,6 +350,10 @@ function canonicalReceipt(overrides: Record<string, unknown> = {}) {
   }) + "\n";
 }
 
+function receiptKey(planId = "publication_plan_00000000000000000000000000000001") {
+  return `v1/publications/${planId}.json`;
+}
+
 function setupVaultEnv(syncToken = "sync-secret-that-is-at-least-32-bytes") {
   const vaultBucket = new Bucket();
   return {
@@ -367,6 +378,8 @@ describe("vault read API", () => {
     const response = await handle(request("/v1/vault/manifest"), vaultEnv);
     expect(response.status).toBe(401);
     expect(await response.json()).toEqual({ error: "UNAUTHORIZED" });
+    expect(response.headers.get("vary")).toBe("Authorization");
+    expect(response.headers.get("cache-control")).toBe("no-store");
   });
 
   it("returns 401 for wrong sync token", async () => {
@@ -376,6 +389,14 @@ describe("vault read API", () => {
       vaultEnv,
     );
     expect(response.status).toBe(401);
+  });
+
+  it("sets no-store cache headers on unknown vault endpoints", async () => {
+    const { env: vaultEnv } = setupVaultEnv();
+    const response = await handle(request("/v1/vault/unknown", { headers: vaultAuth(syncToken) }), vaultEnv);
+    expect(response.status).toBe(404);
+    expect(response.headers.get("vary")).toBe("Authorization");
+    expect(response.headers.get("cache-control")).toBe("no-store");
   });
 
   it("rejects ingest token for vault route", async () => {
@@ -472,6 +493,7 @@ describe("vault read API", () => {
     expect(response.status).toBe(200);
     const body = await response.json<{ artifacts: { path: string }[] }>();
     expect(body.artifacts.length).toBe(2);
+    expect(response.headers.get("cache-control")).toBe("private, no-cache");
   });
 
   // ── manifest: deterministic ordering ──────────────────────────────
@@ -509,12 +531,12 @@ describe("vault read API", () => {
   it("deduplicates identical artifacts from different receipts", async () => {
     const { vaultBucket, env: vaultEnv } = setupVaultEnv();
     const r1 = canonicalReceipt();
-    vaultBucket.seed("v1/publications/plan-1.json", r1);
+    vaultBucket.seed("v1/publications/publication_plan_00000000000000000000000000000001.json", r1);
     // Same receipt in a different plan key → same artifacts
     const r2 = canonicalReceipt({
       publication_plan_id: "publication_plan_00000000000000000000000000000002",
     });
-    vaultBucket.seed("v1/publications/plan-2.json", r2);
+    vaultBucket.seed("v1/publications/publication_plan_00000000000000000000000000000002.json", r2);
 
     const response = await handle(
       request("/v1/vault/manifest", { headers: vaultAuth(syncToken) }),
@@ -529,7 +551,7 @@ describe("vault read API", () => {
 
   it("returns VAULT_MANIFEST_CONFLICT for conflicting duplicates", async () => {
     const { vaultBucket, env: vaultEnv } = setupVaultEnv();
-    vaultBucket.seed("v1/publications/plan-1.json", canonicalReceipt());
+    vaultBucket.seed("v1/publications/publication_plan_00000000000000000000000000000001.json", canonicalReceipt());
 
     // Different digest for same path
     const conflict = canonicalReceipt({
@@ -549,7 +571,7 @@ describe("vault read API", () => {
         },
       ],
     });
-    vaultBucket.seed("v1/publications/plan-2.json", conflict);
+    vaultBucket.seed("v1/publications/publication_plan_00000000000000000000000000000002.json", conflict);
 
     const response = await handle(
       request("/v1/vault/manifest", { headers: vaultAuth(syncToken) }),
@@ -559,11 +581,28 @@ describe("vault read API", () => {
     expect(await response.json()).toEqual({ error: "VAULT_MANIFEST_CONFLICT" });
   });
 
+  it("propagates manifest conflicts on download without reading the artifact", async () => {
+    const { vaultBucket, env: vaultEnv } = setupVaultEnv();
+    const path = `MedLearn/Captures/2026/07/capture_${"b".repeat(32)}.md`;
+    vaultBucket.seed(receiptKey(), canonicalReceipt());
+    vaultBucket.seed(receiptKey("publication_plan_00000000000000000000000000000002"), canonicalReceipt({
+      publication_plan_id: "publication_plan_00000000000000000000000000000002",
+      artifacts: [
+        JSON.parse(canonicalReceipt()).artifacts[0],
+        { ...JSON.parse(canonicalReceipt()).artifacts[1], content_digest: "sha256:" + "0".repeat(64) },
+      ],
+    }));
+    const response = await handle(request(`/v1/vault/files?path=${encodeURIComponent(path)}`, { headers: vaultAuth(syncToken) }), vaultEnv);
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: "VAULT_MANIFEST_CONFLICT" });
+    expect(vaultBucket.getCalls.get(path) ?? 0).toBe(0);
+  });
+
   // ── manifest: malformed receipt ───────────────────────────────────
 
   it("fails closed on malformed receipt", async () => {
     const { vaultBucket, env: vaultEnv } = setupVaultEnv();
-    vaultBucket.seed("v1/publications/plan-1.json", '{not valid json}');
+    vaultBucket.seed("v1/publications/publication_plan_00000000000000000000000000000001.json", '{not valid json}');
 
     const response = await handle(
       request("/v1/vault/manifest", { headers: vaultAuth(syncToken) }),
@@ -577,7 +616,7 @@ describe("vault read API", () => {
     const { vaultBucket, env: vaultEnv } = setupVaultEnv();
     // JSON with indentation (not canonical)
     const nonCanonical = JSON.stringify(JSON.parse(canonicalReceipt()), null, 2) + "\n";
-    vaultBucket.seed("v1/publications/plan-1.json", nonCanonical);
+    vaultBucket.seed("v1/publications/publication_plan_00000000000000000000000000000001.json", nonCanonical);
 
     const response = await handle(
       request("/v1/vault/manifest", { headers: vaultAuth(syncToken) }),
@@ -590,7 +629,7 @@ describe("vault read API", () => {
   it("fails closed on invalid receipt schema", async () => {
     const { vaultBucket, env: vaultEnv } = setupVaultEnv();
     const invalid = canonicalReceipt({ receipt_version: "99.0.0" });
-    vaultBucket.seed("v1/publications/plan-1.json", invalid);
+    vaultBucket.seed("v1/publications/publication_plan_00000000000000000000000000000001.json", invalid);
 
     const response = await handle(
       request("/v1/vault/manifest", { headers: vaultAuth(syncToken) }),
@@ -600,11 +639,66 @@ describe("vault read API", () => {
     expect(await response.json()).toEqual({ error: "INVALID_VAULT_PUBLICATION_RECEIPT" });
   });
 
+  it.each([
+    ["top-level extra field", { extra: true }],
+    ["artifact extra field", { artifacts: [{ ...JSON.parse(canonicalReceipt()).artifacts[0], extra: true }, JSON.parse(canonicalReceipt()).artifacts[1]] }],
+    ["fractional byte length", { artifacts: [{ ...JSON.parse(canonicalReceipt()).artifacts[0], byte_length: 1.5 }, JSON.parse(canonicalReceipt()).artifacts[1]] }],
+    ["missing required field", { artifacts: [{ ...JSON.parse(canonicalReceipt()).artifacts[0], byte_length: undefined }, JSON.parse(canonicalReceipt()).artifacts[1]] }],
+  ])("rejects schema-invalid receipt: %s", async (_name, overrides) => {
+    const { vaultBucket, env: vaultEnv } = setupVaultEnv();
+    vaultBucket.seed(receiptKey(), canonicalReceipt(overrides));
+    const response = await handle(request("/v1/vault/manifest", { headers: vaultAuth(syncToken) }), vaultEnv);
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: "INVALID_VAULT_PUBLICATION_RECEIPT" });
+  });
+
+  it.each([
+    ["non-json receipt key", "v1/publications/not-a-receipt.txt", canonicalReceipt(), undefined],
+    ["key/body plan mismatch", receiptKey("publication_plan_00000000000000000000000000000002"), canonicalReceipt(), undefined],
+    ["wrong receipt Content-Type", receiptKey(), canonicalReceipt(), "application/json"],
+  ])("fails closed on %s", async (_name, key, receipt, contentType) => {
+    const { vaultBucket, env: vaultEnv } = setupVaultEnv();
+    vaultBucket.seed(key, receipt, contentType);
+    const response = await handle(request("/v1/vault/manifest", { headers: vaultAuth(syncToken) }), vaultEnv);
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: "INVALID_VAULT_PUBLICATION_RECEIPT" });
+  });
+
+  it("returns storage error when a listed receipt disappears before get", async () => {
+    const { vaultBucket, env: vaultEnv } = setupVaultEnv();
+    vaultBucket.listedMissing.add(receiptKey());
+    const response = await handle(request("/v1/vault/manifest", { headers: vaultAuth(syncToken) }), vaultEnv);
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: "VAULT_STORAGE_UNAVAILABLE" });
+  });
+
+  it.each([
+    ["JSON capture mismatch", { artifacts: [{ ...JSON.parse(canonicalReceipt()).artifacts[0], path: `MedLearn/Data/Captures/capture_${"a".repeat(32)}.json` }, JSON.parse(canonicalReceipt()).artifacts[1]] }],
+    ["Markdown capture mismatch", { artifacts: [JSON.parse(canonicalReceipt()).artifacts[0], { ...JSON.parse(canonicalReceipt()).artifacts[1], path: `MedLearn/Captures/2026/07/capture_${"a".repeat(32)}.md` }] }],
+    ["Markdown month 13", { artifacts: [JSON.parse(canonicalReceipt()).artifacts[0], { ...JSON.parse(canonicalReceipt()).artifacts[1], path: `MedLearn/Captures/2026/13/capture_${"b".repeat(32)}.md` }] }],
+    ["artifact traversal", { artifacts: [{ ...JSON.parse(canonicalReceipt()).artifacts[0], path: "MedLearn/Data/Captures/../capture_bad.json" }, JSON.parse(canonicalReceipt()).artifacts[1]] }],
+  ])("rejects semantic artifact path: %s", async (_name, overrides) => {
+    const { vaultBucket, env: vaultEnv } = setupVaultEnv();
+    vaultBucket.seed(receiptKey(), canonicalReceipt(overrides));
+    const response = await handle(request("/v1/vault/manifest", { headers: vaultAuth(syncToken) }), vaultEnv);
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: "INVALID_VAULT_PUBLICATION_RECEIPT" });
+  });
+
+  it("uses deterministic duplicate provenance regardless of receipt order", () => {
+    const first = JSON.parse(canonicalReceipt());
+    const second = JSON.parse(canonicalReceipt({ publication_plan_id: "publication_plan_00000000000000000000000000000002" }));
+    const a = buildManifest([second, first]);
+    const b = buildManifest([first, second]);
+    expect(JSON.stringify(a.manifest)).toBe(JSON.stringify(b.manifest));
+    expect(a.manifest.artifacts.every((artifact) => artifact.publication_plan_id === first.publication_plan_id)).toBe(true);
+  });
+
   // ── manifest: ETag ────────────────────────────────────────────────
 
   it("returns stable ETag for manifest", async () => {
     const { vaultBucket, env: vaultEnv } = setupVaultEnv();
-    vaultBucket.seed("v1/publications/plan-1.json", canonicalReceipt());
+    vaultBucket.seed("v1/publications/publication_plan_00000000000000000000000000000001.json", canonicalReceipt());
 
     const r1 = await handle(
       request("/v1/vault/manifest", { headers: vaultAuth(syncToken) }),
@@ -620,7 +714,7 @@ describe("vault read API", () => {
 
   it("returns 304 for matching If-None-Match on manifest", async () => {
     const { vaultBucket, env: vaultEnv } = setupVaultEnv();
-    vaultBucket.seed("v1/publications/plan-1.json", canonicalReceipt());
+    vaultBucket.seed("v1/publications/publication_plan_00000000000000000000000000000001.json", canonicalReceipt());
 
     const r1 = await handle(
       request("/v1/vault/manifest", { headers: vaultAuth(syncToken) }),
@@ -643,7 +737,7 @@ describe("vault read API", () => {
   it("downloads exact artifact bytes", async () => {
     const { vaultBucket, env: vaultEnv } = setupVaultEnv();
     const receipt = canonicalReceipt();
-    vaultBucket.seed("v1/publications/plan-1.json", receipt);
+    vaultBucket.seed("v1/publications/publication_plan_00000000000000000000000000000001.json", receipt);
 
     const mdContent = "# Test Markdown\n";
     const mdDigestHex = [...new Uint8Array(
@@ -666,7 +760,7 @@ describe("vault read API", () => {
         },
       ],
     });
-    vaultBucket.seed("v1/publications/plan-1.json", receiptWithMd);
+    vaultBucket.seed("v1/publications/publication_plan_00000000000000000000000000000001.json", receiptWithMd);
     vaultBucket.seed(
       "MedLearn/Captures/2026/07/capture_" + "b".repeat(32) + ".md",
       mdContent,
@@ -682,6 +776,7 @@ describe("vault read API", () => {
     expect(response.status).toBe(200);
     expect(await response.text()).toBe(mdContent);
     expect(response.headers.get("content-type")).toBe("text/markdown; charset=utf-8");
+    expect(response.headers.get("cache-control")).toBe("private, no-cache");
   });
 
   it("returns correct Content-Type for Markdown artifact", async () => {
@@ -698,7 +793,7 @@ describe("vault read API", () => {
         { path: mdPath, media_type: "text/markdown; charset=utf-8", content_digest: "sha256:" + mdDigestHex, byte_length: mdContent.length },
       ],
     });
-    vaultBucket.seed("v1/publications/plan-1.json", receipt);
+    vaultBucket.seed("v1/publications/publication_plan_00000000000000000000000000000001.json", receipt);
     vaultBucket.seed(mdPath, mdContent, "text/markdown; charset=utf-8");
 
     const response = await handle(
@@ -723,7 +818,7 @@ describe("vault read API", () => {
         { path: "MedLearn/Captures/2026/07/capture_" + "b".repeat(32) + ".md", media_type: "text/markdown; charset=utf-8", content_digest: "sha256:" + "d".repeat(64), byte_length: 200 },
       ],
     });
-    vaultBucket.seed("v1/publications/plan-1.json", receipt);
+    vaultBucket.seed("v1/publications/publication_plan_00000000000000000000000000000001.json", receipt);
     vaultBucket.seed(jsonPath, jsonContent, "application/json; charset=utf-8");
 
     const response = await handle(
@@ -748,7 +843,7 @@ describe("vault read API", () => {
         { path: mdPath, media_type: "text/markdown; charset=utf-8", content_digest: "sha256:" + mdDigestHex, byte_length: mdContent.length },
       ],
     });
-    vaultBucket.seed("v1/publications/plan-1.json", receipt);
+    vaultBucket.seed("v1/publications/publication_plan_00000000000000000000000000000001.json", receipt);
     vaultBucket.seed(mdPath, mdContent, "text/markdown; charset=utf-8");
 
     const response = await handle(
@@ -772,7 +867,7 @@ describe("vault read API", () => {
         { path: mdPath, media_type: "text/markdown; charset=utf-8", content_digest: "sha256:" + mdDigestHex, byte_length: mdContent.length },
       ],
     });
-    vaultBucket.seed("v1/publications/plan-1.json", receipt);
+    vaultBucket.seed("v1/publications/publication_plan_00000000000000000000000000000001.json", receipt);
     vaultBucket.seed(mdPath, mdContent, "text/markdown; charset=utf-8");
 
     const r1 = await handle(
@@ -800,7 +895,7 @@ describe("vault read API", () => {
     ["notmedlearn/file.txt", "INVALID_VAULT_PATH"],
   ])("rejects invalid path: %s", async (badPath, errorCode) => {
     const { vaultBucket, env: vaultEnv } = setupVaultEnv();
-    vaultBucket.seed("v1/publications/plan-1.json", canonicalReceipt());
+    vaultBucket.seed("v1/publications/publication_plan_00000000000000000000000000000001.json", canonicalReceipt());
 
     // Use the path as-is (not double-encoded)
     const response = await handle(
@@ -813,7 +908,7 @@ describe("vault read API", () => {
 
   it("returns 404 for valid path not in manifest", async () => {
     const { vaultBucket, env: vaultEnv } = setupVaultEnv();
-    vaultBucket.seed("v1/publications/plan-1.json", canonicalReceipt());
+    vaultBucket.seed("v1/publications/publication_plan_00000000000000000000000000000001.json", canonicalReceipt());
 
     const response = await handle(
       request("/v1/vault/files?path=MedLearn%2FNotExists%2Ffile.md", { headers: vaultAuth(syncToken) }),
@@ -829,7 +924,7 @@ describe("vault read API", () => {
     const { vaultBucket, env: vaultEnv } = setupVaultEnv();
     const mdPath = "MedLearn/Captures/2026/07/capture_" + "b".repeat(32) + ".md";
     const receipt = canonicalReceipt();
-    vaultBucket.seed("v1/publications/plan-1.json", receipt);
+    vaultBucket.seed("v1/publications/publication_plan_00000000000000000000000000000001.json", receipt);
     // Don't seed the actual file
 
     const response = await handle(
@@ -846,7 +941,7 @@ describe("vault read API", () => {
     const mdPath = "MedLearn/Captures/2026/07/capture_" + "b".repeat(32) + ".md";
 
     const receipt = canonicalReceipt(); // uses fake digest "d"*64
-    vaultBucket.seed("v1/publications/plan-1.json", receipt);
+    vaultBucket.seed("v1/publications/publication_plan_00000000000000000000000000000001.json", receipt);
     vaultBucket.seed(mdPath, mdContent, "text/markdown; charset=utf-8");
 
     const response = await handle(
@@ -871,7 +966,7 @@ describe("vault read API", () => {
         { path: mdPath, media_type: "text/markdown; charset=utf-8", content_digest: "sha256:" + mdDigestHex, byte_length: 99999 }, // wrong!
       ],
     });
-    vaultBucket.seed("v1/publications/plan-1.json", receipt);
+    vaultBucket.seed("v1/publications/publication_plan_00000000000000000000000000000001.json", receipt);
     vaultBucket.seed(mdPath, mdContent, "text/markdown; charset=utf-8");
 
     const response = await handle(
@@ -896,7 +991,7 @@ describe("vault read API", () => {
         { path: mdPath, media_type: "text/markdown; charset=utf-8", content_digest: "sha256:" + mdDigestHex, byte_length: mdContent.length },
       ],
     });
-    vaultBucket.seed("v1/publications/plan-1.json", receipt);
+    vaultBucket.seed("v1/publications/publication_plan_00000000000000000000000000000001.json", receipt);
     vaultBucket.seed(mdPath, mdContent, "text/plain"); // wrong content type!
 
     const response = await handle(

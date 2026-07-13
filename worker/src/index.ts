@@ -329,6 +329,9 @@ const RECEIPT_PREFIX = "v1/publications/";
 const DIGEST_RE = /^sha256:[a-f0-9]{64}$/;
 const PLAN_ID_RE = /^publication_plan_[a-f0-9]{32}$/;
 const CAPTURE_ID_RE = /^capture_[a-f0-9]{32}$/;
+const RECEIPT_KEY_RE = /^v1\/publications\/(publication_plan_[a-f0-9]{32})\.json$/;
+const RECEIPT_KEYS = ["receipt_version", "publication_plan_id", "publication_plan_object_digest", "capture_id", "artifacts"] as const;
+const ARTIFACT_KEYS = ["path", "media_type", "content_digest", "byte_length"] as const;
 
 function canonicalJsonBytes(obj: unknown): Uint8Array {
   // Recursively sort keys, compact separators, no trailing newline here
@@ -345,20 +348,35 @@ function canonicalJsonBytes(obj: unknown): Uint8Array {
   return new TextEncoder().encode(text + "\n");
 }
 
+function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
+  const keys = Object.keys(value);
+  return keys.length === expected.length && expected.every((key) => Object.hasOwn(value, key));
+}
+
+function validArtifactPath(path: string, captureId: string, index: number): boolean {
+  if (path.includes("\\") || path.includes("//") || path.includes("\x00") || path.includes("%") || path.startsWith("/")) return false;
+  if (path.split("/").some((part) => part === "." || part === "..")) return false;
+  if (index === 0) return path === `MedLearn/Data/Captures/${captureId}.json`;
+  const match = path.match(new RegExp(`^MedLearn/Captures/[0-9]{4}/(0[1-9]|1[0-2])/${captureId}\\.md$`));
+  return match !== null;
+}
+
 function validateReceipt(r: Record<string, unknown>): VaultReceipt | null {
+  if (!hasExactKeys(r, RECEIPT_KEYS)) return null;
   if (r.receipt_version !== "0.1.0") return null;
   if (typeof r.publication_plan_id !== "string" || !PLAN_ID_RE.test(r.publication_plan_id)) return null;
   if (typeof r.publication_plan_object_digest !== "string" || !DIGEST_RE.test(r.publication_plan_object_digest)) return null;
   if (typeof r.capture_id !== "string" || !CAPTURE_ID_RE.test(r.capture_id)) return null;
   if (!Array.isArray(r.artifacts) || r.artifacts.length !== 2) return null;
   const artifacts: VaultReceiptArtifact[] = [];
-  for (const a of r.artifacts) {
+  for (const [index, a] of r.artifacts.entries()) {
     if (typeof a !== "object" || a === null) return null;
     const item = a as Record<string, unknown>;
-    if (typeof item.path !== "string" || !item.path.startsWith("MedLearn/")) return null;
+    if (!hasExactKeys(item, ARTIFACT_KEYS)) return null;
+    if (typeof item.path !== "string" || !validArtifactPath(item.path, r.capture_id, index)) return null;
     if (typeof item.media_type !== "string") return null;
     if (typeof item.content_digest !== "string" || !DIGEST_RE.test(item.content_digest)) return null;
-    if (typeof item.byte_length !== "number" || item.byte_length < 1) return null;
+    if (typeof item.byte_length !== "number" || !Number.isInteger(item.byte_length) || item.byte_length < 1) return null;
     artifacts.push({
       path: item.path,
       media_type: item.media_type,
@@ -383,10 +401,12 @@ async function listAllReceipts(bucket: R2Bucket): Promise<{ receipts: VaultRecei
   do {
     const result = await bucket.list({ prefix: RECEIPT_PREFIX, cursor });
     for (const obj of result.objects) {
-      if (!obj.key.endsWith(".json")) continue;
-      if (!obj.key.startsWith(RECEIPT_PREFIX)) continue;
+      const keyMatch = obj.key.match(RECEIPT_KEY_RE);
+      if (!keyMatch) return { receipts: [], error: "INVALID_VAULT_PUBLICATION_RECEIPT" };
       const stored = await bucket.get(obj.key);
-      if (!stored) continue;
+      if (!stored) return { receipts: [], error: "VAULT_STORAGE_UNAVAILABLE" };
+      if (stored.httpMetadata?.contentType !== "application/json; charset=utf-8")
+        return { receipts: [], error: "INVALID_VAULT_PUBLICATION_RECEIPT" };
       let parsed: unknown;
       try {
         parsed = await stored.json();
@@ -400,6 +420,8 @@ async function listAllReceipts(bucket: R2Bucket): Promise<{ receipts: VaultRecei
       if (!receipt) {
         return { receipts: [], error: "INVALID_VAULT_PUBLICATION_RECEIPT" };
       }
+      if (receipt.publication_plan_id !== keyMatch[1])
+        return { receipts: [], error: "INVALID_VAULT_PUBLICATION_RECEIPT" };
       // Verify canonical: re-serialize and compare byte-for-byte
       const canonical = canonicalJsonBytes(parsed as Record<string, unknown>);
       const storedBody = new Uint8Array(await stored.arrayBuffer());
@@ -418,9 +440,9 @@ async function listAllReceipts(bucket: R2Bucket): Promise<{ receipts: VaultRecei
   return { receipts };
 }
 
-function buildManifest(receipts: VaultReceipt[]): { manifest: VaultManifest; error?: string } {
+export function buildManifest(receipts: VaultReceipt[]): { manifest: VaultManifest; error?: string } {
   const seen = new Map<string, ManifestArtifact>();
-  for (const receipt of receipts) {
+  for (const receipt of [...receipts].sort((a, b) => a.publication_plan_id.localeCompare(b.publication_plan_id))) {
     for (const artifact of receipt.artifacts) {
       const existing = seen.get(artifact.path);
       if (existing) {
@@ -428,11 +450,12 @@ function buildManifest(receipts: VaultReceipt[]): { manifest: VaultManifest; err
         if (
           existing.content_digest !== artifact.content_digest ||
           existing.byte_length !== artifact.byte_length ||
-          existing.media_type !== artifact.media_type
+          existing.media_type !== artifact.media_type ||
+          existing.capture_id !== receipt.capture_id
         ) {
           return { manifest: { manifest_version: "0.1.0", artifacts: [] }, error: "VAULT_MANIFEST_CONFLICT" };
         }
-        // Identical duplicate — deterministic dedup, keep first
+        // Identical duplicate — sorted receipt order makes provenance deterministic.
         continue;
       }
       seen.set(artifact.path, {
@@ -472,7 +495,7 @@ async function routeVault(request: Request, env: Env, url: URL): Promise<Respons
   const cfg = vaultConfig(env);
   if (!cfg) return secure(reply(503, { error: "VAULT_SERVICE_MISCONFIGURED" }));
 
-  if (!(await authorized(request, cfg.MEDLEARN_SYNC_TOKEN))) return reply(401, { error: "UNAUTHORIZED" });
+  if (!(await authorized(request, cfg.MEDLEARN_SYNC_TOKEN))) return secure(reply(401, { error: "UNAUTHORIZED" }));
 
   // GET /v1/vault/manifest
   if (request.method === "GET" && url.pathname === "/v1/vault/manifest") {
@@ -522,7 +545,8 @@ async function routeVault(request: Request, env: Env, url: URL): Promise<Respons
     const { receipts, error: listError } = await listAllReceipts(cfg.VAULT_BUCKET);
     if (listError) return secure(reply(503, { error: listError }));
 
-    const { manifest } = buildManifest(receipts);
+    const { manifest, error: manifestError } = buildManifest(receipts);
+    if (manifestError) return secure(reply(503, { error: manifestError }));
     const match = manifest.artifacts.find(a => a.path === rawPath);
     if (!match) return secure(reply(404, { error: "NOT_FOUND" }));
 
@@ -570,7 +594,7 @@ async function routeVault(request: Request, env: Env, url: URL): Promise<Respons
     });
   }
 
-  return reply(404, { error: "NOT_FOUND" });
+  return secure(reply(404, { error: "NOT_FOUND" }));
 }
 
 export async function handle(request: Request, env: Env): Promise<Response> {
