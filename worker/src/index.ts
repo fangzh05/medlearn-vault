@@ -15,6 +15,7 @@ export interface Env {
   MEDLEARN_WORK_OAUTH_ISSUER?: string;
   MEDLEARN_WORK_OAUTH_AUDIENCE?: string;
   MEDLEARN_WORK_OAUTH_ALLOWED_SUBJECT?: string;
+  MEDLEARN_WORK_OAUTH_RESOURCE?: string;
   MEDLEARN_WORK_ALLOWED_ORIGINS?: string;
   MEDLEARN_SYNC_TOKEN?: string;
   GITHUB_ACTIONS_DISPATCH_TOKEN?: string;
@@ -38,6 +39,7 @@ interface OAuthConfig {
   issuer: string;
   audience: string;
   subject: string;
+  resource: string;
 }
 
 type Status = "received" | "dispatched" | "running" | "succeeded" | "blocked" | "failed" | "expired";
@@ -129,14 +131,33 @@ function canonicalIssuer(value: string): string | null {
   return `${url.protocol}//${url.host}${pathname}`;
 }
 
+function canonicalResource(value: string): string | null {
+  if (!/^https:\/\//i.test(value)) return null;
+  let url: URL;
+  try { url = new URL(value); } catch { return null; }
+  if (url.protocol !== "https:") return null;
+  if (url.username || url.password) return null;
+  if (url.search) return null;
+  if (url.hash) return null;
+  const pathname = url.pathname;
+  if (pathname !== "/" && pathname !== "") return null;
+  if (url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]") return null;
+  return `${url.protocol}//${url.host}`;
+}
+
 function oauthConfig(env: Env): OAuthConfig | null {
   const issuer = env.MEDLEARN_WORK_OAUTH_ISSUER?.trim();
   const audience = env.MEDLEARN_WORK_OAUTH_AUDIENCE?.trim();
   const subject = env.MEDLEARN_WORK_OAUTH_ALLOWED_SUBJECT?.trim();
+  const rawResource = env.MEDLEARN_WORK_OAUTH_RESOURCE?.trim();
   if (!issuer || !audience || !subject) return null;
   const canonical = canonicalIssuer(issuer);
   if (!canonical) return null;
-  return { issuer: canonical, audience, subject };
+  const resourceRaw = rawResource || audience;
+  const resource = canonicalResource(resourceRaw);
+  if (!resource) return null;
+  if (audience !== resource) return null;
+  return { issuer: canonical, audience, subject, resource };
 }
 
 async function sha256(value: ArrayBuffer | Uint8Array | string): Promise<string> {
@@ -424,8 +445,6 @@ async function convertHandoff(handoff: Record<string, unknown>): Promise<{ body:
   return { body: encoded.buffer.slice(encoded.byteOffset, encoded.byteOffset + encoded.byteLength), idempotencyKey: `medlearn-handoff-${digest}` };
 }
 
-const MCP_RESOURCE = "https://medlearn-cloud.fzh050531.workers.dev";
-const MCP_RESOURCE_METADATA = `${MCP_RESOURCE}/.well-known/oauth-protected-resource`;
 const MCP_SCOPE = "medlearn:handoff:submit";
 const MCP_INSTRUCTIONS = "This server submits only an explicit MedLearnHandoff selected by the user. Do not infer, supplement, scan chats, auto-approve, or auto-publish.";
 const jwks = new Map<string, JWTVerifyGetKey>();
@@ -448,13 +467,13 @@ function mcpTool(): Record<string, unknown> {
   };
 }
 
-function authChallenge(): string {
-  return `Bearer resource_metadata="${MCP_RESOURCE_METADATA}", error="insufficient_scope", error_description="${MCP_SCOPE} is required"`;
+function authChallenge(metadataUrl: string): string {
+  return `Bearer resource_metadata="${metadataUrl}", error="insufficient_scope", error_description="${MCP_SCOPE} is required"`;
 }
 
-function mcpAuthError(id: unknown): Response {
-  const response = reply(200, { jsonrpc: "2.0", id: id ?? null, result: { content: [{ type: "text", text: "Authentication required." }], _meta: { "mcp/www_authenticate": [authChallenge()] }, isError: true } });
-  response.headers.set("www-authenticate", authChallenge());
+function mcpAuthError(id: unknown, metadataUrl: string): Response {
+  const response = reply(200, { jsonrpc: "2.0", id: id ?? null, result: { content: [{ type: "text", text: "Authentication required." }], _meta: { "mcp/www_authenticate": [authChallenge(metadataUrl)] }, isError: true } });
+  response.headers.set("www-authenticate", authChallenge(metadataUrl));
   return response;
 }
 
@@ -514,7 +533,9 @@ async function routeMcp(request: Request, env: Env): Promise<Response> {
   if (call.method === "tools/list") return notification ? notify() : reply(200, { jsonrpc: "2.0", id, result: { tools: [mcpTool()] } });
   if (call.method !== "tools/call") return mcpError(id, "HANDOFF_INVALID_JSON");
   if (notification) return notify();
-  if (!(await accessTokenPayload(request, env))) return mcpAuthError(id);
+  const oauth = oauthConfig(env);
+  const metadataUrl = oauth ? `${oauth.resource}/.well-known/oauth-protected-resource` : "";
+  if (!(await accessTokenPayload(request, env))) return mcpAuthError(id, metadataUrl);
   const configured = workConfig(env);
   if (!configured) return mcpError(id, "SERVICE_MISCONFIGURED", -32603);
   const params = call.params as Record<string, unknown> | undefined;
@@ -873,7 +894,7 @@ export async function handle(request: Request, env: Env): Promise<Response> {
   if (request.method === "GET" && url.pathname === "/.well-known/oauth-protected-resource") {
     const oauth = oauthConfig(env);
     return secureMcp(reply(200, {
-      resource: MCP_RESOURCE,
+      resource: oauth?.resource ?? "",
       authorization_servers: oauth ? [oauth.issuer] : [],
       scopes_supported: [MCP_SCOPE],
       resource_documentation: "https://github.com/fangzh05/medlearn-vault/blob/main/docs/medlearn-plugin-setup.md",

@@ -85,7 +85,9 @@ class Bucket {
 
 const token = "ingest-secret-that-is-at-least-32-bytes";
 const issuer = "https://issuer.test/";
-const audience = "medlearn-work";
+const productionResource = "https://medlearn-cloud.fzh050531.workers.dev";
+const stagingResource = "https://medlearn-cloud-oauth-staging.fzh050531.workers.dev";
+const audience = productionResource;
 let privateKey: CryptoKey;
 let publicJwk: Record<string, unknown>;
 let validToken = "";
@@ -157,6 +159,7 @@ beforeEach(() => {
     MEDLEARN_INGEST_TOKEN: token,
     MEDLEARN_WORK_OAUTH_ISSUER: issuer,
     MEDLEARN_WORK_OAUTH_AUDIENCE: audience,
+    MEDLEARN_WORK_OAUTH_RESOURCE: productionResource,
     MEDLEARN_WORK_OAUTH_ALLOWED_SUBJECT: "user-123",
     GITHUB_ACTIONS_DISPATCH_TOKEN: "github-secret",
   };
@@ -602,6 +605,165 @@ describe("OAuth issuer canonicalization", () => {
     // MCP tools/call succeeds without any client_id binding
     const response = await handle(mcp("tools/call", { name: "submit_learning_handoff", arguments: { handoff: handoff() } }), minimalEnv);
     expect(response.status).toBe(200);
+  });
+});
+
+describe("OAuth resource isolation and staging", () => {
+  const stagingEnvBase: Env = {
+    CONTROL_BUCKET: undefined,
+    VAULT_BUCKET: undefined,
+    MEDLEARN_WORK_OAUTH_ISSUER: issuer,
+    MEDLEARN_WORK_OAUTH_AUDIENCE: stagingResource,
+    MEDLEARN_WORK_OAUTH_RESOURCE: stagingResource,
+    MEDLEARN_WORK_OAUTH_ALLOWED_SUBJECT: "user-123",
+  };
+
+  it("uses production resource in protected-resource metadata", async () => {
+    const response = await handle(request("/.well-known/oauth-protected-resource"), env);
+    const body = await response.json<{ resource: string }>();
+    expect(body.resource).toBe(productionResource);
+  });
+
+  it("uses staging resource in protected-resource metadata", async () => {
+    const response = await handle(request("/.well-known/oauth-protected-resource"), stagingEnvBase);
+    const body = await response.json<{ resource: string }>();
+    expect(body.resource).toBe(stagingResource);
+  });
+
+  it("canonicalizes resource with trailing slash to origin without slash", async () => {
+    const slashEnv = { ...stagingEnvBase, MEDLEARN_WORK_OAUTH_RESOURCE: `${stagingResource}/` };
+    const response = await handle(request("/.well-known/oauth-protected-resource"), slashEnv);
+    const body = await response.json<{ resource: string }>();
+    expect(body.resource).toBe(stagingResource);
+  });
+
+  it("rejects resource containing /mcp path", async () => {
+    const badEnv = { ...stagingEnvBase, MEDLEARN_WORK_OAUTH_RESOURCE: `${stagingResource}/mcp` };
+    const response = await handle(request("/.well-known/oauth-protected-resource"), badEnv);
+    const body = await response.json<{ resource: string }>();
+    expect(body.resource).toBe("");
+  });
+
+  it("rejects HTTP resource", async () => {
+    const badEnv = { ...stagingEnvBase, MEDLEARN_WORK_OAUTH_RESOURCE: "http://example.com" };
+    const response = await handle(request("/.well-known/oauth-protected-resource"), badEnv);
+    const body = await response.json<{ resource: string }>();
+    expect(body.resource).toBe("");
+  });
+
+  it("rejects resource with query string", async () => {
+    const badEnv = { ...stagingEnvBase, MEDLEARN_WORK_OAUTH_RESOURCE: `${stagingResource}?x=1` };
+    const response = await handle(request("/.well-known/oauth-protected-resource"), badEnv);
+    const body = await response.json<{ resource: string }>();
+    expect(body.resource).toBe("");
+  });
+
+  it("rejects resource with fragment", async () => {
+    const badEnv = { ...stagingEnvBase, MEDLEARN_WORK_OAUTH_RESOURCE: `${stagingResource}#x` };
+    const response = await handle(request("/.well-known/oauth-protected-resource"), badEnv);
+    const body = await response.json<{ resource: string }>();
+    expect(body.resource).toBe("");
+  });
+
+  it("rejects resource with embedded credentials", async () => {
+    const badEnv = { ...stagingEnvBase, MEDLEARN_WORK_OAUTH_RESOURCE: "https://user:pass@example.com" };
+    const response = await handle(request("/.well-known/oauth-protected-resource"), badEnv);
+    const body = await response.json<{ resource: string }>();
+    expect(body.resource).toBe("");
+  });
+
+  it("rejects localhost resource", async () => {
+    const badEnv = { ...stagingEnvBase, MEDLEARN_WORK_OAUTH_RESOURCE: "https://localhost/" };
+    const response = await handle(request("/.well-known/oauth-protected-resource"), badEnv);
+    const body = await response.json<{ resource: string }>();
+    expect(body.resource).toBe("");
+  });
+
+  it("rejects config when audience differs from resource", async () => {
+    const mismatchEnv = { ...stagingEnvBase, MEDLEARN_WORK_OAUTH_AUDIENCE: productionResource, MEDLEARN_WORK_OAUTH_RESOURCE: stagingResource };
+    const response = await handle(request("/.well-known/oauth-protected-resource"), mismatchEnv);
+    const body = await response.json<{ resource: string }>();
+    expect(body.resource).toBe("");
+  });
+
+  it("challenge points to staging metadata URL", async () => {
+    const stagingEnv = { ...stagingEnvBase };
+    // Use an empty/invalid token to trigger the auth challenge
+    const response = await handle(request("/mcp", {
+      method: "POST",
+      headers: { authorization: "Bearer invalid", "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "submit_learning_handoff", arguments: { handoff: handoff() } } }),
+    }), stagingEnv);
+    const wwwAuth = response.headers.get("www-authenticate") ?? "";
+    expect(wwwAuth).toContain(stagingResource);
+    expect(wwwAuth).toContain("oauth-protected-resource");
+  });
+
+  it("accepts staging token audience on staging", async () => {
+    const stagingEnv = { ...stagingEnvBase };
+    const token = await signedToken({ audience: stagingResource });
+    // tools/call will fail with SERVICE_MISCONFIGURED (no R2) but must pass auth
+    const response = await handle(request("/mcp", {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "submit_learning_handoff", arguments: { handoff: handoff() } } }),
+    }), stagingEnv);
+    const body = await response.json<{ error?: { message: string } }>();
+    // Auth passes, but write fails (no CONTROL_BUCKET/GitHub token)
+    expect(body.error?.message).toBe("SERVICE_MISCONFIGURED");
+  });
+
+  it("rejects production token audience on staging", async () => {
+    const stagingEnv = { ...stagingEnvBase };
+    const token = await signedToken({ audience: productionResource });
+    const response = await handle(request("/mcp", {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "submit_learning_handoff", arguments: { handoff: handoff() } } }),
+    }), stagingEnv);
+    const body = await response.json<{ result: { isError: boolean } }>();
+    expect(body.result?.isError).toBe(true);
+  });
+
+  it("rejects staging token audience on production", async () => {
+    const token = await signedToken({ audience: stagingResource });
+    const response = await handle(mcp("tools/call", { name: "submit_learning_handoff", arguments: { handoff: handoff() } }, token), env);
+    const body = await response.json<{ result: { isError: boolean } }>();
+    expect(body.result?.isError).toBe(true);
+  });
+
+  it("staging environment has no R2 or GitHub bindings", async () => {
+    const stagingEnv = { ...stagingEnvBase };
+    expect(stagingEnv.CONTROL_BUCKET).toBeUndefined();
+    expect(stagingEnv.VAULT_BUCKET).toBeUndefined();
+    expect(stagingEnv.GITHUB_ACTIONS_DISPATCH_TOKEN).toBeUndefined();
+    // Health still works without any bindings
+    const response = await handle(request("/health"), stagingEnv);
+    expect(response.status).toBe(200);
+  });
+
+  it("staging authenticated tools/call produces zero writes", async () => {
+    const stagingEnv = { ...stagingEnvBase };
+    const token = await signedToken({ audience: stagingResource });
+    const response = await handle(request("/mcp", {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "submit_learning_handoff", arguments: { handoff: handoff() } } }),
+    }), stagingEnv);
+    const body = await response.json<{ error?: { message: string } }>();
+    expect(body.error?.message).toBe("SERVICE_MISCONFIGURED");
+    // Bucket should be empty — zero objects written
+    expect(bucket.objects.size).toBe(0);
+  });
+
+  it("accepts production resource from audience default when resource is unset", async () => {
+    const defaultedEnv = { ...env };
+    delete defaultedEnv.MEDLEARN_WORK_OAUTH_RESOURCE;
+    // defaultedEnv only has MEDLEARN_WORK_OAUTH_AUDIENCE set to productionResource
+    // resource should default to audience
+    const response = await handle(request("/.well-known/oauth-protected-resource"), defaultedEnv);
+    const body = await response.json<{ resource: string }>();
+    expect(body.resource).toBe(productionResource);
   });
 });
 

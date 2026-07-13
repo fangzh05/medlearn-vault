@@ -9,3 +9,6 @@ bucket_name = "medlearn-control"
 [[r2_buckets]]
 binding = "VAULT_BUCKET"
 bucket_name = "medlearn-vault"
+
+[env.oauth-staging]
+name = "medlearn-cloud-oauth-staging"
