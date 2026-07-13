@@ -10,7 +10,7 @@ runner = CliRunner()
 def test_version() -> None:
     result = runner.invoke(app, ["--version"])
     assert result.exit_code == 0
-    assert result.stdout.strip() == "0.11.0"
+    assert result.stdout.strip() == "0.12.0"
 
 
 def test_schema_export(tmp_path: Path) -> None:

@@ -37,6 +37,22 @@ from medlearn_vault.preview import (
     render_markdown,
 )
 from medlearn_vault.publication import VaultPublicationPlan, VaultPublicationReceipt
+from medlearn_vault.sync_client import (
+    configure as sync_configure_service,
+)
+from medlearn_vault.sync_client import (
+    login as sync_login_service,
+)
+from medlearn_vault.sync_client import (
+    logout as sync_logout_service,
+)
+from medlearn_vault.sync_client import (
+    pull as sync_pull_service,
+)
+from medlearn_vault.sync_client import (
+    status as sync_status_service,
+)
+from medlearn_vault.sync_models import SyncError
 from medlearn_vault.workflow import (
     ApprovalAttestor,
     ApprovalOrchestrator,
@@ -59,12 +75,14 @@ bundle_app = typer.Typer(help="Validate contract bundles")
 preview_app = typer.Typer(help="Render deterministic previews")
 capture_app = typer.Typer(help="Validate and review capture proposals")
 workflow_app = typer.Typer(help="Run cloud control-plane workflows")
+sync_app = typer.Typer(help="Synchronize published artifacts to a local Obsidian Vault")
 app.add_typer(schema_app, name="schema")
 app.add_typer(concept_app, name="concept")
 app.add_typer(bundle_app, name="bundle")
 app.add_typer(preview_app, name="preview")
 app.add_typer(capture_app, name="capture")
 app.add_typer(workflow_app, name="workflow")
+app.add_typer(sync_app, name="sync")
 
 SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "concept_entity": ConceptEntity,
@@ -113,6 +131,83 @@ def doctor() -> None:
     typer.echo("contracts: ok")
     if not python_ok:
         raise typer.Exit(1)
+
+
+def _sync_output(value: dict[str, object], json_output: bool) -> None:
+    if json_output:
+        typer.echo(json.dumps(value, ensure_ascii=False, sort_keys=True))
+    else:
+        typer.echo(
+            " ".join(
+                f"{key}={str(item).lower() if isinstance(item, bool) else item}"
+                for key, item in value.items()
+            )
+        )
+
+
+def _sync_error(exc: SyncError, json_output: bool) -> None:
+    _sync_output({"status": "error", "error_code": exc.code}, json_output)
+    raise typer.Exit(3 if exc.code == "SYNC_LOCAL_CONFLICT" else 1) from exc
+
+
+@sync_app.command("configure")
+def sync_configure(
+    endpoint: Annotated[str, typer.Option("--endpoint")],
+    vault: Annotated[Path, typer.Option("--vault")],
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    try:
+        config = sync_configure_service(endpoint, vault)
+    except SyncError as exc:
+        _sync_error(exc, json_output)
+    _sync_output(
+        {"status": "configured", "endpoint": config.endpoint, "vault": config.vault_path},
+        json_output,
+    )
+
+
+@sync_app.command("login")
+def sync_login() -> None:
+    token = os.environ.get("MEDLEARN_SYNC_TOKEN")
+    if token is None:
+        token = typer.prompt("Sync token", hide_input=True)
+    try:
+        sync_login_service(token)
+    except SyncError as exc:
+        _sync_error(exc, False)
+    typer.echo("status=authenticated credential=windows_dpapi")
+
+
+@sync_app.command("logout")
+def sync_logout() -> None:
+    try:
+        sync_logout_service()
+    except SyncError as exc:
+        _sync_error(exc, False)
+    typer.echo("status=logged_out")
+
+
+@sync_app.command("status")
+def sync_status(json_output: Annotated[bool, typer.Option("--json")] = False) -> None:
+    try:
+        _sync_output(sync_status_service(), json_output)
+    except SyncError as exc:
+        _sync_error(exc, json_output)
+
+
+@sync_app.command("pull")
+def sync_pull(
+    dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+    timeout: Annotated[float, typer.Option("--timeout")] = 30,
+) -> None:
+    try:
+        result = sync_pull_service(dry_run=dry_run, timeout=timeout)
+    except SyncError as exc:
+        _sync_error(exc, json_output)
+    _sync_output(result, json_output)
+    if result["conflict_count"]:
+        raise typer.Exit(3)
 
 
 @schema_app.command("export")
