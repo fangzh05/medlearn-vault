@@ -49,10 +49,19 @@ from medlearn_vault.sync_client import (
 from medlearn_vault.sync_client import (
     pull as sync_pull_service,
 )
+from medlearn_vault.sync_client import scheduled_pull as scheduled_pull_service
 from medlearn_vault.sync_client import (
     status as sync_status_service,
 )
 from medlearn_vault.sync_models import SyncError
+from medlearn_vault.windows_rollout import (
+    install_schedule,
+    install_windows,
+    remove_schedule,
+)
+from medlearn_vault.windows_rollout import (
+    schedule_status as schedule_status_service,
+)
 from medlearn_vault.workflow import (
     ApprovalAttestor,
     ApprovalOrchestrator,
@@ -76,6 +85,7 @@ preview_app = typer.Typer(help="Render deterministic previews")
 capture_app = typer.Typer(help="Validate and review capture proposals")
 workflow_app = typer.Typer(help="Run cloud control-plane workflows")
 sync_app = typer.Typer(help="Synchronize published artifacts to a local Obsidian Vault")
+sync_schedule_app = typer.Typer(help="Manage the optional Windows Scheduled Task")
 app.add_typer(schema_app, name="schema")
 app.add_typer(concept_app, name="concept")
 app.add_typer(bundle_app, name="bundle")
@@ -83,6 +93,7 @@ app.add_typer(preview_app, name="preview")
 app.add_typer(capture_app, name="capture")
 app.add_typer(workflow_app, name="workflow")
 app.add_typer(sync_app, name="sync")
+sync_app.add_typer(sync_schedule_app, name="schedule")
 
 SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "concept_entity": ConceptEntity,
@@ -198,16 +209,66 @@ def sync_status(json_output: Annotated[bool, typer.Option("--json")] = False) ->
 @sync_app.command("pull")
 def sync_pull(
     dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
+    confirm_first_pull: Annotated[bool, typer.Option("--confirm-first-pull")] = False,
+    scheduled: Annotated[bool, typer.Option("--scheduled", hidden=True)] = False,
     json_output: Annotated[bool, typer.Option("--json")] = False,
     timeout: Annotated[float, typer.Option("--timeout")] = 30,
 ) -> None:
     try:
-        result = sync_pull_service(dry_run=dry_run, timeout=timeout)
+        result = (
+            scheduled_pull_service(timeout=timeout)
+            if scheduled
+            else sync_pull_service(
+                dry_run=dry_run, confirm_first_pull=confirm_first_pull, timeout=timeout
+            )
+        )
     except SyncError as exc:
         _sync_error(exc, json_output)
     _sync_output(result, json_output)
     if result["conflict_count"]:
         raise typer.Exit(3)
+
+
+@sync_app.command("install-windows")
+def sync_install_windows(
+    wheel: Annotated[Path, typer.Option("--wheel")],
+    dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    try:
+        _sync_output(install_windows(wheel, dry_run=dry_run), json_output)
+    except SyncError as exc:
+        _sync_error(exc, json_output)
+
+
+@sync_schedule_app.command("install")
+def sync_schedule_install(
+    interval_minutes: Annotated[int, typer.Option("--interval-minutes")] = 15,
+    what_if: Annotated[bool, typer.Option("--what-if")] = False,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    try:
+        _sync_output(
+            install_schedule(interval_minutes=interval_minutes, what_if=what_if), json_output
+        )
+    except SyncError as exc:
+        _sync_error(exc, json_output)
+
+
+@sync_schedule_app.command("status")
+def sync_schedule_status(json_output: Annotated[bool, typer.Option("--json")] = False) -> None:
+    try:
+        _sync_output(schedule_status_service(), json_output)
+    except SyncError as exc:
+        _sync_error(exc, json_output)
+
+
+@sync_schedule_app.command("remove")
+def sync_schedule_remove(json_output: Annotated[bool, typer.Option("--json")] = False) -> None:
+    try:
+        _sync_output(remove_schedule(), json_output)
+    except SyncError as exc:
+        _sync_error(exc, json_output)
 
 
 @schema_app.command("export")
@@ -471,9 +532,7 @@ def workflow_publish_vault(
             os.environ.get("VAULT_R2_ACCESS_KEY_ID", ""),
             os.environ.get("VAULT_R2_SECRET_ACCESS_KEY", ""),
         )
-        result = VaultPublicationWriter(
-            control_store, vault_store
-        ).run(
+        result = VaultPublicationWriter(control_store, vault_store).run(
             publication_plan_id,
             publication_plan_object_digest,
             source_job_id,
@@ -509,9 +568,7 @@ def validate_capture_draft(path: Path) -> None:
 @capture_app.command("extract-intake")
 def extract_intake(path: Path, expected_intake_digest: str, output: Path) -> None:
     try:
-        draft_bytes, draft_digest = extract_capture_draft(
-            path.read_bytes(), expected_intake_digest
-        )
+        draft_bytes, draft_digest = extract_capture_draft(path.read_bytes(), expected_intake_digest)
         output.write_bytes(draft_bytes)
     except (OSError, ValidationError, ValueError) as exc:
         code = str(exc) if str(exc) == "INTAKE_DIGEST_MISMATCH" else "INVALID_INTAKE_ENVELOPE"

@@ -109,3 +109,13 @@ class SyncState(StrictModel):
             ):
                 raise ValueError("managed artifact does not match manifest")
         return self
+
+
+class RolloutState(StrictModel):
+    """Token-free state used to make a production first pull explicit."""
+
+    rollout_version: Literal["0.1.0"] = "0.1.0"
+    endpoint: str
+    vault_path: str
+    dry_run_succeeded: bool = False
+    first_pull_completed: bool = False

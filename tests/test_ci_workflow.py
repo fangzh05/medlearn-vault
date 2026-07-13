@@ -32,10 +32,15 @@ def test_ci_workflow_is_pinned_reproducible_and_secret_free() -> None:
 
     windows = data["jobs"]["windows-sync-quality"]
     windows_commands = "\n".join(step.get("run", "") for step in windows["steps"])
-    targeted = "tests/test_sync_client.py tests/test_sync_cli.py tests/test_windows_secrets.py"
+    targeted = (
+        "tests/test_sync_client.py tests/test_sync_cli.py tests/test_windows_secrets.py "
+        "tests/test_windows_rollout.py"
+    )
     assert targeted in windows_commands
-    assert "Get-ChildItem wheelhouse\\*.whl" in windows_commands
+    assert "Get-ChildItem wheelhouse\\medlearn_vault-*.whl" in windows_commands
     assert "medlearn --version" in windows_commands
+    assert "medlearn sync install-windows --wheel $wheel.FullName --json" in windows_commands
+    assert "medlearn sync schedule install --what-if --json" in windows_commands
 
     worker = data["jobs"]["worker-quality"]
     worker_commands = "\n".join(step.get("run", "") for step in worker["steps"])

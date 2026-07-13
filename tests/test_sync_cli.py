@@ -12,9 +12,22 @@ runner = CliRunner()
 
 
 def test_sync_help() -> None:
-    for command in ([], ["configure"], ["login"], ["logout"], ["status"], ["pull"]):
+    for command in (
+        [],
+        ["configure"],
+        ["login"],
+        ["logout"],
+        ["status"],
+        ["pull"],
+        ["install-windows"],
+        ["schedule"],
+        ["schedule", "install"],
+        ["schedule", "status"],
+        ["schedule", "remove"],
+    ):
         result = runner.invoke(app, ["sync", *command, "--help"])
         assert result.exit_code == 0
+    assert "--token" not in runner.invoke(app, ["sync", "login", "--help"]).stdout
 
 
 def test_sync_configure_json(tmp_path: Path) -> None:
@@ -76,7 +89,9 @@ def test_sync_pull_conflicts_keep_successes_and_exit_three(
     monkeypatch.setattr(
         sync_client, "_download", lambda _, __, artifact, ___, ____: bodies[artifact.path]
     )
-    result = runner.invoke(app, ["sync", "pull", "--json"])
+    dry_run = runner.invoke(app, ["sync", "pull", "--dry-run", "--json"])
+    assert dry_run.exit_code == 3
+    result = runner.invoke(app, ["sync", "pull", "--confirm-first-pull", "--json"])
     assert result.exit_code == 3
     assert '"downloaded_count": 1' in result.stdout
     assert f'"conflict_paths": ["{conflict.path}"]' in result.stdout
