@@ -1,0 +1,18 @@
+{
+  "name": "medlearn",
+  "version": "0.14.0",
+  "description": "Submit explicit MedLearnHandoff Project Sources through the authenticated MedLearn workflow.",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "MedLearn",
+    "shortDescription": "Submit structured learning handoffs",
+    "longDescription": "Reads an explicitly selected MedLearnHandoff from the current Work context and submits it through the authenticated MedLearn intake pipeline.",
+    "developerName": "fangzh05",
+    "category": "Productivity",
+    "capabilities": ["Read", "Write"],
+    "defaultPrompt": [
+      "Read the explicitly selected MedLearnHandoff Project Source and submit it with the MedLearn tool.",
+      "Do not infer or add evidence that is absent from the selected Handoff."
+    ]
+  }
+}

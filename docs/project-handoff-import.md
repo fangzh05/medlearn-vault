@@ -21,12 +21,17 @@ structured handoff explicitly passed by Work.
 
 ## Remote tool boundary
 
-The existing Cloudflare Worker exposes authenticated Streamable MCP at `/mcp`.
-It exposes exactly one tool, `submit_learning_handoff`, with input
-`{"handoff": {…}}`. Configure the connector with the server-side
-`MEDLEARN_WORK_TOKEN`; do not put a token in a Project Source, tool arguments,
-logs, or user-facing errors. `MEDLEARN_WORK_TOKEN` is separate from the ingest,
-sync, and GitHub credentials.
+The Worker exposes Streamable MCP at `/mcp`. Discovery (`initialize`,
+`notifications/initialized`, `ping`, and `tools/list`) is unauthenticated;
+only `tools/call` requires an OAuth access token with
+`medlearn:handoff:submit`. It exposes exactly one tool,
+`submit_learning_handoff`, with input `{"handoff": {…}}`.
+
+The Work Skill must receive one explicitly selected Project Source. It must not
+scan Sources or chats, use project memory, add evidence, make medical
+inferences, save a token, or submit directly over HTTP. OAuth validation and
+schema validation are the MCP App boundary; deterministic conversion and the
+existing intake business function stay in-process in the Worker.
 
 The tool validates the strict UTF-8 schema, creates canonical JSON, derives
 source/session/message IDs and its idempotency key from the handoff SHA-256,
@@ -39,3 +44,8 @@ or publishes anything.
 candidates. Until CaptureDraft gains an explicit compatible field, non-empty
 `learning_goals` or `unfinished_topics` fail with `HANDOFF_CONVERSION_FAILURE`;
 the tool never silently turns them into claims, learner evidence, or corrections.
+
+The Worker is an OAuth Resource Server, not an Authorization Server. It uses
+an external OIDC/OAuth provider configured with issuer, audience, and one
+allowed subject. Until that provider is configured, discovery remains usable
+but `tools/call` returns the OAuth challenge and cannot submit.

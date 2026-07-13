@@ -1,6 +1,7 @@
 import validateEnvelope from "./generated/intake-validator.js";
 import validateHandoff from "./generated/handoff-validator.js";
 import handoffSchema from "../../schemas/workflow/current/medlearn_handoff.schema.json";
+import { createRemoteJWKSet, jwtVerify, type JWTPayload, type JWTVerifyGetKey } from "jose";
 
 const toolHandoffSchema = {
   ...handoffSchema,
@@ -11,7 +12,10 @@ export interface Env {
   CONTROL_BUCKET?: R2Bucket;
   VAULT_BUCKET?: R2Bucket;
   MEDLEARN_INGEST_TOKEN?: string;
-  MEDLEARN_WORK_TOKEN?: string;
+  MEDLEARN_WORK_OAUTH_ISSUER?: string;
+  MEDLEARN_WORK_OAUTH_AUDIENCE?: string;
+  MEDLEARN_WORK_OAUTH_ALLOWED_SUBJECT?: string;
+  MEDLEARN_WORK_ALLOWED_ORIGINS?: string;
   MEDLEARN_SYNC_TOKEN?: string;
   GITHUB_ACTIONS_DISPATCH_TOKEN?: string;
 }
@@ -28,8 +32,12 @@ interface VaultConfig {
   MEDLEARN_SYNC_TOKEN: string;
 }
 
-interface WorkConfig extends IntakeConfig {
-  MEDLEARN_WORK_TOKEN: string;
+type WorkConfig = IntakeConfig;
+
+interface OAuthConfig {
+  issuer: string;
+  audience: string;
+  subject: string;
 }
 
 type Status = "received" | "dispatched" | "running" | "succeeded" | "blocked" | "failed" | "expired";
@@ -80,6 +88,11 @@ function secure(response: Response): Response {
   return response;
 }
 
+function secureMcp(response: Response): Response {
+  secure(response).headers.set("vary", "Authorization, Origin");
+  return response;
+}
+
 function config(env: Env): Config | null {
   const token = env.MEDLEARN_INGEST_TOKEN;
   const github = env.GITHUB_ACTIONS_DISPATCH_TOKEN;
@@ -97,12 +110,19 @@ function vaultConfig(env: Env): VaultConfig | null {
 }
 
 function workConfig(env: Env): WorkConfig | null {
-  const token = env.MEDLEARN_WORK_TOKEN;
   const github = env.GITHUB_ACTIONS_DISPATCH_TOKEN;
   if (!env.CONTROL_BUCKET || typeof env.CONTROL_BUCKET.get !== "function") return null;
-  if (typeof token !== "string" || token.length < 32) return null;
   if (typeof github !== "string" || github.trim().length === 0) return null;
-  return { CONTROL_BUCKET: env.CONTROL_BUCKET, MEDLEARN_WORK_TOKEN: token, GITHUB_ACTIONS_DISPATCH_TOKEN: github };
+  return { CONTROL_BUCKET: env.CONTROL_BUCKET, GITHUB_ACTIONS_DISPATCH_TOKEN: github };
+}
+
+function oauthConfig(env: Env): OAuthConfig | null {
+  const issuer = env.MEDLEARN_WORK_OAUTH_ISSUER?.trim();
+  const audience = env.MEDLEARN_WORK_OAUTH_AUDIENCE?.trim();
+  const subject = env.MEDLEARN_WORK_OAUTH_ALLOWED_SUBJECT?.trim();
+  if (!issuer || !audience || !subject) return null;
+  try { new URL(issuer); } catch { return null; }
+  return { issuer: issuer.replace(/\/$/, ""), audience, subject };
 }
 
 async function sha256(value: ArrayBuffer | Uint8Array | string): Promise<string> {
@@ -390,16 +410,75 @@ async function convertHandoff(handoff: Record<string, unknown>): Promise<{ body:
   return { body: encoded.buffer.slice(encoded.byteOffset, encoded.byteOffset + encoded.byteLength), idempotencyKey: `medlearn-handoff-${digest}` };
 }
 
-function mcpError(id: unknown, code: string): Response {
-  return reply(200, { jsonrpc: "2.0", id: id ?? null, error: { code: -32602, message: code } });
+const MCP_RESOURCE = "https://medlearn-cloud.fzh050531.workers.dev";
+const MCP_RESOURCE_METADATA = `${MCP_RESOURCE}/.well-known/oauth-protected-resource`;
+const MCP_SCOPE = "medlearn:handoff:submit";
+const MCP_INSTRUCTIONS = "This server submits only an explicit MedLearnHandoff selected by the user. Do not infer, supplement, scan chats, auto-approve, or auto-publish.";
+const jwks = new Map<string, JWTVerifyGetKey>();
+
+function mcpError(id: unknown, code: string, rpcCode = -32602): Response {
+  return reply(200, { jsonrpc: "2.0", id: id ?? null, error: { code: rpcCode, message: code } });
+}
+
+function mcpTool(): Record<string, unknown> {
+  return {
+    name: "submit_learning_handoff", title: "Submit MedLearn learning handoff",
+    description: "Use this only when the user has explicitly selected or provided a MedLearnHandoff 0.1.0. Validates and idempotently submits the handoff to the bounded MedLearn intake workflow. Do not use project memory or infer missing evidence.",
+    annotations: { readOnlyHint: false, openWorldHint: false, destructiveHint: false },
+    securitySchemes: [{ type: "oauth2", scopes: [MCP_SCOPE] }],
+    inputSchema: { type: "object", additionalProperties: false, required: ["handoff"], properties: { handoff: toolHandoffSchema } },
+    outputSchema: { type: "object", additionalProperties: false, required: ["status", "job_id", "intake_digest", "concept_count", "claim_count", "learner_evidence_count", "misconception_count", "unresolved_count", "unfinished_count"], properties: {
+      status: { const: "submitted", type: "string" }, job_id: { type: "string" }, intake_digest: { pattern: "^sha256:[a-f0-9]{64}$", type: "string" },
+      concept_count: { type: "integer", minimum: 0 }, claim_count: { type: "integer", minimum: 0 }, learner_evidence_count: { type: "integer", minimum: 0 }, misconception_count: { type: "integer", minimum: 0 }, unresolved_count: { type: "integer", minimum: 0 }, unfinished_count: { type: "integer", minimum: 0 },
+    } },
+  };
+}
+
+function authChallenge(): string {
+  return `Bearer resource_metadata="${MCP_RESOURCE_METADATA}", error="insufficient_scope", error_description="${MCP_SCOPE} is required"`;
+}
+
+function mcpAuthError(id: unknown): Response {
+  const response = reply(200, { jsonrpc: "2.0", id: id ?? null, result: { content: [{ type: "text", text: "Authentication required." }], _meta: { "mcp/www_authenticate": [authChallenge()] }, isError: true } });
+  response.headers.set("www-authenticate", authChallenge());
+  return response;
+}
+
+function allowedOrigin(request: Request, env: Env): boolean {
+  const origin = request.headers.get("origin");
+  if (!origin) return true;
+  const origins = (env.MEDLEARN_WORK_ALLOWED_ORIGINS ?? "https://chatgpt.com,https://chat.openai.com").split(",").map((value) => value.trim());
+  return origins.includes(origin);
+}
+
+async function accessTokenPayload(request: Request, env: Env): Promise<JWTPayload | null> {
+  const oauth = oauthConfig(env);
+  const token = request.headers.get("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1];
+  if (!oauth || !token) return null;
+  try {
+    let key = jwks.get(oauth.issuer);
+    if (!key) {
+      const metadata = await (await fetch(`${oauth.issuer}/.well-known/openid-configuration`)).json() as { jwks_uri?: string };
+      if (!metadata.jwks_uri) return null;
+      key = createRemoteJWKSet(new URL(metadata.jwks_uri));
+      jwks.set(oauth.issuer, key);
+    }
+    const { payload } = await jwtVerify(token, key, { issuer: oauth.issuer });
+    const audiences = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
+    if (!audiences.includes(oauth.audience) && payload.resource !== oauth.audience) return null;
+    const scopes = typeof payload.scope === "string" ? payload.scope.split(/\s+/) : [];
+    if (payload.sub !== oauth.subject || !scopes.includes(MCP_SCOPE)) return null;
+    return payload;
+  } catch { return null; }
 }
 
 async function routeMcp(request: Request, env: Env): Promise<Response> {
-  const configured = workConfig(env);
-  if (!configured) return reply(503, { error: "SERVICE_MISCONFIGURED" });
-  if (!(await authorized(request, configured.MEDLEARN_WORK_TOKEN))) return reply(401, { error: "HANDOFF_AUTH_REQUIRED" });
-  if (request.method !== "POST" || request.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase() !== "application/json")
-    return reply(400, { error: "HANDOFF_INVALID_JSON" });
+  if (request.method !== "POST") return new Response(null, { status: 405, headers: { allow: "POST" } });
+  if (!allowedOrigin(request, env)) return reply(403, { error: "MCP_ORIGIN_FORBIDDEN" });
+  const accept = request.headers.get("accept");
+  if (accept && !accept.includes("application/json") && !accept.includes("text/event-stream") && !accept.includes("*/*")) return reply(406, { error: "MCP_NOT_ACCEPTABLE" });
+  if (request.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase() !== "application/json")
+    return reply(415, { error: "HANDOFF_INVALID_JSON" });
   const declared = Number(request.headers.get("content-length") ?? 0);
   if (declared > MAX_HANDOFF_BODY) return reply(413, { error: "HANDOFF_SCHEMA_INVALID" });
   const body = await request.arrayBuffer();
@@ -407,11 +486,20 @@ async function routeMcp(request: Request, env: Env): Promise<Response> {
   let call: Record<string, unknown>;
   try { call = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(body)) as Record<string, unknown>; }
   catch { return reply(400, { error: "HANDOFF_INVALID_JSON" }); }
+  if (Array.isArray(call)) return mcpError(null, "BATCH_NOT_SUPPORTED", -32600);
   const id = call.id ?? null;
   if (call.jsonrpc !== "2.0" || typeof call.method !== "string") return mcpError(id, "HANDOFF_INVALID_JSON");
-  if (call.method === "initialize") return reply(200, { jsonrpc: "2.0", id, result: { protocolVersion: "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: "medlearn-work", version: "0.14.0" } } });
-  if (call.method === "tools/list") return reply(200, { jsonrpc: "2.0", id, result: { tools: [{ name: "submit_learning_handoff", description: "Validate and submit a user-selected MedLearnHandoff 0.1.0 Project Source.", inputSchema: { type: "object", additionalProperties: false, required: ["handoff"], properties: { handoff: toolHandoffSchema } } }] } });
+  const notification = !("id" in call);
+  const notify = (): Response => new Response(null, { status: 202 });
+  if (call.method === "initialize") return notification ? notify() : reply(200, { jsonrpc: "2.0", id, result: { protocolVersion: "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: "medlearn-work", version: "0.14.0" }, instructions: MCP_INSTRUCTIONS } });
+  if (call.method === "notifications/initialized") return notify();
+  if (call.method === "ping") return notification ? notify() : reply(200, { jsonrpc: "2.0", id, result: {} });
+  if (call.method === "tools/list") return notification ? notify() : reply(200, { jsonrpc: "2.0", id, result: { tools: [mcpTool()] } });
   if (call.method !== "tools/call") return mcpError(id, "HANDOFF_INVALID_JSON");
+  if (notification) return notify();
+  if (!(await accessTokenPayload(request, env))) return mcpAuthError(id);
+  const configured = workConfig(env);
+  if (!configured) return mcpError(id, "SERVICE_MISCONFIGURED", -32603);
   const params = call.params as Record<string, unknown> | undefined;
   if (!params || params.name !== "submit_learning_handoff" || typeof params.arguments !== "object" || params.arguments === null)
     return mcpError(id, "HANDOFF_SCHEMA_INVALID");
@@ -765,12 +853,21 @@ export async function handle(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   if (request.method === "GET" && url.pathname === "/") return reply(200, { service: "medlearn-cloud", status: "ok" });
   if (request.method === "GET" && url.pathname === "/health") return reply(200, { status: "ok" });
+  if (request.method === "GET" && url.pathname === "/.well-known/oauth-protected-resource") {
+    const oauth = oauthConfig(env);
+    return secureMcp(reply(200, {
+      resource: MCP_RESOURCE,
+      authorization_servers: oauth ? [oauth.issuer] : [],
+      scopes_supported: [MCP_SCOPE],
+      resource_documentation: "https://github.com/fangzh05/medlearn-vault/blob/main/docs/medlearn-plugin-setup.md",
+    }));
+  }
   if (url.pathname === "/mcp") {
     try {
-      return secure(await routeMcp(request, env));
+      return secureMcp(await routeMcp(request, env));
     } catch {
       console.error(JSON.stringify({ stage: "mcp_route", error_code: "HANDOFF_SUBMISSION_FAILURE" }));
-      return secure(reply(503, { error: "HANDOFF_SUBMISSION_FAILURE" }));
+      return secureMcp(reply(503, { error: "HANDOFF_SUBMISSION_FAILURE" }));
     }
   }
   if (!url.pathname.startsWith("/v1/")) return reply(404, { error: "NOT_FOUND" });

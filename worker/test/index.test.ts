@@ -1,8 +1,9 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { exportJWK, generateKeyPair, SignJWT } from "jose";
 import Ajv from "ajv/dist/2020.js";
 import addFormats from "ajv-formats";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import jobSchema from "../../schemas/control/current/job_record.schema.json";
 import { buildManifest, handle, transitionJob, type Env, type JobRecord, type Stored } from "../src/index";
 import intakeSchema from "../../schemas/workflow/current/intake_envelope.schema.json";
@@ -83,7 +84,18 @@ class Bucket {
 
 
 const token = "ingest-secret-that-is-at-least-32-bytes";
-const workToken = "work-secret-that-is-at-least-32-bytes";
+const issuer = "https://issuer.test";
+const audience = "medlearn-work";
+let privateKey: CryptoKey;
+let publicJwk: Record<string, unknown>;
+let validToken = "";
+
+async function signedToken(overrides: { issuer?: string; audience?: string; subject?: string; scope?: string; expiration?: string } = {}) {
+  return new SignJWT({ scope: overrides.scope ?? "medlearn:handoff:submit" })
+    .setProtectedHeader({ alg: "RS256", kid: "test-key" })
+    .setIssuer(overrides.issuer ?? issuer).setAudience(overrides.audience ?? audience)
+    .setSubject(overrides.subject ?? "user-123").setIssuedAt().setExpirationTime(overrides.expiration ?? "1h").sign(privateKey);
+}
 const fixtureBytes = readFileSync(resolve("../examples/intake/manual-copd.json"));
 const fixtureText = fixtureBytes.toString("utf8");
 let bucket: Bucket;
@@ -121,7 +133,7 @@ function handoff() {
   };
 }
 
-function mcp(method: string, params: Record<string, unknown> = {}, auth = workToken) {
+function mcp(method: string, params: Record<string, unknown> = {}, auth = validToken) {
   return request("/mcp", { method: "POST", headers: { authorization: `Bearer ${auth}`, "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }) });
 }
 
@@ -131,15 +143,29 @@ async function digest(text: string) {
   return [...new Uint8Array(hash)].map((item) => item.toString(16).padStart(2, "0")).join("");
 }
 
+beforeAll(async () => {
+  const keys = await generateKeyPair("RS256");
+  privateKey = keys.privateKey;
+  publicJwk = { ...await exportJWK(keys.publicKey), kid: "test-key", alg: "RS256", use: "sig" };
+  validToken = await signedToken();
+});
+
 beforeEach(() => {
   bucket = new Bucket();
   env = {
     CONTROL_BUCKET: bucket as unknown as R2Bucket,
     MEDLEARN_INGEST_TOKEN: token,
-    MEDLEARN_WORK_TOKEN: workToken,
+    MEDLEARN_WORK_OAUTH_ISSUER: issuer,
+    MEDLEARN_WORK_OAUTH_AUDIENCE: audience,
+    MEDLEARN_WORK_OAUTH_ALLOWED_SUBJECT: "user-123",
     GITHUB_ACTIONS_DISPATCH_TOKEN: "github-secret",
   };
-  dispatch = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+  dispatch = vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url === `${issuer}/.well-known/openid-configuration`) return new Response(JSON.stringify({ jwks_uri: `${issuer}/jwks` }));
+    if (url === `${issuer}/jwks`) return new Response(JSON.stringify({ keys: [publicJwk] }));
+    return new Response(null, { status: 204 });
+  });
   vi.stubGlobal("fetch", dispatch);
 });
 
@@ -343,6 +369,20 @@ describe("security boundary", () => {
 });
 
 describe("Chat Project Source MCP handoff", () => {
+  it("supports unauthenticated lifecycle and rejects methods or batches safely", async () => {
+    const initialize = await handle(mcp("initialize", {}, ""), env);
+    expect(initialize.status).toBe(200);
+    expect((await initialize.json<{ result: { instructions: string } }>()).result.instructions).toContain("explicit MedLearnHandoff");
+    const notified = await handle(request("/mcp", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) }), env);
+    expect(notified.status).toBe(202);
+    expect(await notified.text()).toBe("");
+    expect((await handle(mcp("ping", {}, ""), env)).status).toBe(200);
+    expect((await handle(request("/mcp", { method: "GET" }), env)).status).toBe(405);
+    expect((await handle(request("/mcp", { method: "DELETE" }), env)).status).toBe(405);
+    const batch = await handle(request("/mcp", { method: "POST", headers: { "content-type": "application/json" }, body: "[]" }), env);
+    expect((await batch.json<{ error: { code: number } }>()).error.code).toBe(-32600);
+  });
+
   it("exposes only submit_learning_handoff and validates the shared schema", async () => {
     const ajv = new Ajv({ strict: false });
     addFormats(ajv);
@@ -351,6 +391,7 @@ describe("Chat Project Source MCP handoff", () => {
     const body = await response.json<{ result: { tools: { name: string; inputSchema: object }[] } }>();
     expect(body.result.tools.map((tool) => tool.name)).toEqual(["submit_learning_handoff"]);
     expect(ajv.compile(body.result.tools[0].inputSchema)( { handoff: handoff() } )).toBe(true);
+    expect(body.result.tools[0]).toMatchObject({ annotations: { readOnlyHint: false, openWorldHint: false, destructiveHint: false }, securitySchemes: [{ type: "oauth2", scopes: ["medlearn:handoff:submit"] }] });
   });
 
   it("submits deterministic bytes with one job and a stable result", async () => {
@@ -396,34 +437,51 @@ describe("Chat Project Source MCP handoff", () => {
     expect(body.error.message).toBe(code);
   });
 
-  it("requires the dedicated work secret and never exposes it", async () => {
-    const response = await handle(mcp("tools/list", {}, token), env);
+  it("returns an OAuth challenge without a valid access token", async () => {
+    const response = await handle(mcp("tools/call", { name: "submit_learning_handoff", arguments: { handoff: handoff() } }, ""), env);
     const text = await response.text();
-    expect(response.status).toBe(401);
-    expect(text).not.toContain(workToken);
+    expect(response.status).toBe(200);
+    expect(text).toContain("Authentication required.");
+    expect(response.headers.get("www-authenticate")).toContain("oauth-protected-resource");
     expect(text).not.toContain(token);
   });
 
-  it("rejects an unrecognized tool and the work token on the ingest route", async () => {
-    const unknown = await handle(mcp("tools/call", { name: "read_project_sources", arguments: {} }), env);
-    expect((await unknown.json<{ error: { message: string } }>()).error.message).toBe("HANDOFF_SCHEMA_INVALID");
-    expect((await handle(request("/v1/jobs/x", { headers: { authorization: `Bearer ${workToken}` } }), env)).status).toBe(401);
+  it.each([
+    ["issuer", () => signedToken({ issuer: "https://wrong-issuer.test" })],
+    ["audience", () => signedToken({ audience: "wrong-audience" })],
+    ["subject", () => signedToken({ subject: "wrong-subject" })],
+    ["scope", () => signedToken({ scope: "other:scope" })],
+    ["expiry", () => signedToken({ expiration: "-1s" })],
+  ])("rejects invalid OAuth %s", async (_case, create) => {
+    const response = await handle(mcp("tools/call", { name: "submit_learning_handoff", arguments: { handoff: handoff() } }, await create()), env);
+    expect((await response.json<{ result: { isError: boolean } }>()).result.isError).toBe(true);
   });
 
-  it("does not persist the work token and does not require it for health or intake", async () => {
+  it("publishes protected-resource metadata without secrets", async () => {
+    const response = await handle(request("/.well-known/oauth-protected-resource"), env);
+    expect(await response.json()).toMatchObject({ resource: "https://medlearn-cloud.fzh050531.workers.dev", authorization_servers: [issuer], scopes_supported: ["medlearn:handoff:submit"] });
+  });
+
+  it("rejects an unrecognized tool and OAuth token on the ingest route", async () => {
+    const unknown = await handle(mcp("tools/call", { name: "read_project_sources", arguments: {} }), env);
+    expect((await unknown.json<{ error: { message: string } }>()).error.message).toBe("HANDOFF_SCHEMA_INVALID");
+    expect((await handle(request("/v1/jobs/x", { headers: { authorization: `Bearer ${validToken}` } }), env)).status).toBe(401);
+  });
+
+  it("does not persist OAuth credentials and does not require OAuth for health or intake", async () => {
     const response = await handle(mcp("tools/call", {
       name: "submit_learning_handoff", arguments: { handoff: handoff() },
     }), env);
-    expect((await response.text())).not.toContain(workToken);
-    expect([...bucket.objects.values()].map((item) => item.text).join("\n")).not.toContain(workToken);
-    const noWork = { ...env, MEDLEARN_WORK_TOKEN: undefined };
+    expect((await response.text())).not.toContain(validToken);
+    expect([...bucket.objects.values()].map((item) => item.text).join("\n")).not.toContain(validToken);
+    const noWork = { ...env, MEDLEARN_WORK_OAUTH_ISSUER: undefined };
     expect((await handle(request("/health"), noWork)).status).toBe(200);
     expect((await handle(capture(fixtureText, "no-work"), noWork)).status).toBe(202);
   });
 
   it("rejects an oversized MCP body before parsing it", async () => {
     const response = await handle(request("/mcp", {
-      method: "POST", headers: { authorization: `Bearer ${workToken}`, "content-type": "application/json" },
+      method: "POST", headers: { authorization: `Bearer ${validToken}`, "content-type": "application/json" },
       body: "x".repeat(256 * 1024 + 1),
     }), env);
     expect(response.status).toBe(413);
@@ -521,7 +579,7 @@ describe("vault read API", () => {
     expect(response.headers.get("cache-control")).toBe("no-store");
   });
 
-  it.each([token, workToken])("rejects non-sync token for vault route", async (otherToken) => {
+  it.each([token, validToken])("rejects non-sync token for vault route", async (otherToken) => {
     const { env: vaultEnv } = setupVaultEnv();
     const response = await handle(
       request("/v1/vault/manifest", { headers: vaultAuth(otherToken) }),
