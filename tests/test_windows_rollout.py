@@ -297,6 +297,81 @@ def test_schedule_what_if_is_safe_and_uses_stable_paths(
     assert "Authorization" not in wrapper
 
 
+def test_vbs_wrapper_structure_and_no_token(tmp_path: Path) -> None:
+    """scheduled_vbs_wrapper must use Run(..., 0, True) and WScript.Quit exitCode."""
+    ps1 = tmp_path / "sync-client" / "run-scheduled.ps1"
+    vbs = windows_rollout.scheduled_vbs_wrapper(ps1)
+
+    assert "Option Explicit" in vbs
+    assert 'CreateObject("WScript.Shell")' in vbs
+    assert "Run(command, 0, True)" in vbs
+    assert "WScript.Quit exitCode" in vbs
+    assert "powershell.exe" in vbs
+    assert "run-scheduled.ps1" in vbs
+    # No token, credential, or environment variable content.
+    vbs_lower = vbs.lower()
+    assert "token" not in vbs_lower
+    assert "authorization" not in vbs_lower
+    assert "bearer" not in vbs_lower
+    assert "dpapi" not in vbs_lower
+
+
+class TestVbsStringLiteral:
+    """Prove _vbs_string_literal correctly encodes strings for VBScript."""
+
+    def test_plain_string_no_double_quotes(self) -> None:
+        result = windows_rollout._vbs_string_literal("hello world")
+        assert result == '"hello world"'
+
+    def test_double_quotes_are_doubled(self) -> None:
+        result = windows_rollout._vbs_string_literal('say "hello"')
+        assert result == '"say ""hello"""'
+
+    def test_chinese_characters_preserved(self) -> None:
+        result = windows_rollout._vbs_string_literal("C:\\测试\\用户\\文件")
+        assert "测试" in result
+        assert "用户" in result
+        assert '"C:\\测试\\用户\\文件"' == result or result.startswith('"C:\\测试\\用户\\文件"')
+
+    def test_spaces_preserved(self) -> None:
+        result = windows_rollout._vbs_string_literal("C:\\Program Files\\app.exe")
+        assert "Program Files" in result
+
+    def test_backslashes_preserved(self) -> None:
+        result = windows_rollout._vbs_string_literal("C:\\Users\\test\\file.txt")
+        assert result == '"C:\\Users\\test\\file.txt"'
+
+    def test_quotes_and_spaces_combined(self) -> None:
+        result = windows_rollout._vbs_string_literal(
+            'powershell.exe -File "C:\\我的 文件\\run-scheduled.ps1"'
+        )
+        assert "powershell.exe" in result
+        assert "我的" in result
+        assert "文件" in result
+        assert "run-scheduled.ps1" in result
+        # Double quotes in the input must become "" in the output.
+        # The original has: -File "C:\..."
+        # In VBS: -File ""C:\...""  (each " becomes "")
+        assert '""' in result
+        assert '-File ""' in result
+        assert '.ps1""' in result
+
+    def test_no_token_or_credential(self) -> None:
+        """_vbs_string_literal is pure text encoding — but test that the pattern
+        of encoding a token-like string doesn't accidentally leak."""
+        result = windows_rollout._vbs_string_literal("powershell.exe -File run.ps1")
+        assert "Bearer" not in result
+        assert "Authorization" not in result
+
+
+def test_scheduled_wrapper_still_uses_exit_last_exit_code() -> None:
+    """scheduled_wrapper() must still contain exit $LASTEXITCODE."""
+    wrapper = windows_rollout.scheduled_wrapper(
+        Path("C:\\home"), Path("C:\\medlearn.exe")
+    )
+    assert "exit $LASTEXITCODE" in wrapper
+    assert "MEDLEARN_HOME" in wrapper
+
 def test_schedule_registers_and_removes_without_vault_writes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -352,10 +427,12 @@ def test_schedule_registers_and_removes_without_vault_writes(
     # argument string (via subprocess.list2cmdline).
     if captured_scripts:
         register_script = captured_scripts[0]
-        # The -Argument value should be a quoted string containing -File and the
-        # wrapper path, not a bare PowerShell-quoted path.
-        assert "-File" in register_script
-        assert "run-scheduled.ps1" in register_script
+        # The -Argument value should be a quoted string containing //B, //Nologo
+        # and the VBS launcher path.
+        assert "wscript.exe" in register_script
+        assert "run-scheduled.vbs" in register_script
+        assert "//B" in register_script
+        assert "//Nologo" in register_script
         assert "-User $user" in register_script
         assert "-RunLevel Limited" in register_script
         assert "New-ScheduledTaskPrincipal" not in register_script
@@ -392,11 +469,14 @@ def test_failed_schedule_registration_restores_previous_definition(
     monkeypatch.setattr(windows_rollout, "load_token", lambda _: "x" * 32)
     metadata = root / "schedule.json"
     wrapper = root / "run-scheduled.ps1"
+    launcher = root / "run-scheduled.vbs"
     old_metadata = b'{"old":true}\n'
     old_wrapper = b"old wrapper\n"
+    old_launcher = b"old launcher\n"
     metadata.parent.mkdir(parents=True, exist_ok=True)
     metadata.write_bytes(old_metadata)
     wrapper.write_bytes(old_wrapper)
+    launcher.write_bytes(old_launcher)
 
     def fail(*_: object, **__: object) -> None:
         raise subprocess.CalledProcessError(5, "powershell.exe", stderr="Access is denied.")
@@ -406,10 +486,12 @@ def test_failed_schedule_registration_restores_previous_definition(
         windows_rollout.install_schedule(p=home)
     assert metadata.read_bytes() == old_metadata
     assert wrapper.read_bytes() == old_wrapper
+    assert launcher.read_bytes() == old_launcher
     with pytest.raises(SyncError, match="SYNC_SCHEDULE_FAILURE"):
         windows_rollout.install_schedule(p=home, elevated=True)
     assert metadata.read_bytes() == old_metadata
     assert wrapper.read_bytes() == old_wrapper
+    assert launcher.read_bytes() == old_launcher
 
 
 def test_scheduled_log_is_sanitized_and_retained(
@@ -541,32 +623,44 @@ class TestActionArgumentSerialization:
         assert "'-File'" not in result
         assert result.startswith("-NoProfile")
 
-    def test_task_definition_arguments_are_raw_not_powershell_quoted(
+    def test_task_definition_uses_wscript_executable(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """task_definition() must return raw argument strings without embedded
-        PowerShell single-quote escaping."""
+        """task_definition() must use wscript.exe, not powershell.exe, and
+        include //B //Nologo pointing at run-scheduled.vbs."""
         monkeypatch.setenv("MEDLEARN_SYNC_INSTALL_ROOT", str(tmp_path / "测试 install"))
         home = sync_client.SyncPaths(tmp_path / "home")
         client = tmp_path / "sync-client" / "venv" / "Scripts" / "medlearn.exe"
         definition = windows_rollout.task_definition(home.home, client, 15)
+        # Executable must be wscript.exe, not powershell.exe.
+        assert definition["command"] == "wscript.exe"
         arguments = definition["arguments"]
         assert isinstance(arguments, list)
-        # The -File argument must be the raw path, not a PowerShell-quoted string.
-        file_arg = arguments[arguments.index("-File") + 1]
-        assert isinstance(file_arg, str)
-        assert file_arg.startswith(str(tmp_path))
-        assert file_arg.endswith("run-scheduled.ps1")
-        # Must NOT contain PowerShell single-quote escaping.
-        assert not file_arg.startswith("'")
-        assert not file_arg.endswith("'")
+        # Arguments must contain //B and //Nologo exactly once.
+        assert arguments.count("//B") == 1
+        assert arguments.count("//Nologo") == 1
+        # The third argument must be the VBS launcher path.
+        launcher_arg = arguments[2]
+        assert isinstance(launcher_arg, str)
+        assert launcher_arg.endswith("run-scheduled.vbs")
+        assert "run-scheduled.ps1" not in arguments
+        # Must NOT execute powershell.exe directly.
+        assert "powershell.exe" not in arguments
+        assert "-File" not in arguments
+        # Must have launcher_path in definition.
+        assert "launcher_path" in definition
+        assert definition["launcher_path"].endswith("run-scheduled.vbs")
+        assert definition["wrapper_path"].endswith("run-scheduled.ps1")
+        # Must NOT contain PowerShell single-quote escaping in arguments.
+        for arg in arguments:
+            assert not arg.startswith("'")
 
 
 class TestActionArgumentInRegisteredScript:
     """Assert against the actual raw argument string that would be registered
     with Task Scheduler — i.e. the value passed to -Argument."""
 
-    def test_install_schedule_embeds_list2cmdline_output(
+    def test_install_schedule_embeds_wscript_arguments(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         root = tmp_path / "sync client"  # intentional space
@@ -600,29 +694,32 @@ class TestActionArgumentInRegisteredScript:
         windows_rollout.install_schedule(p=home)
         assert len(captured) == 1
         script = captured[0]
-        # The script must contain a -Argument value produced by list2cmdline:
-        #  - The wrapper path must appear in the -Argument string.
-        assert "run-scheduled.ps1" in script
-        #  - Because the install root has a space, the path must be
-        #    double-quoted inside the -Argument string.
+        # The script must register wscript.exe, not powershell.exe.
+        assert "wscript.exe" in script
+        assert "-Execute" in script
+        # The VBS path must appear in the -Argument string.
+        assert "run-scheduled.vbs" in script
+        # Because the install root has a space, the path must be
+        # double-quoted inside the -Argument string.
         assert '-Argument' in script
-        #  - The raw argument string must not be wrapped in PowerShell single
-        #    quotes as the *final* argv mechanism (it IS wrapped in '' for
-        #    PowerShell string-literal embedding, but the content inside those
-        #    quotes is from list2cmdline).
         # Extract what's between -Argument and the next ;
         arg_start = script.index("-Argument") + len("-Argument")
         arg_segment = script[arg_start:].split(";")[0].strip()
-        # arg_segment is e.g. '-NoProfile -NonInteractive ... -File "C:\...\wrapper.ps1"'
+        # arg_segment is e.g. '//B //Nologo "C:\...\run-scheduled.vbs"'
         assert arg_segment.startswith("'") and arg_segment.endswith("'")
         inner = arg_segment[1:-1]
-        assert "-File" in inner
-        assert "sync client" in inner
+        assert "//B" in inner
+        assert "//Nologo" in inner
+        assert "run-scheduled.vbs" in inner
         # The space-containing path must be double-quoted inside.
         assert '"' in inner
+        assert "sync client" in inner
         assert "-User $user" in script
         assert "-RunLevel Limited" in script
         assert "New-ScheduledTaskPrincipal" not in script
+        # The registration must use Register-ScheduledTask -Force.
+        assert "Register-ScheduledTask" in script
+        assert "-Force" in script
 
     def test_chinese_path_survives_full_round_trip(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -660,7 +757,8 @@ class TestActionArgumentInRegisteredScript:
         script = captured[0]
         assert "同步" in script
         assert "客户端" in script
-        assert "run-scheduled.ps1" in script
+        assert "run-scheduled.vbs" in script
+        assert "wscript.exe" in script
         assert "-User $user" in script
         assert "-RunLevel Limited" in script
 
@@ -705,10 +803,9 @@ class TestScheduleStatus:
             "last_run_time": "2026-07-13T08:00:00.0000000+08:00",
             "next_run_time": "2026-07-13T08:15:00.0000000+08:00",
             "last_task_result": 0,
-            "executable": "powershell.exe",
+            "executable": "wscript.exe",
             "arguments": (
-                '-NoProfile -NonInteractive -ExecutionPolicy Bypass '
-                '-File "C:\\wrapper.ps1"'
+                '//B //Nologo "C:\\run-scheduled.vbs"'
             ),
             "principal_user_id": "test-user",
             "principal_logon_type": "Interactive",
@@ -730,7 +827,7 @@ class TestScheduleStatus:
         assert status["last_run_time"] == "2026-07-13T08:00:00.0000000+08:00"
         assert status["next_run_time"] == "2026-07-13T08:15:00.0000000+08:00"
         assert status["last_task_result"] == 0
-        assert status["executable"] == "powershell.exe"
+        assert status["executable"] == "wscript.exe"
         assert status["principal_user_id"] == "test-user"
         assert status["principal_logon_type"] == "Interactive"
         assert status["principal_run_level"] == "Limited"
@@ -755,8 +852,8 @@ class TestScheduleStatus:
                             "last_run_time": None,
                             "next_run_time": None,
                             "last_task_result": 0,
-                            "executable": "powershell.exe",
-                            "arguments": "-File C:\\wrapper.ps1",
+                            "executable": "wscript.exe",
+                            "arguments": "//B //Nologo C:\\run-scheduled.vbs",
                         }
                     ),
                     "",
@@ -786,8 +883,8 @@ class TestScheduleStatus:
                             "last_run_time": "2026-07-13T08:00:00.0000000+08:00",
                             "next_run_time": None,
                             "last_task_result": 2147942401,
-                            "executable": "powershell.exe",
-                            "arguments": "-File C:\\wrapper.ps1",
+                            "executable": "wscript.exe",
+                            "arguments": "//B //Nologo C:\\run-scheduled.vbs",
                         }
                     ),
                     "",
@@ -854,6 +951,7 @@ class TestScheduleStatus:
             json.dumps(
                 {
                     "wrapper_path": str(root / "run-scheduled.ps1"),
+                    "launcher_path": str(root / "run-scheduled.vbs"),
                     "interval_minutes": 15,
                     "medlearn_home": str(tmp_path / "home"),
                 }
@@ -868,8 +966,8 @@ class TestScheduleStatus:
             "last_run_time": None,
             "next_run_time": None,
             "last_task_result": 0,
-            "executable": "powershell.exe",
-            "arguments": "-File wrapper.ps1",
+            "executable": "wscript.exe",
+            "arguments": "//B //Nologo C:\\run-scheduled.vbs",
         }
 
         def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
@@ -880,6 +978,7 @@ class TestScheduleStatus:
         monkeypatch.setattr(windows_rollout.subprocess, "run", run)
         status = windows_rollout.schedule_status()
         assert status["wrapper_path"] == str(root / "run-scheduled.ps1")
+        assert status["launcher_path"] == str(root / "run-scheduled.vbs")
         assert status["interval_minutes"] == 15
 
     def test_status_does_not_return_secrets_or_environment(
@@ -901,8 +1000,8 @@ class TestScheduleStatus:
                             "last_run_time": None,
                             "next_run_time": None,
                             "last_task_result": 0,
-                            "executable": "powershell.exe",
-                            "arguments": '-File "C:\\wrapper.ps1"',
+                            "executable": "wscript.exe",
+                            "arguments": '//B //Nologo "C:\\run-scheduled.vbs"',
                         }
                     ),
                     "",
@@ -952,6 +1051,7 @@ class TestScheduleRemoval:
         # Pre-create metadata files to verify they're deleted on success.
         (root / "schedule.json").write_text("{}", encoding="utf-8")
         (root / "run-scheduled.ps1").write_text("# wrapper", encoding="utf-8")
+        (root / "run-scheduled.vbs").write_text("' launcher", encoding="utf-8")
 
         def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
             if command[0] == "powershell.exe":
@@ -961,9 +1061,10 @@ class TestScheduleRemoval:
         monkeypatch.setattr(windows_rollout.subprocess, "run", run)
         result = windows_rollout.remove_schedule()
         assert result["status"] == "removed"
-        # Local metadata must be cleaned up.
+        # Local metadata must be cleaned up (ps1, vbs, schedule.json).
         assert not (root / "schedule.json").exists()
         assert not (root / "run-scheduled.ps1").exists()
+        assert not (root / "run-scheduled.vbs").exists()
 
     def test_unregister_failure_raises_error_and_preserves_metadata(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -974,6 +1075,7 @@ class TestScheduleRemoval:
         root.mkdir(parents=True)
         (root / "schedule.json").write_text("{}", encoding="utf-8")
         (root / "run-scheduled.ps1").write_text("# wrapper", encoding="utf-8")
+        (root / "run-scheduled.vbs").write_text("' launcher", encoding="utf-8")
 
         def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
             raise subprocess.CalledProcessError(1, "powershell.exe")
@@ -984,6 +1086,7 @@ class TestScheduleRemoval:
         # Metadata must be preserved on failure.
         assert (root / "schedule.json").exists()
         assert (root / "run-scheduled.ps1").exists()
+        assert (root / "run-scheduled.vbs").exists()
 
     def test_verify_still_finds_task_raises_error_and_preserves_metadata(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -994,6 +1097,7 @@ class TestScheduleRemoval:
         root.mkdir(parents=True)
         (root / "schedule.json").write_text("{}", encoding="utf-8")
         (root / "run-scheduled.ps1").write_text("# wrapper", encoding="utf-8")
+        (root / "run-scheduled.vbs").write_text("' launcher", encoding="utf-8")
 
         def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
             if command[0] == "powershell.exe":
@@ -1006,6 +1110,7 @@ class TestScheduleRemoval:
         # Metadata must be preserved when verification fails.
         assert (root / "schedule.json").exists()
         assert (root / "run-scheduled.ps1").exists()
+        assert (root / "run-scheduled.vbs").exists()
 
     def test_access_denied_style_failure_preserves_metadata(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1066,13 +1171,14 @@ class TestScheduleRemoval:
     def test_metadata_not_deleted_after_failed_removal(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """If removal fails, schedule.json and wrapper must remain on disk."""
+        """If removal fails, schedule.json, wrapper and launcher must remain on disk."""
         monkeypatch.setattr(sys, "platform", "win32")
         root = tmp_path / "sync-client"
         monkeypatch.setenv("MEDLEARN_SYNC_INSTALL_ROOT", str(root))
         root.mkdir(parents=True)
         (root / "schedule.json").write_text('{"task_name":"MedLearn Vault Sync"}', encoding="utf-8")
         (root / "run-scheduled.ps1").write_text("exit 0", encoding="utf-8")
+        (root / "run-scheduled.vbs").write_text("' launcher", encoding="utf-8")
 
         def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
             # Simulate removal succeeded but verification failed
@@ -1085,6 +1191,7 @@ class TestScheduleRemoval:
             windows_rollout.remove_schedule()
         assert (root / "schedule.json").exists()
         assert (root / "run-scheduled.ps1").exists()
+        assert (root / "run-scheduled.vbs").exists()
 
 
 # ===================================================================
@@ -1135,6 +1242,17 @@ class TestAcceptanceScriptValidation:
         assert "authorization" not in wrapper.lower()
         assert "MEDLEARN_HOME" in wrapper
 
+    def test_vbs_wrapper_no_token_or_credential(self) -> None:
+        vbs = windows_rollout.scheduled_vbs_wrapper(
+            Path("C:\\Users\\test\\run-scheduled.ps1"),
+        )
+        vbs_lower = vbs.lower()
+        assert "token" not in vbs_lower
+        assert "authorization" not in vbs_lower
+        assert "bearer" not in vbs_lower
+        assert "dpapi" not in vbs_lower
+        assert "credential" not in vbs_lower
+
     def test_unregistered_definition_produces_clean_what_if(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1147,21 +1265,27 @@ class TestAcceptanceScriptValidation:
             30,
         )
         assert definition["task_name"] == "MedLearn Vault Sync"
+        assert definition["command"] == "wscript.exe"
         assert definition["interval_minutes"] == 30
         assert definition["multiple_instances"] == "IgnoreNew"
         assert definition["execution_time_limit_minutes"] == 5
         # Arguments must be a list of raw strings.
         arguments = definition["arguments"]
         assert isinstance(arguments, list)
-        assert "-NoProfile" in arguments
-        assert "-NonInteractive" in arguments
-        assert "-ExecutionPolicy" in arguments
-        assert "Bypass" in arguments
-        assert "-File" in arguments
-        # The wrapper path must not be PowerShell-quoted in the arguments list.
-        file_arg = arguments[arguments.index("-File") + 1]
-        assert isinstance(file_arg, str)
-        assert "'" not in file_arg
+        assert "//B" in arguments
+        assert "//Nologo" in arguments
+        assert arguments.count("//B") == 1
+        assert arguments.count("//Nologo") == 1
+        # Must not contain powershell.exe flags.
+        assert "-NoProfile" not in arguments
+        assert "-NonInteractive" not in arguments
+        assert "-File" not in arguments
+        # The launcher path must not have PowerShell escaping.
+        assert "run-scheduled.vbs" in arguments[-1]
+        assert "'" not in arguments[-1]
+        # Must have both wrapper and launcher paths.
+        assert definition.get("wrapper_path", "").endswith("run-scheduled.ps1")
+        assert definition.get("launcher_path", "").endswith("run-scheduled.vbs")
 
 
 # ===================================================================
