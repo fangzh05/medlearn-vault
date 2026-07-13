@@ -5,8 +5,9 @@ import sys
 from pathlib import Path
 
 import pytest
+from typer.testing import CliRunner
 
-from medlearn_vault import sync_client, windows_rollout
+from medlearn_vault import cli, sync_client, windows_rollout
 from medlearn_vault.sync_models import RolloutState, SyncError
 
 
@@ -106,6 +107,84 @@ def test_failed_upgrade_metadata_write_restores_old_client_and_metadata(
         windows_rollout.install_windows(wheel(tmp_path), root=root)
     assert client.read_bytes() == b"old client"
     assert (root / "install.json").read_bytes() == old_metadata
+
+
+def test_install_captures_noisy_subprocess_output(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    def noisy(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append((command, kwargs))
+        return subprocess.CompletedProcess(
+            command, 0, "Looking in links: wheelhouse\n0.13.0\n", "[notice] upgrade pip\n"
+        )
+
+    monkeypatch.setattr(windows_rollout.subprocess, "run", noisy)
+    result = windows_rollout._run_installer_command(["pip", "install", "wheel"])
+    captured = capsys.readouterr()
+    assert result.stdout.startswith("Looking in links")
+    assert result.stderr.startswith("[notice]")
+    assert captured.out == ""
+    assert captured.err == ""
+    assert len(calls) == 1
+    for _, call in calls:
+        assert call["capture_output"] is True
+        assert call["text"] is True
+        assert call["encoding"] == "utf-8"
+        assert call["errors"] == "replace"
+
+
+def test_install_windows_json_is_one_clean_document(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_windows_install(monkeypatch)
+
+    def noisy(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        if len(command) > 3 and command[1:3] == ["-m", "venv"]:
+            (Path(command[3]) / "Scripts").mkdir(parents=True)
+            (Path(command[3]) / "Scripts" / "python.exe").touch()
+        elif "pip" in command:
+            (Path(command[0]).parents[1] / "Scripts" / "medlearn.exe").touch()
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            "Looking in links: wheelhouse\nProcessing wheel\n0.13.0\n",
+            "Successfully installed\n[notice] To update, run: pip install --upgrade pip\n",
+        )
+
+    monkeypatch.setattr(windows_rollout.subprocess, "run", noisy)
+    monkeypatch.setenv("MEDLEARN_SYNC_INSTALL_ROOT", str(tmp_path / "用户 安装"))
+    result = CliRunner().invoke(
+        cli.app, ["sync", "install-windows", "--wheel", str(wheel(tmp_path)), "--json"]
+    )
+    assert result.exit_code == 0
+    assert json.loads(result.stdout)["status"] == "installed"
+    assert result.stdout.count("{") == 1
+    assert result.stdout.count("\n") == 1
+    for leaked in ("Looking in links", "Processing", "Successfully installed", "[notice]"):
+        assert leaked not in result.stdout
+
+
+def test_install_windows_failure_hides_subprocess_logs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    def fail(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        raise subprocess.CalledProcessError(
+            1, command, output="Looking in links: secret-index", stderr="full pip log"
+        )
+
+    monkeypatch.setattr(windows_rollout.subprocess, "run", fail)
+    monkeypatch.setenv("MEDLEARN_SYNC_INSTALL_ROOT", str(tmp_path / "sync-client"))
+    result = CliRunner().invoke(
+        cli.app, ["sync", "install-windows", "--wheel", str(wheel(tmp_path)), "--json"]
+    )
+    assert result.exit_code == 1
+    assert json.loads(result.stdout) == {"status": "error", "error_code": "SYNC_INSTALL_FAILURE"}
+    assert "secret-index" not in result.stdout + result.stderr
+    assert "full pip log" not in result.stdout + result.stderr
 
 
 def test_configure_rejects_repository_install_and_state_inside_vault(

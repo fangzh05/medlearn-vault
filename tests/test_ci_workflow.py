@@ -40,6 +40,10 @@ def test_ci_workflow_is_pinned_reproducible_and_secret_free() -> None:
     assert "Get-ChildItem wheelhouse\\medlearn_vault-*.whl" in windows_commands
     assert "medlearn --version" in windows_commands
     assert "medlearn sync install-windows --wheel $wheel.FullName --json" in windows_commands
+    assert 'Join-Path $env:RUNNER_TEMP "medlearn sync 用户"' in windows_commands
+    assert "$rawText | ConvertFrom-Json" in windows_commands
+    assert "installer JSON output was contaminated" in windows_commands
+    assert "Remove-Item -LiteralPath $installRoot -Recurse -Force" in windows_commands
     assert "medlearn sync schedule install --what-if --json" in windows_commands
 
     worker = data["jobs"]["worker-quality"]

@@ -99,12 +99,25 @@ def _executable_works(path: Path) -> bool:
     if not path.is_file():
         return False
     try:
-        subprocess.run(
-            [str(path), "--version"], check=True, capture_output=True, text=True
-        )
+        _run_installer_command([str(path), "--version"])
     except (OSError, subprocess.SubprocessError):
         return False
     return True
+
+
+def _run_installer_command(
+    command: list[str], *, cwd: str | None = None
+) -> subprocess.CompletedProcess[str]:
+    """Run an installer child without leaking output into the CLI contract."""
+    return subprocess.run(
+        command,
+        cwd=cwd,
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
 
 
 def install_plan(wheel: Path, root: Path | None = None) -> InstallPlan:
@@ -173,9 +186,9 @@ def install_windows(
     original_metadata = metadata.read_bytes() if metadata.is_file() else None
     swapped = False
     try:
-        subprocess.run([sys.executable, "-m", "venv", str(staging)], check=True)
+        _run_installer_command([sys.executable, "-m", "venv", str(staging)])
         python = staging / "Scripts" / "python.exe"
-        subprocess.run(
+        _run_installer_command(
             [
                 str(python),
                 "-m",
@@ -189,10 +202,9 @@ def install_windows(
                 Path(plan.wheel).name,
             ],
             cwd=str(Path(plan.wheel).parent),
-            check=True,
         )
         staged_executable = staging / "Scripts" / "medlearn.exe"
-        subprocess.run([str(staged_executable), "--version"], check=True)
+        _run_installer_command([str(staged_executable), "--version"])
         if current.exists():
             os.replace(current, backup)
         try:
@@ -202,7 +214,7 @@ def install_windows(
             if backup.exists() and not current.exists():
                 os.replace(backup, current)
             raise
-        subprocess.run(
+        _run_installer_command(
             [
                 str(current / "Scripts" / "python.exe"),
                 "-m",
@@ -218,7 +230,6 @@ def install_windows(
                 Path(plan.wheel).name,
             ],
             cwd=str(Path(plan.wheel).parent),
-            check=True,
         )
         if not _executable_works(current / "Scripts" / "medlearn.exe"):
             raise subprocess.CalledProcessError(1, str(current / "Scripts" / "medlearn.exe"))

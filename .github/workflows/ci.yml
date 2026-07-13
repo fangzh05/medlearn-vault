@@ -74,7 +74,7 @@ jobs:
       - run: python -m pytest -q
       - run: python -m pip wheel --require-hashes -r requirements/ci.txt --wheel-dir wheelhouse
       - run: python -m pip wheel --no-build-isolation --no-deps --wheel-dir wheelhouse .
-      - name: Wheel install and CLI smoke test
+      - name: Isolated Windows installer JSON smoke test
         shell: pwsh
         run: |
           $wheel = Get-ChildItem wheelhouse\medlearn_vault-*.whl | Select-Object -First 1
@@ -82,11 +82,23 @@ jobs:
           python -m pip install --force-reinstall --no-deps $wheel.FullName
           medlearn --version
           medlearn sync --help
-          $env:MEDLEARN_SYNC_INSTALL_ROOT = Join-Path $env:RUNNER_TEMP "medlearn-sync-client"
-          medlearn sync install-windows --wheel $wheel.FullName --json
-          $installed = Join-Path $env:MEDLEARN_SYNC_INSTALL_ROOT "venv\Scripts\medlearn.exe"
-          & $installed --version
-          & $installed sync --help
+          $installRoot = Join-Path $env:RUNNER_TEMP "medlearn sync 用户"
+          $env:MEDLEARN_SYNC_INSTALL_ROOT = $installRoot
+          try {
+            $raw = & medlearn sync install-windows --wheel $wheel.FullName --json 2>&1
+            if ($LASTEXITCODE -ne 0) { throw "install failed: $raw" }
+            $rawText = ($raw | Out-String).Trim()
+            $installedResult = $rawText | ConvertFrom-Json
+            if ($rawText | Select-String -Pattern "Looking in links|Processing|Successfully installed|\[notice\]") {
+              throw "installer JSON output was contaminated"
+            }
+            $installed = $installedResult.executable
+            if (-not (Test-Path $installed -PathType Leaf)) { throw "installed executable not found: $installed" }
+            & $installed --version
+            if ($LASTEXITCODE -ne 0) { throw "installed executable --version failed" }
+          } finally {
+            Remove-Item -LiteralPath $installRoot -Recurse -Force -ErrorAction SilentlyContinue
+          }
       - name: Sync status smoke test
         shell: pwsh
         run: |
