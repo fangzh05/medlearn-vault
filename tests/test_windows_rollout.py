@@ -159,9 +159,15 @@ def test_install_windows_json_is_one_clean_document(
         cli.app, ["sync", "install-windows", "--wheel", str(wheel(tmp_path)), "--json"]
     )
     assert result.exit_code == 0
-    assert json.loads(result.stdout)["status"] == "installed"
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "installed"
+    assert payload["executable"] == str(
+        tmp_path / "用户 安装" / "venv" / "Scripts" / "medlearn.exe"
+    )
     assert result.stdout.count("{") == 1
     assert result.stdout.count("\n") == 1
+    assert "\ufffd" not in result.stdout
+    assert result.stdout.encode("ascii")
     for leaked in ("Looking in links", "Processing", "Successfully installed", "[notice]"):
         assert leaked not in result.stdout
 
@@ -183,6 +189,9 @@ def test_install_windows_failure_hides_subprocess_logs(
     )
     assert result.exit_code == 1
     assert json.loads(result.stdout) == {"status": "error", "error_code": "SYNC_INSTALL_FAILURE"}
+    assert result.stdout.count("\n") == 1
+    assert result.stdout.encode("ascii")
+    assert "Traceback" not in result.stdout + result.stderr
     assert "secret-index" not in result.stdout + result.stderr
     assert "full pip log" not in result.stdout + result.stderr
 

@@ -146,7 +146,7 @@ def doctor() -> None:
 
 def _sync_output(value: dict[str, object], json_output: bool) -> None:
     if json_output:
-        typer.echo(json.dumps(value, ensure_ascii=False, sort_keys=True))
+        typer.echo(json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":")))
     else:
         typer.echo(
             " ".join(
