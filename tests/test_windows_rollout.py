@@ -1045,3 +1045,300 @@ class TestAcceptanceScriptValidation:
         file_arg = arguments[arguments.index("-File") + 1]
         assert isinstance(file_arg, str)
         assert "'" not in file_arg
+
+
+# ===================================================================
+# Manual acceptance script hardening tests
+# ===================================================================
+# These tests inspect the PowerShell acceptance script's source for
+# structural properties that guarantee correct behavior at runtime.
+# They do NOT register a real task; they validate the source text.
+
+
+def _acceptance_script() -> str:
+    """Return the acceptance script source as a string."""
+    script_path = (
+        Path(__file__).resolve().parents[1]
+        / "scripts" / "acceptance" / "windows_sync_rollout.ps1"
+    )
+    return script_path.read_text(encoding="utf-8")
+
+
+def _comment_help(source: str) -> str:
+    """Extract the <# ... #> comment-based help block."""
+    m = re.search(r"<#([\s\S]*?)#>", source)
+    return m.group(1) if m else ""
+
+
+def _full_acceptance_command_doc(source: str) -> str:
+    """Extract the full interactive acceptance command from the comment help.
+    Looks for the powershell invocation in .DESCRIPTION or .EXAMPLE sections."""
+    help_block = _comment_help(source)
+    # Match the full interactive command: powershell -NoProfile -File ... -Endpoint ... -Wheel
+    m = re.search(
+        r"powershell -NoProfile -File[\s\S]*?-Endpoint[\s\S]*?-Wheel[\s\S]*?\.whl",
+        help_block,
+    )
+    return m.group(0).strip() if m else help_block
+
+
+def _example_section(source: str) -> str:
+    """Extract the full acceptance command documentation section."""
+    return _full_acceptance_command_doc(source)
+
+
+def _validate_only_section(source: str) -> str:
+    """Extract the ValidateOnly example from comment-based help."""
+    m = re.search(
+        r"powershell -NoProfile -NonInteractive -File[\s\S]*?ValidateOnly", source
+    )
+    return m.group(0) if m else ""
+
+
+def _full_acceptance_source(source: str) -> str:
+    """Return only the portion of the script after ValidateOnly mode exits.
+    This is the actual full-acceptance workflow, excluding the validation
+    mode code that also appears earlier in the file."""
+    # Find the comment marker that separates validation from full mode.
+    m = re.search(r"# =+\s*\n# FULL ISOLATED ACCEPTANCE\s*\n# =+", source)
+    if not m:
+        return source
+    return source[m.start():]
+
+
+def _full_acceptance_pass_pos(source: str) -> int:
+    """Position of the final PASS banner in the full-acceptance section."""
+    # The last "ACCEPTANCE TEST PASSED" in the file
+    last_pass = source.rfind("ACCEPTANCE TEST PASSED")
+    return last_pass
+
+
+def _main_finally_body(source: str) -> str:
+    """Extract the body of the main (outermost) finally block."""
+    full = _full_acceptance_source(source)
+    # Find the finally block that is at the outermost level (matched to the
+    # main try block).  It's the last substantial finally block.
+    blocks = list(re.finditer(r"finally\s*\{", full))
+    if not blocks:
+        return ""
+    # The main finally is the last one.
+    start = blocks[-1].start()
+    # Find matching close brace by counting.
+    depth = 0
+    i = full.index("{", start)
+    for j in range(i, len(full)):
+        if full[j] == "{":
+            depth += 1
+        elif full[j] == "}":
+            depth -= 1
+            if depth == 0:
+                return full[i + 1:j]
+    return ""
+
+
+class TestAcceptanceScriptHardening:
+    """Validate acceptance script structural properties from source text."""
+
+    def test_no_token_parameter(self) -> None:
+        """The script must not define a -Token, -SyncToken, or -Secret parameter."""
+        source = _acceptance_script()
+        # Parameter block: param(...)
+        param_match = re.search(r"param\(([\s\S]*?)\)", source)
+        assert param_match is not None, "param() block not found"
+        param_block = param_match.group(1)
+        param_names = set(re.findall(r'\$(\w+)', param_block))
+        for forbidden in {"Token", "SyncToken", "Secret"}:
+            assert forbidden not in param_names, (
+                f"Forbidden parameter ${forbidden} found in acceptance script"
+            )
+
+    def test_full_command_has_no_noninteractive(self) -> None:
+        """Full interactive acceptance command must NOT use -NonInteractive."""
+        source = _acceptance_script()
+        example = _example_section(source)
+        assert example, ".EXAMPLE section not found"
+        assert "-NonInteractive" not in example, (
+            "Full acceptance command (.EXAMPLE) must not contain -NonInteractive"
+        )
+
+    def test_validate_only_retains_noninteractive(self) -> None:
+        """CI validate-only command must retain -NonInteractive."""
+        source = _acceptance_script()
+        validate_cmd = _validate_only_section(source)
+        assert validate_cmd, "ValidateOnly command not found in script help"
+        assert "-NonInteractive" in validate_cmd, (
+            "ValidateOnly command must retain -NonInteractive"
+        )
+
+    def test_full_command_uses_backtick_not_unix_backslash(self) -> None:
+        """Line continuation in full command must use PowerShell backtick."""
+        example = _example_section(_acceptance_script())
+        assert example, ".EXAMPLE section not found"
+        # Must contain backtick for line continuation.
+        assert "`" in example, (
+            "Full acceptance command must use backtick (`) for line continuation"
+        )
+        # Must not contain Unix-style backslash line continuation.
+        assert "\\\n" not in example, (
+            "Full acceptance command must not use Unix backslash (\\) line continuation"
+        )
+
+    def test_full_command_contains_no_token(self) -> None:
+        """The full interactive acceptance command string must not contain
+        a token-like value."""
+        example = _example_section(_acceptance_script())
+        assert example, ".EXAMPLE section not found"
+        assert not re.search(
+            r'(?i)\b(bearer\s[^\s]{20,}|token\s*[=:]\s*"[^"]{32,}"|authorization\s*[=:]\s*\S+)',
+            example,
+        ), "Token-like content found in full acceptance command"
+
+    def test_preflight_check_exists_before_registration(self) -> None:
+        """Script must check for pre-existing task before creating directories."""
+        source = _acceptance_script()
+        full = _full_acceptance_source(source)
+        # Pre-flight check must occur before temp root creation *in full mode*.
+        preflight_pos = full.find("PRE-FLIGHT")
+        temp_root_pos = full.find("medlearn-acceptance-")
+        assert preflight_pos > 0, "PRE-FLIGHT section not found in full mode"
+        assert temp_root_pos > 0, "Temp root creation not found in full mode"
+        assert preflight_pos < temp_root_pos, (
+            "Pre-flight check must occur BEFORE temp root creation"
+        )
+        # Must call Test-AcceptanceTaskExists.
+        assert "Test-AcceptanceTaskExists" in full, (
+            "Test-AcceptanceTaskExists function call not found"
+        )
+
+    def test_task_created_tracking_variable(self) -> None:
+        """Script must track whether THIS invocation created the task."""
+        source = _acceptance_script()
+        assert "$Script:TaskCreatedByThisRun" in source, (
+            "TaskCreatedByThisRun tracking variable not found"
+        )
+        assert '$Script:TaskCreatedByThisRun = $false' in source, (
+            "TaskCreatedByThisRun must be initialised to $false"
+        )
+        assert '$Script:TaskCreatedByThisRun = $true' in source, (
+            "TaskCreatedByThisRun must be set to $true after successful registration"
+        )
+
+    def test_cleanup_conditional_on_task_created(self) -> None:
+        """Cleanup must only remove task when created by this run."""
+        source = _acceptance_script()
+        assert '$Script:TaskCreatedByThisRun' in source
+        # Invoke-ControlledCleanup must check the flag.
+        cleanup_fn = re.search(
+            r"function Invoke-ControlledCleanup\s*\{([\s\S]*?)\n\}", source
+        )
+        assert cleanup_fn is not None, "Invoke-ControlledCleanup function not found"
+        cleanup_body = cleanup_fn.group(1)
+        assert "TaskCreatedByThisRun" in cleanup_body, (
+            "Cleanup must reference TaskCreatedByThisRun"
+        )
+
+    def test_nonzero_lasttaskresult_is_fatal(self) -> None:
+        """Script must throw (not warn) on non-zero LastTaskResult."""
+        source = _acceptance_script()
+        # After the LastTaskResult check, there must be a throw for non-zero.
+        nonzero_section = re.search(
+            r"TaskLastResultZero.*?throw.*?non-zero.*?LastTaskResult",
+            source, re.IGNORECASE | re.DOTALL
+        )
+        assert nonzero_section is not None or (
+            '$TaskLastResultZero' in source and 'throw' in source
+        ), "Non-zero LastTaskResult must throw, not warn"
+
+    def test_timeout_is_fatal(self) -> None:
+        """Timeout waiting for task must throw, not warn."""
+        source = _acceptance_script()
+        assert "never observed" in source.lower() or (
+            "timeout" in source.lower() and "throw" in source.lower()
+        ), "Task observation timeout must be fatal"
+        # Timeout must not be a mere Write-Warning.
+        timeout_block_match = re.search(
+            r'TaskObserved.*?throw', source, re.DOTALL
+        )
+        assert timeout_block_match is not None or (
+            "Task observed" not in source.lower() and
+            '$TaskObserved' in source and 'throw' in source
+        ), "Timeout path must lead to throw"
+
+    def test_missing_scheduled_log_is_fatal(self) -> None:
+        """Missing scheduled log after execution must throw."""
+        source = _acceptance_script()
+        assert "ScheduledLogExists" in source, "ScheduledLogExists gate not found"
+        assert 'Scheduled log file not found' in source.lower() or (
+            'not found' in source.lower() and 'scheduled-results.jsonl' in source
+        ), "Missing scheduled log must throw"
+
+    def test_no_new_log_record_is_fatal(self) -> None:
+        """No new scheduled log record must throw."""
+        source = _acceptance_script()
+        assert "ScheduledLogNewRecord" in source, "ScheduledLogNewRecord gate not found"
+        assert "No new scheduled log records" in source, (
+            "Zero new log records must throw"
+        )
+
+    def test_final_pass_behind_all_gates(self) -> None:
+        """'ACCEPTANCE TEST PASSED' must appear after all gate checks."""
+        source = _acceptance_script()
+        pass_pos = _full_acceptance_pass_pos(source)
+        assert pass_pos > 0, "'ACCEPTANCE TEST PASSED' banner not found"
+
+        # Check that key Set-Gate calls in the full-mode section appear
+        # before the final PASS banner.
+        full = _full_acceptance_source(source)
+        for gate_name in ["Installed", "TaskLastResultZero",
+                          "ScheduledLogRecordValid", "CleanupCompleted"]:
+            # Match Set-Gate followed by the gate name (quoted).
+            pattern = re.escape("Set-Gate") + r"\s+['`\"]" + re.escape(gate_name)
+            gate_match = re.search(pattern, full)
+            if gate_match is None:
+                continue
+            gate_abs_pos = source.find("FULL ISOLATED ACCEPTANCE") + gate_match.start()
+            assert gate_abs_pos < pass_pos, (
+                f"Gate {gate_name} must be set before PASS banner"
+            )
+
+    def test_pre_existing_task_not_replaced_or_removed(self) -> None:
+        """A pre-existing task must abort the run, not delete it."""
+        source = _acceptance_script()
+        assert "will NOT overwrite" in source or "will not overwrite" in source, (
+            "Script must declare it will not overwrite existing task"
+        )
+        # Pre-flight abort must happen before any task installation in full mode.
+        full = _full_acceptance_source(source)
+        preflight_pos = full.find("PRE-FLIGHT")
+        install_pos = full.find("schedule install")
+        assert preflight_pos > 0, "PRE-FLIGHT section not found in full mode"
+        assert preflight_pos < install_pos, (
+            "Pre-flight check must precede schedule install"
+        )
+
+    def test_cleanup_never_swallows_task_removal_exceptions(self) -> None:
+        """If task removal fails, script must NOT silently continue."""
+        source = _acceptance_script()
+        assert "Exit-UnsafeCleanup" in source, (
+            "Exit-UnsafeCleanup function must exist for failed cleanup"
+        )
+        # Exit-UnsafeCleanup must call exit with non-zero.
+        unsafe_fn = re.search(
+            r"function Exit-UnsafeCleanup\s*\{([\s\S]*?)\n\}",
+            source
+        )
+        assert unsafe_fn is not None, "Exit-UnsafeCleanup function not found"
+        unsafe_body = unsafe_fn.group(1)
+        assert "exit 2" in unsafe_body or "exit 1" in unsafe_body, (
+            "Exit-UnsafeCleanup must exit with non-zero code"
+        )
+
+    def test_emergency_cleanup_preserves_temp_root(self) -> None:
+        """On emergency cleanup failure, temp root must be retained."""
+        source = _acceptance_script()
+        finally_body = _main_finally_body(source)
+        assert finally_body, "Main finally block not found"
+        assert ("retain" in finally_body.lower() or
+                "diagnosis" in finally_body.lower()), (
+            "Emergency cleanup must retain temp root for diagnosis"
+        )

@@ -158,25 +158,34 @@ acceptance script from a real Windows 10/11 machine:
 # CI-safe validation (no task registration, no Worker contact):
 powershell -NoProfile -NonInteractive -File scripts/acceptance/windows_sync_rollout.ps1 -ValidateOnly
 
-# Full isolated acceptance (interactive — prompts for sync token):
-powershell -NoProfile -NonInteractive -File scripts/acceptance/windows_sync_rollout.ps1 `
+# Full isolated acceptance (interactive — prompts for sync token and pull
+# confirmation; do NOT use -NonInteractive):
+powershell -NoProfile -File scripts/acceptance/windows_sync_rollout.ps1 `
     -Endpoint "https://medlearn-cloud.<subdomain>.workers.dev" `
     -Wheel "dist/wheelhouse/medlearn_vault-0.13.0-py3-none-any.whl"
 ```
 
 The acceptance script:
+- **Pre-flight:** checks for a pre-existing production `MedLearn Vault Sync`
+  task and aborts (nonzero exit) if one exists; never overwrites, modifies,
+  or deletes a task it did not create.
 - Creates an isolated temporary root whose path contains spaces and Chinese characters.
 - Uses a temporary `MEDLEARN_HOME` and a throwaway Vault containing only `.obsidian`.
 - Never accepts the sync token as a command-line parameter.
 - Never writes the token to disk, logs, or PowerShell command history.
-- Exercises the full lifecycle: dry-run install, real install, configure, login,
-  dry-run pull, explicit confirmation, first real pull, schedule install,
-  structured status, Start-ScheduledTask, bounded wait, LastTaskResult check,
-  scheduled log verification, token scan (task args, wrapper, configs, rollout,
-  state, logs, credential DPAPI check), schedule remove, absence verification,
+- Exercises the full lifecycle: pre-flight, dry-run install, real install,
+  executable smoke test, configure, interactive login, dry-run pull,
+  explicit confirmation, first real pull, schedule install (with
+  `$TaskCreatedByThisRun` tracking), structured status, token scan,
+  `Start-ScheduledTask`, bounded wait with baseline capture, strict
+  `LastTaskResult` verification, scheduled log validation, wrapper path
+  verification, controlled removal (only own task), absence verification,
   Vault integrity check, and cleanup.
-- Supports `-KeepArtifacts` to preserve the temporary root for diagnostics.
-- The command shown above does **not** contain a token.
+- Supports `-KeepArtifacts` to preserve the temporary root for diagnostics
+  (the Scheduled Task is still removed and verified absent).
+- The full acceptance command shown above does **not** contain a token.
+- On any failure, the script prints gates passed, retains diagnostic artifacts,
+  and exits non-zero; it never prints PASS for a partial or failed run.
 
 ## Inspecting task execution results
 
