@@ -10,6 +10,7 @@ import intakeSchema from "../../schemas/workflow/current/intake_envelope.schema.
 class Bucket {
   objects = new Map<string, { text: string; etag: string; contentType?: string }>();
   getCalls = new Map<string, number>();
+  bodyConsumes = new Map<string, number>();
   listedMissing = new Set<string>();
   failNextPrefix?: string;
   private revision = 0;
@@ -17,12 +18,22 @@ class Bucket {
   async get(key: string) {
     this.getCalls.set(key, (this.getCalls.get(key) ?? 0) + 1);
     const object = this.objects.get(key);
-    return object === undefined ? null : {
+    if (object === undefined) return null;
+    let bodyUsed = false;
+    const consume = () => {
+      if (bodyUsed) throw new Error("R2 body already consumed");
+      bodyUsed = true;
+      this.bodyConsumes.set(key, (this.bodyConsumes.get(key) ?? 0) + 1);
+    };
+    return {
       etag: object.etag,
       httpEtag: `"${object.etag}"`,
       httpMetadata: { contentType: object.contentType ?? "application/octet-stream" },
-      json: async <T>() => JSON.parse(object.text) as T,
-      arrayBuffer: async () => new TextEncoder().encode(object.text).buffer as ArrayBuffer,
+      get bodyUsed() { return bodyUsed; },
+      json: async <T>() => { consume(); return JSON.parse(object.text) as T; },
+      text: async () => { consume(); return object.text; },
+      blob: async () => { consume(); return new Blob([object.text]); },
+      arrayBuffer: async () => { consume(); return new TextEncoder().encode(object.text).buffer as ArrayBuffer; },
     };
   }
 
@@ -496,6 +507,14 @@ describe("vault read API", () => {
     expect(response.headers.get("cache-control")).toBe("private, no-cache");
   });
 
+  it("reads each receipt body exactly once", async () => {
+    const { vaultBucket, env: vaultEnv } = setupVaultEnv();
+    const key = receiptKey();
+    vaultBucket.seed(key, canonicalReceipt());
+    expect((await handle(request("/v1/vault/manifest", { headers: vaultAuth(syncToken) }), vaultEnv)).status).toBe(200);
+    expect(vaultBucket.bodyConsumes.get(key)).toBe(1);
+  });
+
   // ── manifest: deterministic ordering ──────────────────────────────
 
   it("sorts artifacts by path ascending across multiple receipts", async () => {
@@ -777,6 +796,25 @@ describe("vault read API", () => {
     expect(await response.text()).toBe(mdContent);
     expect(response.headers.get("content-type")).toBe("text/markdown; charset=utf-8");
     expect(response.headers.get("cache-control")).toBe("private, no-cache");
+  });
+
+  it("reads the receipt and artifact bodies exactly once during download", async () => {
+    const { vaultBucket, env: vaultEnv } = setupVaultEnv();
+    const receiptPath = receiptKey();
+    const artifactPath = `MedLearn/Captures/2026/07/capture_${"b".repeat(32)}.md`;
+    const artifact = "# once\n";
+    const digest = [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(artifact)))]
+      .map((byte) => byte.toString(16).padStart(2, "0")).join("");
+    vaultBucket.seed(receiptPath, canonicalReceipt({
+      artifacts: [
+        JSON.parse(canonicalReceipt()).artifacts[0],
+        { ...JSON.parse(canonicalReceipt()).artifacts[1], content_digest: `sha256:${digest}`, byte_length: artifact.length },
+      ],
+    }));
+    vaultBucket.seed(artifactPath, artifact, "text/markdown; charset=utf-8");
+    expect((await handle(request(`/v1/vault/files?path=${encodeURIComponent(artifactPath)}`, { headers: vaultAuth(syncToken) }), vaultEnv)).status).toBe(200);
+    expect(vaultBucket.bodyConsumes.get(receiptPath)).toBe(1);
+    expect(vaultBucket.bodyConsumes.get(artifactPath)).toBe(1);
   });
 
   it("returns correct Content-Type for Markdown artifact", async () => {

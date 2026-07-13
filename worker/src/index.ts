@@ -407,9 +407,11 @@ async function listAllReceipts(bucket: R2Bucket): Promise<{ receipts: VaultRecei
       if (!stored) return { receipts: [], error: "VAULT_STORAGE_UNAVAILABLE" };
       if (stored.httpMetadata?.contentType !== "application/json; charset=utf-8")
         return { receipts: [], error: "INVALID_VAULT_PUBLICATION_RECEIPT" };
+      let storedBody: Uint8Array;
       let parsed: unknown;
       try {
-        parsed = await stored.json();
+        storedBody = new Uint8Array(await stored.arrayBuffer());
+        parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(storedBody));
       } catch {
         return { receipts: [], error: "INVALID_VAULT_PUBLICATION_RECEIPT" };
       }
@@ -424,7 +426,6 @@ async function listAllReceipts(bucket: R2Bucket): Promise<{ receipts: VaultRecei
         return { receipts: [], error: "INVALID_VAULT_PUBLICATION_RECEIPT" };
       // Verify canonical: re-serialize and compare byte-for-byte
       const canonical = canonicalJsonBytes(parsed as Record<string, unknown>);
-      const storedBody = new Uint8Array(await stored.arrayBuffer());
       if (storedBody.length !== canonical.length) {
         return { receipts: [], error: "INVALID_VAULT_PUBLICATION_RECEIPT" };
       }
