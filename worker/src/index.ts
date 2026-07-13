@@ -116,13 +116,27 @@ function workConfig(env: Env): WorkConfig | null {
   return { CONTROL_BUCKET: env.CONTROL_BUCKET, GITHUB_ACTIONS_DISPATCH_TOKEN: github };
 }
 
+function canonicalIssuer(value: string): string | null {
+  if (!/^https:\/\//i.test(value)) return null;
+  let url: URL;
+  try { url = new URL(value); } catch { return null; }
+  if (url.protocol !== "https:") return null;
+  if (url.username || url.password) return null;
+  if (url.search) return null;
+  if (url.hash) return null;
+  let pathname = url.pathname;
+  if (!pathname.endsWith("/")) pathname = pathname + "/";
+  return `${url.protocol}//${url.host}${pathname}`;
+}
+
 function oauthConfig(env: Env): OAuthConfig | null {
   const issuer = env.MEDLEARN_WORK_OAUTH_ISSUER?.trim();
   const audience = env.MEDLEARN_WORK_OAUTH_AUDIENCE?.trim();
   const subject = env.MEDLEARN_WORK_OAUTH_ALLOWED_SUBJECT?.trim();
   if (!issuer || !audience || !subject) return null;
-  try { new URL(issuer); } catch { return null; }
-  return { issuer: issuer.replace(/\/$/, ""), audience, subject };
+  const canonical = canonicalIssuer(issuer);
+  if (!canonical) return null;
+  return { issuer: canonical, audience, subject };
 }
 
 async function sha256(value: ArrayBuffer | Uint8Array | string): Promise<string> {
@@ -458,9 +472,12 @@ async function accessTokenPayload(request: Request, env: Env): Promise<JWTPayloa
   try {
     let key = jwks.get(oauth.issuer);
     if (!key) {
-      const metadata = await (await fetch(`${oauth.issuer}/.well-known/openid-configuration`)).json() as { jwks_uri?: string };
+      const discoveryUrl = new URL(".well-known/openid-configuration", oauth.issuer);
+      const metadata = await (await fetch(discoveryUrl)).json() as { jwks_uri?: string };
       if (!metadata.jwks_uri) return null;
-      key = createRemoteJWKSet(new URL(metadata.jwks_uri));
+      const jwksUrl = new URL(metadata.jwks_uri);
+      if (jwksUrl.protocol !== "https:") return null;
+      key = createRemoteJWKSet(jwksUrl);
       jwks.set(oauth.issuer, key);
     }
     const { payload } = await jwtVerify(token, key, { issuer: oauth.issuer });

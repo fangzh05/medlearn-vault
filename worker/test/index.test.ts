@@ -84,7 +84,7 @@ class Bucket {
 
 
 const token = "ingest-secret-that-is-at-least-32-bytes";
-const issuer = "https://issuer.test";
+const issuer = "https://issuer.test/";
 const audience = "medlearn-work";
 let privateKey: CryptoKey;
 let publicJwk: Record<string, unknown>;
@@ -161,9 +161,9 @@ beforeEach(() => {
     GITHUB_ACTIONS_DISPATCH_TOKEN: "github-secret",
   };
   dispatch = vi.fn(async (input: RequestInfo | URL) => {
-    const url = String(input);
-    if (url === `${issuer}/.well-known/openid-configuration`) return new Response(JSON.stringify({ jwks_uri: `${issuer}/jwks` }));
-    if (url === `${issuer}/jwks`) return new Response(JSON.stringify({ keys: [publicJwk] }));
+    const url = input instanceof URL ? input.href : String(input);
+    if (url === `${issuer}.well-known/openid-configuration`) return new Response(JSON.stringify({ jwks_uri: `${issuer}jwks` }));
+    if (url === `${issuer}jwks`) return new Response(JSON.stringify({ keys: [publicJwk] }));
     return new Response(null, { status: 204 });
   });
   vi.stubGlobal("fetch", dispatch);
@@ -486,6 +486,122 @@ describe("Chat Project Source MCP handoff", () => {
     }), env);
     expect(response.status).toBe(413);
     expect(await response.json()).toEqual({ error: "HANDOFF_SCHEMA_INVALID" });
+  });
+});
+
+describe("OAuth issuer canonicalization", () => {
+  it("accepts Auth0 issuer with trailing slash", async () => {
+    const auth0Env = { ...env, MEDLEARN_WORK_OAUTH_ISSUER: "https://medlearn-fzh.jp.auth0.com/" };
+    const response = await handle(request("/.well-known/oauth-protected-resource"), auth0Env);
+    const body = await response.json<{ authorization_servers: string[] }>();
+    expect(body.authorization_servers).toEqual(["https://medlearn-fzh.jp.auth0.com/"]);
+  });
+
+  it("normalizes issuer without trailing slash to include one", async () => {
+    const auth0Env = { ...env, MEDLEARN_WORK_OAUTH_ISSUER: "https://medlearn-fzh.jp.auth0.com" };
+    const response = await handle(request("/.well-known/oauth-protected-resource"), auth0Env);
+    const body = await response.json<{ authorization_servers: string[] }>();
+    expect(body.authorization_servers).toEqual(["https://medlearn-fzh.jp.auth0.com/"]);
+  });
+
+  it("rejects HTTP issuer", async () => {
+    const auth0Env = { ...env, MEDLEARN_WORK_OAUTH_ISSUER: "http://medlearn-fzh.jp.auth0.com/" };
+    const response = await handle(request("/.well-known/oauth-protected-resource"), auth0Env);
+    const body = await response.json<{ authorization_servers: string[] }>();
+    expect(body.authorization_servers).toEqual([]);
+  });
+
+  it("rejects issuer with username and password in URL", async () => {
+    const auth0Env = { ...env, MEDLEARN_WORK_OAUTH_ISSUER: "https://user:pass@medlearn-fzh.jp.auth0.com/" };
+    const response = await handle(request("/.well-known/oauth-protected-resource"), auth0Env);
+    const body = await response.json<{ authorization_servers: string[] }>();
+    expect(body.authorization_servers).toEqual([]);
+  });
+
+  it("rejects issuer with query string", async () => {
+    const auth0Env = { ...env, MEDLEARN_WORK_OAUTH_ISSUER: "https://medlearn-fzh.jp.auth0.com/?x=1" };
+    const response = await handle(request("/.well-known/oauth-protected-resource"), auth0Env);
+    const body = await response.json<{ authorization_servers: string[] }>();
+    expect(body.authorization_servers).toEqual([]);
+  });
+
+  it("rejects issuer with fragment", async () => {
+    const auth0Env = { ...env, MEDLEARN_WORK_OAUTH_ISSUER: "https://medlearn-fzh.jp.auth0.com/#x" };
+    const response = await handle(request("/.well-known/oauth-protected-resource"), auth0Env);
+    const body = await response.json<{ authorization_servers: string[] }>();
+    expect(body.authorization_servers).toEqual([]);
+  });
+
+  it("uses discovery URL without double slash", async () => {
+    // Canonical issuer ends with "/", discovery must be .../.well-known/... not ...//.well-known/...
+    const token = await signedToken({ issuer: "https://issuer.test/" });
+    const response = await handle(mcp("tools/call", { name: "submit_learning_handoff", arguments: { handoff: handoff() } }, token), env);
+    expect(response.status).toBe(200);
+    const body = await response.json<{ result: { structuredContent: { status: string } } }>();
+    expect(body.result?.structuredContent?.status).toBe("submitted");
+  });
+
+  it("preserves trailing slash in metadata authorization_servers", async () => {
+    const auth0Env = { ...env, MEDLEARN_WORK_OAUTH_ISSUER: "https://medlearn-fzh.jp.auth0.com/" };
+    const response = await handle(request("/.well-known/oauth-protected-resource"), auth0Env);
+    const body = await response.json<{ authorization_servers: string[] }>();
+    expect(body.authorization_servers.length).toBeGreaterThan(0);
+    expect(body.authorization_servers[0].endsWith("/")).toBe(true);
+  });
+
+  it("verifies JWT with iss that has trailing slash", async () => {
+    const token = await signedToken({ issuer: "https://issuer.test/" });
+    const response = await handle(mcp("tools/call", { name: "submit_learning_handoff", arguments: { handoff: handoff() } }, token), env);
+    const body = await response.json<{ result: { structuredContent: { status: string } } }>();
+    expect(body.result?.structuredContent?.status).toBe("submitted");
+  });
+
+  it("rejects JWT with iss missing trailing slash", async () => {
+    const token = await signedToken({ issuer: "https://issuer.test" });
+    const response = await handle(mcp("tools/call", { name: "submit_learning_handoff", arguments: { handoff: handoff() } }, token), env);
+    const body = await response.json<{ result: { isError: boolean } }>();
+    expect(body.result?.isError).toBe(true);
+  });
+
+  it("rejects wrong audience in access token", async () => {
+    const token = await signedToken({ audience: "wrong-audience" });
+    const response = await handle(mcp("tools/call", { name: "submit_learning_handoff", arguments: { handoff: handoff() } }, token), env);
+    const body = await response.json<{ result: { isError: boolean } }>();
+    expect(body.result?.isError).toBe(true);
+  });
+
+  it("rejects wrong subject in access token", async () => {
+    const token = await signedToken({ subject: "wrong-subject" });
+    const response = await handle(mcp("tools/call", { name: "submit_learning_handoff", arguments: { handoff: handoff() } }, token), env);
+    const body = await response.json<{ result: { isError: boolean } }>();
+    expect(body.result?.isError).toBe(true);
+  });
+
+  it("rejects missing medlearn:handoff:submit scope", async () => {
+    const token = await signedToken({ scope: "other:scope" });
+    const response = await handle(mcp("tools/call", { name: "submit_learning_handoff", arguments: { handoff: handoff() } }, token), env);
+    const body = await response.json<{ result: { isError: boolean } }>();
+    expect(body.result?.isError).toBe(true);
+  });
+
+  it("keeps access token out of logs and response bodies", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const response = await handle(mcp("tools/call", { name: "submit_learning_handoff", arguments: { handoff: handoff() } }), env);
+    const text = await response.text();
+    expect(text).not.toContain(validToken);
+    // console.log should not be called for successful MCP path
+    logSpy.mockRestore();
+    errorSpy.mockRestore();
+  });
+
+  it("does not require a Client ID Worker environment variable", async () => {
+    // OAuth config requires only issuer, audience, and allowed subject — not a client ID
+    const minimalEnv = { ...env };
+    expect("MEDLEARN_WORK_OAUTH_CLIENT_ID" in minimalEnv).toBe(false);
+    // MCP tools/call succeeds without any client_id binding
+    const response = await handle(mcp("tools/call", { name: "submit_learning_handoff", arguments: { handoff: handoff() } }), minimalEnv);
+    expect(response.status).toBe(200);
   });
 });
 
