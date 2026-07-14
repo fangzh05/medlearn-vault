@@ -172,7 +172,7 @@ def test_auto_publication_returns_manual_review_without_writes() -> None:
     )
     assert result.status == "manual_review_required"
     assert result.proposal_id == proposal_id
-    assert result.manual_review_reason == "PROPOSAL_NOT_READY_FOR_REVIEW"
+    assert result.manual_review_reason == "PROPOSAL_ISSUE_AMBIGUOUS_CONCEPT"
     assert not vault.objects
     assert not [key for key in store.objects if key.startswith("v1/approvals/")]
 
