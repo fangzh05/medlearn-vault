@@ -17,8 +17,11 @@ from medlearn_vault.capture import (
     materialize_learning_capture,
 )
 from medlearn_vault.catalog_update import (
+    CatalogUpdateProposal,
+    ReviewedMetadataEntry,
     build_catalog_update_proposal,
     canonical_catalog_update_json,
+    complete_catalog_update_metadata,
     prepare_catalog_patch,
     write_catalog_patch,
 )
@@ -50,7 +53,22 @@ def _assert_deterministic_patch_bytes(value: bytes) -> None:
 def test_apl_bootstrap_requires_reviewed_catalog_then_publishes_persistent_ids_only(
     tmp_path: Path,
 ) -> None:
-    """Production-shaped regression: no R2 operations occur in this pure contract test."""
+    """Production-shaped regression: no R2 operations occur in this pure contract test.
+
+    The sanitized APL fixture has two incomplete concepts. The lifecycle is:
+
+    1. First Capture Proposal is blocked.
+    2. First CatalogUpdateProposal is blocked.
+    3. prepare_catalog_patch(blocked_update) fails with CATALOG_UPDATE_NOT_READY.
+    4. Reviewer supplies metadata for both incomplete concepts.
+    5. Completed update becomes ready_for_manual_merge.
+    6. Prepared concepts.json contains all seven promoted persistent concepts.
+    7. Receipt matches the exact final files.
+    8. Second Proposal is ready_for_review (after patch application).
+    9. Approval runs unconditionally.
+    10. VaultPublicationPlan is built unconditionally with exactly two artifacts.
+    11. No candidate IDs enter LearningCapture.
+    """
     handoff = MedLearnHandoff.model_validate_json(
         (ROOT / "examples/intake/apl-bootstrap-sanitized.json").read_text(encoding="utf-8")
     )
@@ -60,6 +78,8 @@ def test_apl_bootstrap_requires_reviewed_catalog_then_publishes_persistent_ids_o
 
     base = ContractBundle.from_directory(ROOT / "examples/copd")
     first = build_capture_proposal(base, handoff_to_intake(handoff).draft)
+
+    # ── 1. First Capture Proposal is blocked ─────────────────────────────
     assert first.status == "blocked"
     assert first.source_candidate is not None
     assert first.source_candidate.source.source_type == "learning_chat"
@@ -71,6 +91,8 @@ def test_apl_bootstrap_requires_reviewed_catalog_then_publishes_persistent_ids_o
     assert first.learning_capture_candidate.capture.learner_evidence == ()
 
     first_proposal_bytes = exact_capture_proposal_json(first)
+
+    # ── 2. First CatalogUpdateProposal is blocked ────────────────────────
     update = build_catalog_update_proposal(
         first,
         capture_proposal_object_digest=_digest(first_proposal_bytes),
@@ -90,16 +112,73 @@ def test_apl_bootstrap_requires_reviewed_catalog_then_publishes_persistent_ids_o
     assert update.status == "blocked"
     assert "manually merge" in update.next_action
 
-    duplicate_source = update.model_copy(
+    # ── 3. prepare_catalog_patch(blocked_update) fails ───────────────────
+    with pytest.raises(ValueError, match="CATALOG_UPDATE_NOT_READY"):
+        prepare_catalog_patch(update, Path("examples/copd"))
+
+    # ── 4. Reviewer supplies metadata for both incomplete concepts ───────
+    # Build metadata that matches the two incomplete resolutions
+    incomplete_resolutions = list(update.incomplete_concept_metadata)
+    assert len(incomplete_resolutions) == 2
+    leukostasis = next(
+        r for r in incomplete_resolutions if r.surface_text == "白细胞淤滞"
+    )
+    coagulation = next(
+        r for r in incomplete_resolutions if r.surface_text == "凝血障碍分型"
+    )
+
+    reviewed_metadata = (
+        ReviewedMetadataEntry(
+            resolution_id=leukostasis.resolution_id,
+            canonical_name="白细胞淤滞",
+            preferred_english="Leukostasis",
+            concept_type="complication",
+            scope_note=(
+                "The reviewed leukostasis concept for this sanitized regression fixture."
+            ),
+            aliases=(),
+        ),
+        ReviewedMetadataEntry(
+            resolution_id=coagulation.resolution_id,
+            canonical_name="凝血障碍分型",
+            concept_type="other",
+            scope_note=(
+                "The reviewed coagulation-classification concept for this sanitized "
+                "regression fixture."
+            ),
+            aliases=(),
+        ),
+    )
+
+    # ── 5. Completed update becomes ready_for_manual_merge ───────────────
+    completed = complete_catalog_update_metadata(
+        update, reviewed_metadata, Path("examples/copd")
+    )
+    assert completed.status == "ready_for_manual_merge"
+    assert completed.parent_catalog_update_id == update.catalog_update_id
+    assert completed.catalog_update_id != update.catalog_update_id
+    assert completed.incomplete_concept_metadata == ()
+    # Original bindings are preserved
+    assert completed.capture_proposal_id == update.capture_proposal_id
+    assert completed.capture_proposal_digest == update.capture_proposal_digest
+    assert completed.capture_proposal_object_digest == update.capture_proposal_object_digest
+    assert completed.base_bundle_digest == update.base_bundle_digest
+    assert completed.target_bundle_path == update.target_bundle_path
+    # All 7 promotions: 5 original + 2 completed
+    assert len(completed.concept_promotions) == 7
+
+    # Test collision scenarios on the *completed* update
+    duplicate_source = completed.model_copy(
         update={
-            "source_candidate": update.source_candidate.model_copy(
+            "source_candidate": completed.source_candidate.model_copy(
                 update={"source": base.sources[0]}
             )
         }
     )
     with pytest.raises(ValueError, match="CATALOG_PATCH_ID_COLLISION"):
         prepare_catalog_patch(duplicate_source, Path("examples/copd"))
-    alias_collision = update.concept_promotions[0].model_copy(
+
+    alias_collision = completed.concept_promotions[0].model_copy(
         update={
             "concept": ConceptEntity(
                 concept_id="concept_cccccccccccccccccccccccccccccccc",
@@ -109,13 +188,14 @@ def test_apl_bootstrap_requires_reviewed_catalog_then_publishes_persistent_ids_o
             )
         }
     )
-    duplicate_alias = update.model_copy(
-        update={"concept_promotions": (alias_collision, *update.concept_promotions[1:])}
+    duplicate_alias = completed.model_copy(
+        update={"concept_promotions": (alias_collision, *completed.concept_promotions[1:])}
     )
     with pytest.raises(ValueError, match="CATALOG_PATCH_ALIAS_COLLISION"):
         prepare_catalog_patch(duplicate_alias, Path("examples/copd"))
 
-    patch = prepare_catalog_patch(update, Path("examples/copd"))
+    # ── 6. Prepared concepts.json contains all seven promoted concepts ───
+    patch = prepare_catalog_patch(completed, Path("examples/copd"))
     output = tmp_path / "prepared"
     write_catalog_patch(patch, output)
     assert {path.name for path in output.iterdir()} == {
@@ -135,16 +215,41 @@ def test_apl_bootstrap_requires_reviewed_catalog_then_publishes_persistent_ids_o
     assert _digest(concept_bytes) == manifest["concepts_new_digest"]
     for name in ("sources.json", "concepts.json", "manifest.json", "review.md"):
         _assert_deterministic_patch_bytes((output / name).read_bytes())
-    assert "Incomplete concept metadata" in (output / "review.md").read_text(encoding="utf-8")
-    update_path = tmp_path / "catalog-update.json"
-    update_path.write_bytes(canonical_catalog_update_json(update))
+
+    # ── 7. Receipt matches the exact final files ─────────────────────────
+    receipt_path = (
+        output.parent
+        / "catalog_updates"
+        / patch.receipt.catalog_update_id
+        / "receipt.json"
+    )
+    assert receipt_path.exists()
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert receipt["catalog_update_id"] == completed.catalog_update_id
+    assert receipt["sources_new_digest"] == manifest["sources_new_digest"]
+    assert receipt["concepts_new_digest"] == manifest["concepts_new_digest"]
+
+    # Verify concepts.json contains the seven promoted concepts alongside existing ones
+    concepts_data = json.loads(patch.concepts_json)
+    # 5 existing bundle concepts + 5 original promotions + 2 completed = 12
+    assert len(concepts_data) == 12
+    concept_names = {c["canonical_name"] for c in concepts_data}
+    # All seven promoted concepts are present
+    assert "白细胞淤滞" in concept_names
+    assert "凝血障碍分型" in concept_names
+    for promo in update.concept_promotions:
+        assert promo.concept.canonical_name in concept_names
+
+    # ── CLI command produces identical output ────────────────────────────
+    completed_path = tmp_path / "completed-update.json"
+    completed_path.write_bytes(canonical_catalog_update_json(completed))
     command_output = tmp_path / "prepared-command"
     result = CliRunner().invoke(
         app,
         [
             "catalog",
             "prepare-patch",
-            str(update_path),
+            str(completed_path),
             "--bundle",
             "examples/copd",
             "--output",
@@ -156,45 +261,55 @@ def test_apl_bootstrap_requires_reviewed_catalog_then_publishes_persistent_ids_o
         assert (command_output / name).read_bytes() == (output / name).read_bytes()
         _assert_deterministic_patch_bytes((command_output / name).read_bytes())
 
-    # Synthetic stand-in for a reviewer manually applying the proposed files and
-    # separately supplying the metadata that the blocked proposal cannot promote.
-    copied_bundle = tmp_path / "bundle"
-    shutil.copytree(ROOT / "examples/copd", copied_bundle)
-    shutil.copyfile(output / "sources.json", copied_bundle / "sources.json")
-    shutil.copyfile(output / "concepts.json", copied_bundle / "concepts.json")
-    reviewed_missing = (
-        ConceptEntity(
-            concept_id="concept_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            canonical_name="白细胞淤滞",
-            concept_type="complication",
-            scope_note="The reviewed leukostasis concept for this sanitized regression fixture.",
-        ),
-        ConceptEntity(
-            concept_id="concept_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-            canonical_name="凝血障碍分型",
-            concept_type="other",
-            scope_note=(
-                "The reviewed coagulation-classification concept for this sanitized regression "
-                "fixture."
-            ),
-        ),
-    )
-    reviewed_concepts = json.loads((copied_bundle / "concepts.json").read_text(encoding="utf-8"))
-    reviewed_concepts.extend(
-        item.model_dump(mode="json", exclude_none=True) for item in reviewed_missing
-    )
-    (copied_bundle / "concepts.json").write_text(
+    # Also test the complete-metadata CLI command
+    blocked_path = tmp_path / "blocked-update.json"
+    blocked_path.write_bytes(canonical_catalog_update_json(update))
+    metadata_path = tmp_path / "reviewed-metadata.json"
+    metadata_path.write_text(
         json.dumps(
-            sorted(reviewed_concepts, key=lambda item: item["concept_id"]),
+            [item.model_dump(mode="json") for item in reviewed_metadata],
             ensure_ascii=False,
             indent=2,
         )
         + "\n",
         encoding="utf-8",
     )
+    cli_completed_path = tmp_path / "cli-completed-update.json"
+    result = CliRunner().invoke(
+        app,
+        [
+            "catalog",
+            "complete-metadata",
+            str(blocked_path),
+            "--metadata",
+            str(metadata_path),
+            "--bundle",
+            "examples/copd",
+            "--output",
+            str(cli_completed_path),
+        ],
+    )
+    assert result.exit_code == 0
+    assert f"catalog_update_id={completed.catalog_update_id}" in result.stdout
+    assert f"parent_catalog_update_id={update.catalog_update_id}" in result.stdout
+    assert "status=ready_for_manual_merge" in result.stdout
+    cli_completed = CatalogUpdateProposal.model_validate_json(
+        cli_completed_path.read_bytes()
+    )
+    assert cli_completed.catalog_update_id == completed.catalog_update_id
+    assert cli_completed.concept_promotions == completed.concept_promotions
+
+    # ── Apply patch and verify second Proposal is ready_for_review ───────
+    copied_bundle = tmp_path / "bundle"
+    shutil.copytree(ROOT / "examples/copd", copied_bundle)
+    shutil.copyfile(output / "sources.json", copied_bundle / "sources.json")
+    shutil.copyfile(output / "concepts.json", copied_bundle / "concepts.json")
+
     promoted = ContractBundle.from_directory(copied_bundle)
     assert not promoted.validate_integrity()
     second = build_capture_proposal(promoted, handoff_to_intake(handoff).draft)
+
+    # ── 8. Second Proposal is exactly ready_for_review ───────────────────
     assert second.status == "ready_for_review"
     assert all(
         item.proposed_verification_status == "unverified_chat" for item in second.claim_proposals
@@ -202,10 +317,13 @@ def test_apl_bootstrap_requires_reviewed_catalog_then_publishes_persistent_ids_o
     capture = materialize_learning_capture(promoted, second)
     assert capture.learner_evidence
     assert capture.source_id in {item.source_id for item in promoted.sources}
+    # ── 11. No candidate IDs enter LearningCapture ────────────────────────
     assert all("candidate_" not in value for value in json.dumps(capture.model_dump(mode="json")))
 
     proposal_bytes = exact_capture_proposal_json(second)
     proposal_object_digest = _digest(proposal_bytes)
+
+    # ── 9. Approval runs unconditionally ─────────────────────────────────
     approval = ProposalApprovalRecord(
         approval_id=approval_identity(
             second.proposal_id, proposal_object_digest, second.base_bundle_digest
@@ -216,6 +334,8 @@ def test_apl_bootstrap_requires_reviewed_catalog_then_publishes_persistent_ids_o
         decision="approved",
         decided_at=datetime.fromisoformat("2026-07-14T20:00:00+08:00"),
     )
+
+    # ── 10. VaultPublicationPlan built unconditionally with 2 artifacts ──
     plan = build_vault_publication_plan(
         promoted,
         proposal_bytes,
@@ -233,6 +353,169 @@ def test_apl_bootstrap_requires_reviewed_catalog_then_publishes_persistent_ids_o
         item["concept_id"].startswith("concept_")
         for item in planned_capture["learner_evidence"]
     )
+
+
+# ── Rejection tests ────────────────────────────────────────────────────────
+
+
+def _build_blocked_update_for_copd() -> tuple[CatalogUpdateProposal, bytes, ContractBundle]:
+    """Shared fixture: build a blocked CatalogUpdateProposal for examples/copd."""
+    handoff = MedLearnHandoff.model_validate_json(
+        (ROOT / "examples/intake/apl-bootstrap-sanitized.json").read_text(encoding="utf-8")
+    )
+    base = ContractBundle.from_directory(ROOT / "examples/copd")
+    first = build_capture_proposal(base, handoff_to_intake(handoff).draft)
+    first_bytes = exact_capture_proposal_json(first)
+    update = build_catalog_update_proposal(
+        first,
+        capture_proposal_object_digest=_digest(first_bytes),
+        target_bundle_path="examples/copd",
+    )
+    assert update.status == "blocked"
+    return update, first_bytes, base
+
+
+def _reviewed_metadata_for(update: CatalogUpdateProposal) -> tuple[ReviewedMetadataEntry, ...]:
+    """Produce valid metadata for every incomplete resolution in *update*."""
+    incomplete = list(update.incomplete_concept_metadata)
+    entries: list[ReviewedMetadataEntry] = []
+    for i, item in enumerate(incomplete):
+        entries.append(
+            ReviewedMetadataEntry(
+                resolution_id=item.resolution_id,
+                canonical_name=item.surface_text,
+                concept_type="other",
+                scope_note=f"Reviewed metadata for {item.surface_text}.",
+                aliases=(),
+            )
+        )
+    return tuple(entries)
+
+
+def test_reject_prepare_blocked_update() -> None:
+    """prepare_catalog_patch must reject any blocked CatalogUpdateProposal."""
+    update, _, _ = _build_blocked_update_for_copd()
+    with pytest.raises(ValueError, match="CATALOG_UPDATE_NOT_READY"):
+        prepare_catalog_patch(update, Path("examples/copd"))
+
+
+def test_reject_missing_reviewed_metadata() -> None:
+    """Every incomplete resolution must have a matching metadata entry."""
+    update, _, _ = _build_blocked_update_for_copd()
+    incomplete = list(update.incomplete_concept_metadata)
+    # Drop the second entry
+    partial = (
+        ReviewedMetadataEntry(
+            resolution_id=incomplete[0].resolution_id,
+            canonical_name=incomplete[0].surface_text,
+            concept_type="other",
+            scope_note="Reviewed.",
+        ),
+    )
+    with pytest.raises(ValueError, match="MISSING_REVIEWED_METADATA"):
+        complete_catalog_update_metadata(update, partial, Path("examples/copd"))
+
+
+def test_reject_extra_reviewed_metadata() -> None:
+    """No extra metadata entries beyond the incomplete set are allowed."""
+    update, _, _ = _build_blocked_update_for_copd()
+    metadata = list(_reviewed_metadata_for(update))
+    metadata.append(
+        ReviewedMetadataEntry(
+            resolution_id="resolution_ffffffffffffffffffffffffffffffff",
+            canonical_name="Extra Concept",
+            concept_type="other",
+            scope_note="This should not be here.",
+        )
+    )
+    with pytest.raises(ValueError, match="EXTRA_REVIEWED_METADATA"):
+        complete_catalog_update_metadata(update, tuple(metadata), Path("examples/copd"))
+
+
+def test_reject_duplicate_resolution_id_in_metadata() -> None:
+    """Each resolution_id must appear exactly once in reviewed metadata."""
+    update, _, _ = _build_blocked_update_for_copd()
+    incomplete = list(update.incomplete_concept_metadata)
+    # Both entries use the same resolution_id (duplicate!)
+    duped = (
+        ReviewedMetadataEntry(
+            resolution_id=incomplete[0].resolution_id,
+            canonical_name="First",
+            concept_type="other",
+            scope_note="First entry.",
+        ),
+        ReviewedMetadataEntry(
+            resolution_id=incomplete[0].resolution_id,  # duplicate!
+            canonical_name="Second",
+            concept_type="other",
+            scope_note="Second entry.",
+        ),
+    )
+    with pytest.raises(ValueError, match="DUPLICATE_RESOLUTION_ID_IN_METADATA"):
+        complete_catalog_update_metadata(update, duped, Path("examples/copd"))
+
+
+def test_reject_alias_collision_in_completed_metadata() -> None:
+    """Aliases within reviewed metadata must not collide with the target bundle."""
+    update, _, _ = _build_blocked_update_for_copd()
+    incomplete = list(update.incomplete_concept_metadata)
+    # One entry with a colliding alias, plus a valid second entry
+    colliding = (
+        ReviewedMetadataEntry(
+            resolution_id=incomplete[0].resolution_id,
+            canonical_name=incomplete[0].surface_text,
+            concept_type="other",
+            scope_note="Reviewed.",
+            aliases=("COPD",),  # collides with existing concept in bundle
+        ),
+        ReviewedMetadataEntry(
+            resolution_id=incomplete[1].resolution_id,
+            canonical_name=incomplete[1].surface_text,
+            concept_type="other",
+            scope_note="Valid entry.",
+        ),
+    )
+    with pytest.raises(ValueError, match="COMPLETED_CONCEPT_ALIAS_COLLISION"):
+        complete_catalog_update_metadata(update, colliding, Path("examples/copd"))
+
+
+def test_reject_modified_parent_catalog_update() -> None:
+    """A tampered parent_catalog_update_id must not produce the same completed ID."""
+    update, _, _ = _build_blocked_update_for_copd()
+    metadata = _reviewed_metadata_for(update)
+
+    # Tamper the update's catalog_update_id (as if the parent was modified)
+    tampered_data = update.model_dump(mode="json")
+    tampered_data["catalog_update_id"] = "catalog_update_" + "f" * 32
+    with pytest.raises(ValueError) as exc_info:
+        CatalogUpdateProposal.model_validate(tampered_data)
+    # The tampered catalog_update_id doesn't match the hash-derived identity
+    assert "catalog_update_id does not match" in str(exc_info.value)
+
+
+def test_reject_completing_already_ready_update() -> None:
+    """A ready_for_manual_merge update cannot be 'completed' again."""
+    update, _, _ = _build_blocked_update_for_copd()
+    metadata = _reviewed_metadata_for(update)
+    completed = complete_catalog_update_metadata(update, metadata, Path("examples/copd"))
+    assert completed.status == "ready_for_manual_merge"
+    with pytest.raises(ValueError, match="CATALOG_UPDATE_ALREADY_READY"):
+        complete_catalog_update_metadata(completed, metadata, Path("examples/copd"))
+
+
+def test_completed_update_preserves_original_bindings() -> None:
+    """The completed update must preserve Proposal digest, object digest, base, and target."""
+    update, first_bytes, _ = _build_blocked_update_for_copd()
+    metadata = _reviewed_metadata_for(update)
+    completed = complete_catalog_update_metadata(update, metadata, Path("examples/copd"))
+
+    assert completed.capture_proposal_id == update.capture_proposal_id
+    assert completed.capture_proposal_digest == update.capture_proposal_digest
+    assert completed.capture_proposal_object_digest == update.capture_proposal_object_digest
+    assert completed.base_bundle_digest == update.base_bundle_digest
+    assert completed.target_bundle_path == update.target_bundle_path
+    assert completed.source_candidate == update.source_candidate
+    assert completed.parent_catalog_update_id == update.catalog_update_id
 
 
 def test_existing_copd_and_gerd_capture_flows_remain_ready() -> None:

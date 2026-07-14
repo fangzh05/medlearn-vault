@@ -1956,13 +1956,15 @@ def test_reproposal_full_lifecycle_from_v2_handoff_through_publication() -> None
     1.  Preload an old v1 idempotency record with a different intake digest.
     2.  Submit the handoff through the v2 converter → creates a separate v2 Job.
     3.  First Proposal is blocked with CATALOG_UPDATE_REQUIRED.
-    4.  Generate a catalog patch and apply it to a copied bundle.
-    5.  Submit the same v2 handoff again → returns existing blocked Job (no redispatch).
-    6.  Run the explicit reproposal orchestrator → creates new Job with ready Proposal.
-    7.  Repeat reproposal → exact idempotent reuse.
-    8.  Prove a stale catalog_update_id cannot bypass validation.
-    9.  Approve and build a VaultPublicationPlan using the new Job.
-    10. Prove no old Job, Proposal, Intake, or idempotency record was mutated.
+    4.  Build blocked catalog update; prepare_catalog_patch is rejected.
+    5.  Reviewer completes metadata → ready_for_manual_merge update.
+    6.  Generate completed catalog patch and apply it to a copied bundle.
+    7.  Same v2 handoff again → returns existing blocked Job (no redispatch).
+    8.  Explicit reproposal → new succeeded Job with ready_for_review Proposal.
+    9.  Repeat reproposal → exact idempotent reuse.
+    10. Prove validation guards cannot be bypassed.
+    11. Approve and build VaultPublicationPlan unconditionally.
+    12. Prove no old Job, Proposal, Intake, or idempotency record was mutated.
     """
     import shutil
 
@@ -2059,8 +2061,9 @@ def test_reproposal_full_lifecycle_from_v2_handoff_through_publication() -> None
     assert blocked_job.status == "blocked"
     assert blocked_job.proposal_id == blocked_proposal_id
 
-    # ── 4. Build catalog update proposal and patch, referencing
-    #    the patched bundle path so the receipt matches the reproposal path.
+    # ── 4. Build catalog update proposal, complete metadata, and patch ──
+    #    referencing the patched bundle path so the receipt matches the
+    #    reproposal path.
     patched_bundle = ROOT / ".build" / "test-patched-bundle"
     catalog_update_id: str = ""  # initialised before try for finally-safety
     try:
@@ -2074,7 +2077,7 @@ def test_reproposal_full_lifecycle_from_v2_handoff_through_publication() -> None
         patched_bundle_rel = patched_bundle.relative_to(ROOT).as_posix()
 
         # Build catalog update against the patched bundle (same content as source)
-        catalog_update = build_catalog_update_proposal(
+        blocked_catalog_update = build_catalog_update_proposal(
             blocked_proposal,
             capture_proposal_object_digest="sha256:"
             + hashlib.sha256(
@@ -2082,13 +2085,48 @@ def test_reproposal_full_lifecycle_from_v2_handoff_through_publication() -> None
             ).hexdigest(),
             target_bundle_path=patched_bundle_rel,
         )
-        assert catalog_update.status == "blocked"  # incomplete metadata
+        assert blocked_catalog_update.status == "blocked"  # incomplete metadata
 
-        # Prepare the patch against the patched bundle (same content as source)
+        # prepare_catalog_patch must reject the blocked update
+        from medlearn_vault.catalog_update import (
+            ReviewedMetadataEntry,
+            complete_catalog_update_metadata,
+            prepare_catalog_patch,
+            write_catalog_patch,
+        )
+
+        with pytest.raises(ValueError, match="CATALOG_UPDATE_NOT_READY"):
+            prepare_catalog_patch(blocked_catalog_update, Path(patched_bundle_rel))
+
+        # Reviewer supplies metadata for both incomplete concepts
+        incomplete = list(blocked_catalog_update.incomplete_concept_metadata)
+        assert len(incomplete) == 2
+        reviewed_metadata = (
+            ReviewedMetadataEntry(
+                resolution_id=incomplete[0].resolution_id,
+                canonical_name=incomplete[0].surface_text,
+                concept_type="other",
+                scope_note="Reviewed metadata for regression test.",
+            ),
+            ReviewedMetadataEntry(
+                resolution_id=incomplete[1].resolution_id,
+                canonical_name=incomplete[1].surface_text,
+                concept_type="other",
+                scope_note="Reviewed metadata for regression test.",
+            ),
+        )
+
+        # Complete the metadata → ready_for_manual_merge
+        completed_update = complete_catalog_update_metadata(
+            blocked_catalog_update, reviewed_metadata, Path(patched_bundle_rel)
+        )
+        assert completed_update.status == "ready_for_manual_merge"
+        assert completed_update.parent_catalog_update_id == blocked_catalog_update.catalog_update_id
+        catalog_update_id = completed_update.catalog_update_id
+
+        # Prepare the patch from the completed update
         patch_output = ROOT / ".build" / "test-patch"
-        patch = prepare_catalog_patch(catalog_update, Path(patched_bundle_rel))
-        from medlearn_vault.catalog_update import write_catalog_patch
-
+        patch = prepare_catalog_patch(completed_update, Path(patched_bundle_rel))
         write_catalog_patch(patch, patch_output)
 
         # Apply the patch files to the patched bundle in-place
@@ -2099,7 +2137,6 @@ def test_reproposal_full_lifecycle_from_v2_handoff_through_publication() -> None
 
         # Write the receipt to the repository-tracked path so
         # ReproposalOrchestrator can find and verify it
-        catalog_update_id = catalog_update.catalog_update_id
         _write_receipt_to_repo(patch_output, catalog_update_id, ROOT)
 
         # Verify bundle digest changed
@@ -2136,7 +2173,7 @@ def test_reproposal_full_lifecycle_from_v2_handoff_through_publication() -> None
             now=NOW + timedelta(minutes=2),
         )
 
-        # ── 9. New immutable Job and ready_for_review Proposal ──────────
+        # ── 7. New immutable Job and ready_for_review Proposal ──────────
         assert reproposal.source_job_id != inputs.job_id
         assert reproposal.proposal_id is not None
         assert reproposal.reused is False
@@ -2147,14 +2184,14 @@ def test_reproposal_full_lifecycle_from_v2_handoff_through_publication() -> None
         assert new_job.reproposal_of_job_id == inputs.job_id
         assert new_job.reproposal_of_proposal_id == blocked_proposal_id
         assert new_job.catalog_update_id == catalog_update_id
-        # May still be blocked if metadata is incomplete
-        assert new_job.status in ("succeeded", "blocked")
+        assert new_job.status == "succeeded"
 
         new_proposal = CaptureProposal.model_validate_json(
             store.objects[f"v1/proposals/{reproposal.proposal_id}.json"].body
         )
+        assert new_proposal.status == "ready_for_review"
 
-        # ── 10. Repeat reproposal → idempotent reuse ────────────────────
+        # ── 8. Repeat reproposal → idempotent reuse ────────────────────
         repeat_reproposal = ReproposalOrchestrator(store, ROOT).run(
             inputs.job_id,
             blocked_proposal_id,
@@ -2168,8 +2205,7 @@ def test_reproposal_full_lifecycle_from_v2_handoff_through_publication() -> None
         assert repeat_reproposal.source_job_id == reproposal.source_job_id
         assert repeat_reproposal.proposal_id == reproposal.proposal_id
 
-        # ── 11. Validation guards cannot be bypassed ────────────────────
-        # A different catalog_update_id creates a separate identity (not a conflict)
+        # ── 9. Validation guards cannot be bypassed ────────────────────
 
         # Wrong confirmation cannot bypass
         with pytest.raises(WorkflowError, match="INVALID_REPROPOSAL_INPUT"):
@@ -2195,35 +2231,34 @@ def test_reproposal_full_lifecycle_from_v2_handoff_through_publication() -> None
                 now=NOW + timedelta(minutes=6),
             )
 
-        # ── 12. Approve and build VaultPublicationPlan ──────────────────
-        if new_proposal.status == "ready_for_review":
-            new_proposal_digest = "sha256:" + hashlib.sha256(
-                store.objects[f"v1/proposals/{reproposal.proposal_id}.json"].body
-            ).hexdigest()
-            approval = ApprovalOrchestrator(store).run(
-                reproposal.proposal_id,
-                new_proposal_digest,
-                new_proposal.base_bundle_digest,
-                now=NOW + timedelta(minutes=7),
-            )
-            assert approval.decision == "approved"
+        # ── 10. Approve and build VaultPublicationPlan unconditionally ──
+        new_proposal_digest = "sha256:" + hashlib.sha256(
+            store.objects[f"v1/proposals/{reproposal.proposal_id}.json"].body
+        ).hexdigest()
+        approval = ApprovalOrchestrator(store).run(
+            reproposal.proposal_id,
+            new_proposal_digest,
+            new_proposal.base_bundle_digest,
+            now=NOW + timedelta(minutes=7),
+        )
+        assert approval.decision == "approved"
 
-            approval_body = store.objects[
-                f"v1/approvals/{approval.approval_id}.json"
-            ].body
-            approval_object_digest = "sha256:" + hashlib.sha256(approval_body).hexdigest()
+        approval_body = store.objects[
+            f"v1/approvals/{approval.approval_id}.json"
+        ].body
+        approval_object_digest = "sha256:" + hashlib.sha256(approval_body).hexdigest()
 
-            plan = PublicationPlanOrchestrator(store, ROOT).run(
-                approval.approval_id,
-                approval_object_digest,
-                reproposal.source_job_id,
-                reproposal.proposal_id,
-                new_proposal_digest,
-                new_proposal.base_bundle_digest,
-                bundle_path=patched_bundle_rel,
-            )
-            assert plan.publication_plan_id.startswith("publication_plan_")
-            assert plan.capture_id.startswith("capture_")
+        plan = PublicationPlanOrchestrator(store, ROOT).run(
+            approval.approval_id,
+            approval_object_digest,
+            reproposal.source_job_id,
+            reproposal.proposal_id,
+            new_proposal_digest,
+            new_proposal.base_bundle_digest,
+            bundle_path=patched_bundle_rel,
+        )
+        assert plan.publication_plan_id.startswith("publication_plan_")
+        assert plan.capture_id.startswith("capture_")
 
         # ── 13. Prove no old records were mutated ───────────────────────────
         for key in initial_keys:
@@ -2273,7 +2308,9 @@ def _seed_reproposal_setup() -> tuple[
     import shutil
 
     from medlearn_vault.catalog_update import (
+        ReviewedMetadataEntry,
         build_catalog_update_proposal,
+        complete_catalog_update_metadata,
         prepare_catalog_patch,
         write_catalog_patch,
     )
@@ -2334,7 +2371,7 @@ def _seed_reproposal_setup() -> tuple[
     shutil.copytree(source_bundle, patched_bundle)
     patched_rel = patched_bundle.relative_to(ROOT).as_posix()
 
-    catalog_update = build_catalog_update_proposal(
+    blocked_catalog_update = build_catalog_update_proposal(
         blocked_proposal,
         capture_proposal_object_digest="sha256:"
         + hashlib.sha256(
@@ -2342,7 +2379,24 @@ def _seed_reproposal_setup() -> tuple[
         ).hexdigest(),
         target_bundle_path=patched_rel,
     )
-    cat_id = catalog_update.catalog_update_id
+    assert blocked_catalog_update.status == "blocked"
+
+    # Complete metadata for all incomplete concepts
+    incomplete = list(blocked_catalog_update.incomplete_concept_metadata)
+    reviewed = tuple(
+        ReviewedMetadataEntry(
+            resolution_id=item.resolution_id,
+            canonical_name=item.surface_text,
+            concept_type="other",
+            scope_note="Reviewed for receipt rejection test.",
+        )
+        for item in incomplete
+    )
+    completed_update = complete_catalog_update_metadata(
+        blocked_catalog_update, reviewed, Path(patched_rel)
+    )
+    assert completed_update.status == "ready_for_manual_merge"
+    cat_id = completed_update.catalog_update_id
 
     patch_output = ROOT / ".build" / "test-reject-patch"
     if patch_output.exists():
@@ -2352,7 +2406,7 @@ def _seed_reproposal_setup() -> tuple[
     receipt_parent = patch_output.parent / "catalog_updates"
     if receipt_parent.exists():
         shutil.rmtree(receipt_parent)
-    patch = prepare_catalog_patch(catalog_update, Path(patched_rel))
+    patch = prepare_catalog_patch(completed_update, Path(patched_rel))
     write_catalog_patch(patch, patch_output)
 
     # Apply patch

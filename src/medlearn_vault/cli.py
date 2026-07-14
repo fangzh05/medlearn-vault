@@ -24,9 +24,11 @@ from medlearn_vault.capture import (
 )
 from medlearn_vault.catalog_update import (
     CatalogUpdateProposal,
+    ReviewedMetadataEntry,
     build_catalog_update_proposal,
     bundle_path_identity,
     canonical_catalog_update_json,
+    complete_catalog_update_metadata,
     prepare_catalog_patch,
     render_catalog_update_markdown,
     write_catalog_patch,
@@ -727,6 +729,47 @@ def prepare_catalog_patch_command(
         _safe_error(str(exc), "catalog", type(exc).__name__)
         raise typer.Exit(1) from exc
     typer.echo(output.as_posix())
+
+
+@catalog_app.command("complete-metadata")
+def complete_catalog_metadata_command(
+    catalog_update_path: Annotated[
+        Path, typer.Argument(help="Path to the blocked catalog update JSON file")
+    ],
+    metadata_path: Annotated[
+        Path, typer.Option("--metadata", help="Path to the reviewer-supplied metadata JSON file")
+    ],
+    bundle_path: Annotated[
+        Path, typer.Option("--bundle", help="Path to the target catalog bundle directory")
+    ],
+    output: Annotated[
+        Path, typer.Option("--output", help="Path to write the completed catalog update JSON")
+    ],
+) -> None:
+    """Complete a blocked catalog update with reviewer-supplied concept metadata.
+
+    The metadata JSON must provide, for every incomplete concept resolution:
+    resolution_id, canonical_name, concept_type, scope_note, and optionally
+    preferred_english and aliases.  No metadata may be inferred.
+    """
+    try:
+        blocked_update = CatalogUpdateProposal.model_validate_json(
+            catalog_update_path.read_bytes()
+        )
+        raw_metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        if not isinstance(raw_metadata, list):
+            raise ValueError("METADATA_MUST_BE_ARRAY")
+        reviewed = tuple(ReviewedMetadataEntry.model_validate(item) for item in raw_metadata)
+        completed = complete_catalog_update_metadata(blocked_update, reviewed, bundle_path)
+        output.write_bytes(canonical_catalog_update_json(completed))
+    except (OSError, ValidationError, ValueError) as exc:
+        _safe_error(str(exc), "catalog", type(exc).__name__)
+        raise typer.Exit(1) from exc
+    typer.echo(
+        f"catalog_update_id={completed.catalog_update_id} "
+        f"parent_catalog_update_id={blocked_update.catalog_update_id} "
+        f"status={completed.status}"
+    )
 
 
 @concept_app.command("validate")

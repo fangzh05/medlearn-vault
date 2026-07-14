@@ -17,7 +17,7 @@ from medlearn_vault.capture import (
     contract_bundle_digest,
 )
 from medlearn_vault.domain.base import DomainModel
-from medlearn_vault.domain.concepts import ConceptEntity
+from medlearn_vault.domain.concepts import ConceptAlias, ConceptEntity, ConceptType
 from medlearn_vault.domain.ids import ConceptId
 from medlearn_vault.identifiers import normalize_text
 
@@ -80,6 +80,9 @@ class CatalogUpdateProposal(DomainModel):
     source_candidate: LearningChatSourceCandidate | None = None
     concept_promotions: tuple[CatalogConceptPromotion, ...] = ()
     incomplete_concept_metadata: tuple[IncompleteConceptMetadata, ...] = ()
+    parent_catalog_update_id: str | None = Field(
+        default=None, pattern=r"^catalog_update_[a-f0-9]{32}$"
+    )
     status: Literal["ready_for_manual_merge", "blocked"]
     next_action: str
 
@@ -98,6 +101,7 @@ class CatalogUpdateProposal(DomainModel):
             self.source_candidate,
             self.concept_promotions,
             self.incomplete_concept_metadata,
+            self.parent_catalog_update_id,
         ):
             raise ValueError("catalog_update_id does not match proposal contents")
         if self.status == "blocked" and not self.incomplete_concept_metadata:
@@ -105,6 +109,164 @@ class CatalogUpdateProposal(DomainModel):
         if self.status == "ready_for_manual_merge" and self.incomplete_concept_metadata:
             raise ValueError("incomplete metadata must block a catalog update")
         return self
+
+
+class ReviewedMetadataEntry(DomainModel):
+    """Reviewer-supplied metadata that completes one blocked incomplete concept resolution.
+
+    Every field except preferred_english and aliases is required because the
+    blocked proposal explicitly lists the missing metadata for each resolution.
+    """
+
+    resolution_id: str
+    canonical_name: str
+    preferred_english: str | None = None
+    concept_type: ConceptType
+    scope_note: str
+    aliases: tuple[str, ...] = ()
+
+
+def _metadata_alias_objects(alias_texts: tuple[str, ...]) -> tuple[ConceptAlias, ...]:
+    """Convert reviewer-supplied alias strings into ConceptAlias objects."""
+    return tuple(
+        ConceptAlias(
+            text=text,
+            language="zh" if any("一" <= c <= "鿿" for c in text) else "en",
+            alias_type="other",
+        )
+        for text in alias_texts
+    )
+
+
+def complete_catalog_update_metadata(
+    blocked_update: CatalogUpdateProposal,
+    reviewed_metadata: tuple[ReviewedMetadataEntry, ...],
+    bundle_path: Path,
+) -> CatalogUpdateProposal:
+    """Produce a ready_for_manual_merge update from a blocked update and reviewer metadata.
+
+    Every incomplete concept resolution in the blocked update must be covered
+    exactly once.  No metadata may be inferred — the reviewer must supply every
+    required field explicitly.
+    """
+    # ── 1. Verify the update is blocked ──────────────────────────────────
+    if blocked_update.status != "blocked":
+        raise ValueError("CATALOG_UPDATE_ALREADY_READY")
+    if not blocked_update.incomplete_concept_metadata:
+        raise ValueError("CATALOG_UPDATE_NO_INCOMPLETE_METADATA")
+
+    # ── 2. No duplicate resolution_ids in reviewed metadata ───────────────
+    reviewed_ids = {item.resolution_id for item in reviewed_metadata}
+    if len(reviewed_ids) != len(reviewed_metadata):
+        raise ValueError("DUPLICATE_RESOLUTION_ID_IN_METADATA")
+
+    # ── 3. Verify exact coverage of incomplete concepts ───────────────────
+    incomplete_ids = {item.resolution_id for item in blocked_update.incomplete_concept_metadata}
+
+    if incomplete_ids != reviewed_ids:
+        missing = incomplete_ids - reviewed_ids
+        extra = reviewed_ids - incomplete_ids
+        if missing:
+            raise ValueError(f"MISSING_REVIEWED_METADATA: {sorted(missing)}")
+        if extra:
+            raise ValueError(f"EXTRA_REVIEWED_METADATA: {sorted(extra)}")
+
+    # ── 4. No duplicate canonical names or aliases within reviewed metadata
+    names = [item.canonical_name for item in reviewed_metadata]
+    if len(set(names)) != len(names):
+        raise ValueError("DUPLICATE_CANONICAL_NAME_IN_METADATA")
+
+    all_alias_texts: list[str] = []
+    for item in reviewed_metadata:
+        all_alias_texts.extend(item.aliases)
+    if len(set(all_alias_texts)) != len(all_alias_texts):
+        raise ValueError("DUPLICATE_ALIAS_IN_METADATA")
+
+    # ── 5. Build new concept entities from reviewed metadata ──────────────
+    new_concepts: list[ConceptEntity] = []
+    for entry in reviewed_metadata:
+        alias_objects = _metadata_alias_objects(entry.aliases)
+        concept = ConceptEntity(
+            concept_id=_id(
+                "concept",
+                entry.canonical_name,
+                entry.preferred_english,
+                entry.concept_type,
+                entry.scope_note,
+                alias_objects,
+            ),
+            canonical_name=entry.canonical_name,
+            preferred_english=entry.preferred_english,
+            concept_type=entry.concept_type,
+            scope_note=entry.scope_note,
+            aliases=alias_objects,
+        )
+        new_concepts.append(concept)
+
+    # ── 6. Verify no ID or alias collision with target base bundle ────────
+    bundle = ContractBundle.from_directory(bundle_path)
+    known_ids = {item.concept_id for item in bundle.concepts}
+    known_terms = {term for concept in bundle.concepts for term in _concept_terms(concept)}
+
+    existing_promotion_ids = {item.concept.concept_id for item in blocked_update.concept_promotions}
+    existing_promotion_terms: set[str] = set()
+    for promo in blocked_update.concept_promotions:
+        existing_promotion_terms |= _concept_terms(promo.concept)
+
+    new_ids = {c.concept_id for c in new_concepts}
+    if len(new_ids) != len(new_concepts):
+        raise ValueError("DUPLICATE_COMPLETED_CONCEPT_ID")
+    if new_ids & (known_ids | existing_promotion_ids):
+        raise ValueError("COMPLETED_CONCEPT_ID_COLLISION")
+
+    new_terms: set[str] = set()
+    for concept in new_concepts:
+        terms = _concept_terms(concept)
+        if terms & (known_terms | existing_promotion_terms):
+            raise ValueError("COMPLETED_CONCEPT_ALIAS_COLLISION")
+        new_terms |= terms
+
+    # ── 7. Build new promotions and completed update ──────────────────────
+    new_promotions = tuple(
+        CatalogConceptPromotion(
+            candidate_id=_id("candidate_concept", concept.concept_id, entry.resolution_id),
+            concept=concept,
+        )
+        for entry, concept in zip(reviewed_metadata, new_concepts)
+    )
+    all_promotions = blocked_update.concept_promotions + new_promotions
+
+    completed_update_id = _id(
+        "catalog_update",
+        blocked_update.catalog_update_version,
+        blocked_update.capture_proposal_id,
+        blocked_update.capture_proposal_digest,
+        blocked_update.capture_proposal_object_digest,
+        blocked_update.base_bundle_digest,
+        blocked_update.target_bundle_path,
+        blocked_update.source_candidate,
+        all_promotions,
+        (),  # empty incomplete_concept_metadata
+        blocked_update.catalog_update_id,  # parent
+    )
+
+    return CatalogUpdateProposal(
+        catalog_update_id=completed_update_id,
+        capture_proposal_id=blocked_update.capture_proposal_id,
+        capture_proposal_digest=blocked_update.capture_proposal_digest,
+        capture_proposal_object_digest=blocked_update.capture_proposal_object_digest,
+        base_bundle_digest=blocked_update.base_bundle_digest,
+        target_bundle_path=blocked_update.target_bundle_path,
+        source_candidate=blocked_update.source_candidate,
+        concept_promotions=all_promotions,
+        incomplete_concept_metadata=(),
+        parent_catalog_update_id=blocked_update.catalog_update_id,
+        status="ready_for_manual_merge",
+        next_action=(
+            "Review the source and concepts, manually merge the repository catalog patch, then "
+            "rerun the same handoff."
+        ),
+    )
 
 
 def persistent_concept_from_candidate(candidate: NewConceptCandidate) -> ConceptEntity:
@@ -173,6 +335,7 @@ def build_catalog_update_proposal(
             capture_proposal.source_candidate,
             promotions,
             incomplete,
+            None,  # parent_catalog_update_id — always None for initial proposals
         ),
         capture_proposal_id=capture_proposal.proposal_id,
         capture_proposal_digest=capture_proposal.proposal_digest,
@@ -302,6 +465,8 @@ def _concept_terms(concept: ConceptEntity) -> set[str]:
 
 def prepare_catalog_patch(update: CatalogUpdateProposal, bundle_path: Path) -> CatalogPatch:
     """Build, but never apply, a deterministic reviewed catalog patch."""
+    if update.status != "ready_for_manual_merge":
+        raise ValueError("CATALOG_UPDATE_NOT_READY")
     identity = bundle_path_identity(bundle_path)
     if identity != update.target_bundle_path:
         raise ValueError("CATALOG_PATCH_TARGET_MISMATCH")
@@ -447,9 +612,15 @@ def render_catalog_update_markdown(proposal: CatalogUpdateProposal) -> str:
         f"- base_bundle_digest: `{proposal.base_bundle_digest}`",
         f"- target_bundle_path: `{proposal.target_bundle_path}`",
         f"- status: `{proposal.status}`",
-        "",
-        "## Source candidate",
     ]
+    if proposal.parent_catalog_update_id:
+        lines.append(f"- parent_catalog_update_id: `{proposal.parent_catalog_update_id}`")
+    lines.extend(
+        [
+            "",
+            "## Source candidate",
+        ]
+    )
     if proposal.source_candidate is None:
         lines.append("- None; the Capture Proposal already references a catalog source.")
     else:

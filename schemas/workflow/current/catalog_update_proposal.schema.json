@@ -490,6 +490,19 @@
       "title": "Incomplete Concept Metadata",
       "type": "array"
     },
+    "parent_catalog_update_id": {
+      "anyOf": [
+        {
+          "pattern": "^catalog_update_[a-f0-9]{32}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Parent Catalog Update Id"
+    },
     "status": {
       "enum": [
         "ready_for_manual_merge",
