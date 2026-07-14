@@ -992,7 +992,14 @@ class AutoPublicationOrchestrator:
 
     def _eligibility_reason(self, job: JobRecord, proposal: CaptureProposal) -> str | None:
         if proposal.status != "ready_for_review":
-            return "PROPOSAL_NOT_READY_FOR_REVIEW"
+            blocking_issues = sorted(
+                item.code for item in proposal.issues if item.severity in {"error", "review"}
+            )
+            return (
+                f"PROPOSAL_ISSUE_{blocking_issues[0]}"
+                if blocking_issues
+                else "PROPOSAL_NOT_READY_FOR_REVIEW"
+            )
         if job.status != "succeeded" or job.workflow_run_id is None:
             raise WorkflowError("INVALID_JOB")
         if any(item.severity in {"error", "review"} for item in proposal.issues):
