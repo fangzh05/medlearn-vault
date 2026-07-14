@@ -37,6 +37,7 @@ if TYPE_CHECKING:
 CONTROL_BUCKET = "medlearn-control"
 LEASE_DURATION = timedelta(minutes=10)
 TERMINAL_JOB_RETRIES = 3
+REPROPOSAL_IDENTITY_VERSION = "0.2.0"
 JOB_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"
 DIGEST_PATTERN = r"^sha256:[a-f0-9]{64}$"
 PROPOSAL_ID_PATTERN = r"^proposal_[a-f0-9]{32}$"
@@ -1745,7 +1746,7 @@ class ReproposalOrchestrator:
         #    catalog patch, not just the user-supplied catalog_update_id.
         reproposal_job_id = _id(
             "reproposal",
-            "0.1.0",
+            REPROPOSAL_IDENTITY_VERSION,
             source_job_id,
             blocked_proposal_id,
             catalog_update_id,

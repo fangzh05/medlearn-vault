@@ -123,6 +123,9 @@ concept-set match to an active supported source-backed or verified-reference cla
 `ConceptId` values; proposed concepts retain deterministic candidate IDs and receive no permanent
 ID. A proposal carries a complete `LearningCaptureCandidate`, including interval and event times,
 context, concept mentions, learner evidence, misconceptions, and open questions.
+Learner evidence may be supplied with multiple concept terms, but proposal production materializes
+one evidence record per resolved persistent concept. Unresolved, ambiguous, or candidate concepts
+still block review; the split never creates medical concepts or weakens the authority boundary.
 
 `materialize_learning_capture` is pure and deterministic. It rejects blocked, stale, tampered,
 ambiguous, unresolved, or invalid proposals before returning a persistent `LearningCapture` 1.2.0.

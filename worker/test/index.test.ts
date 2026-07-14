@@ -557,6 +557,21 @@ describe("Chat Project Source MCP handoff", () => {
     expect(draft.evidence_messages[0].observed_at).toBe("2026-07-14T00:20:00+08:00");
   });
 
+  it("splits multi-term learner evidence into single-concept draft candidates", async () => {
+    const value = handoff();
+    value.learner_evidence[0].concept_terms = ["HLA-B27诊断边界", "强直性脊柱炎"];
+    const response = await handle(mcp("tools/call", {
+      name: "submit_learning_handoff", arguments: { handoff: value },
+    }), env);
+    const body = await response.json<{ result: { structuredContent: { intake_digest: string } } }>();
+    const key = `v1/intakes/sha256/${body.result.structuredContent.intake_digest.slice("sha256:".length)}.json`;
+    const stored = bucket.rawBytes(key);
+    expect(stored).toBeDefined();
+    const draft = JSON.parse(new TextDecoder().decode(stored)).draft;
+    expect(draft.learner_evidence_candidates.map((item: { concept_terms: string[] }) => item.concept_terms))
+      .toEqual([["HLA-B27诊断边界"], ["强直性脊柱炎"]]);
+  });
+
   it("fails rather than dropping unmappable learning goals or unfinished topics", async () => {
     for (const update of [
       (value: ReturnType<typeof handoff>) => { value.learning_goals = ["理解 PNH"]; },

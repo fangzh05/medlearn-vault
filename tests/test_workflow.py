@@ -2002,16 +2002,16 @@ def _write_receipt_to_repo(
     shutil.copy2(receipt_src, receipt_dst)
 
 
-def test_reproposal_full_lifecycle_from_v3_handoff_through_publication() -> None:
+def test_reproposal_full_lifecycle_from_v4_handoff_through_publication() -> None:
     """Production-shaped regression covering the complete bootstrap→reproposal→publish lifecycle.
 
     1.  Preload an old v1 idempotency record with a different intake digest.
-    2.  Submit the handoff through the v3 converter → creates a separate v3 Job.
+    2.  Submit the handoff through the v4 converter → creates a separate v4 Job.
     3.  First Proposal is blocked with CATALOG_UPDATE_REQUIRED.
     4.  Build blocked catalog update; prepare_catalog_patch is rejected.
     5.  Reviewer completes metadata → ready_for_manual_merge update.
     6.  Generate completed catalog patch and apply it to a copied bundle.
-    7.  Same v3 handoff again → returns existing blocked Job (no redispatch).
+    7.  Same v4 handoff again → returns existing blocked Job (no redispatch).
     8.  Explicit reproposal → new succeeded Job with ready_for_review Proposal.
     9.  Repeat reproposal → exact idempotent reuse.
     10. Prove validation guards cannot be bypassed.
@@ -2037,7 +2037,7 @@ def test_reproposal_full_lifecycle_from_v3_handoff_through_publication() -> None
         Path("examples/intake/apl-bootstrap-sanitized.json").read_text(encoding="utf-8")
     )
     handoff = MedLearnHandoff.model_validate(source)
-    exact_intake, v3_key = handoff_submission(handoff)
+    exact_intake, v4_key = handoff_submission(handoff)
     intake_digest = "sha256:" + hashlib.sha256(exact_intake).hexdigest()
     intake_key = f"v1/intakes/sha256/{intake_digest[7:]}.json"
     hd = handoff_digest(handoff)[7:]
@@ -2058,10 +2058,10 @@ def test_reproposal_full_lifecycle_from_v3_handoff_through_publication() -> None
     # Snapshot all existing keys for later immutability check
     initial_keys = set(store.objects.keys())
 
-    # ── 2. Submit as v3 → new Job ───────────────────────────────────────
+    # ── 2. Submit as v4 → new Job ───────────────────────────────────────
     source_bundle = Path("examples/capture/ambiguous-ms/bundle")
     inputs = WorkflowInputs(
-        job_id="job-v3-bootstrap",
+        job_id="job-v4-bootstrap",
         intake_object_key=intake_key,
         intake_digest=intake_digest,
     )
@@ -2080,16 +2080,16 @@ def test_reproposal_full_lifecycle_from_v3_handoff_through_publication() -> None
         ),
     )
 
-    # Verify v3 idempotency key differs from v1
-    assert v3_key != v1_idem_key_raw
-    assert v3_key.startswith("medlearn-handoff-v3-")
+    # Verify v4 idempotency key differs from v1
+    assert v4_key != v1_idem_key_raw
+    assert v4_key.startswith("medlearn-handoff-v4-")
     assert v1_idem_key_raw.startswith("medlearn-handoff-")
 
     # Run the orchestrator — this simulates what the propose workflow does
     result = ProposalOrchestrator(store, ROOT).run(
         inputs,
         bundle_path=source_bundle.as_posix(),
-        workflow_run_id="run-v3-bootstrap",
+        workflow_run_id="run-v4-bootstrap",
         now=NOW,
     )
 
@@ -2484,6 +2484,65 @@ def _seed_reproposal_setup() -> tuple[
     )
 
 
+def test_reproposal_v2_identity_does_not_reuse_existing_v1_reproposal_job() -> None:
+    from medlearn_vault.capture import contract_bundle_digest
+    from medlearn_vault.catalog_update import (
+        CatalogMergeReceipt,
+        canonical_receipt_json,
+        receipt_object_digest,
+    )
+    from medlearn_vault.workflow import _id
+
+    store, inputs, blocked_pid, cat_id, blocked_base, patched_rel, _, _ = (
+        _seed_reproposal_setup()
+    )
+    try:
+        receipt_bytes = (ROOT / "catalog_updates" / cat_id / "receipt.json").read_bytes()
+        receipt = CatalogMergeReceipt.model_validate_json(receipt_bytes)
+        assert canonical_receipt_json(receipt) == receipt_bytes
+        old_reproposal_id = _id(
+            "reproposal",
+            "0.1.0",
+            inputs.job_id,
+            blocked_pid,
+            cat_id,
+            receipt_object_digest(receipt),
+            contract_bundle_digest(ContractBundle.from_directory(Path(patched_rel))),
+            inputs.intake_digest,
+        )
+        old_job = JobRecord(
+            job_id=old_reproposal_id,
+            status="blocked",
+            intake_digest=inputs.intake_digest,
+            intake_object_key=inputs.intake_object_key,
+            proposal_id="proposal_" + "a" * 32,
+            workflow_run_id=old_reproposal_id,
+            dispatch_attempt=0,
+            created_at=NOW,
+            updated_at=NOW,
+            reproposal_of_job_id=inputs.job_id,
+            reproposal_of_proposal_id=blocked_pid,
+            catalog_update_id=cat_id,
+        )
+        store.seed(f"v1/jobs/{old_reproposal_id}.json", json_bytes(old_job))
+
+        result = ReproposalOrchestrator(store, ROOT).run(
+            inputs.job_id,
+            blocked_pid,
+            cat_id,
+            blocked_base,
+            confirmation=blocked_pid,
+            bundle_path=patched_rel,
+            now=NOW + timedelta(minutes=1),
+        )
+
+        assert result.source_job_id != old_reproposal_id
+        assert result.reused is False
+        assert store.objects[f"v1/jobs/{old_reproposal_id}.json"].body == json_bytes(old_job)
+    finally:
+        _cleanup_reproposal(ROOT, cat_id)
+
+
 def test_receipt_rejects_random_but_syntactically_valid_catalog_update_id() -> None:
     """A catalog_update_id that follows the regex but has no receipt."""
     store, inputs, blocked_pid, cat_id, blocked_base, patched_rel, _, _ = (
@@ -2672,15 +2731,15 @@ def _cleanup_reproposal(root: Path, cat_id: str) -> None:
             pass
 
 
-def test_converter_v3_idempotency_key_stable_across_platforms() -> None:
-    """The v3 idempotency key must be deterministic — no platform-dependent behavior."""
+def test_converter_v4_idempotency_key_stable_across_platforms() -> None:
+    """The v4 idempotency key must be deterministic — no platform-dependent behavior."""
     from medlearn_vault.handoff import (
         HANDOFF_CONVERSION_VERSION,
         MedLearnHandoff,
         handoff_idempotency_key,
     )
 
-    assert HANDOFF_CONVERSION_VERSION == "medlearn.handoff_to_intake.v3"
+    assert HANDOFF_CONVERSION_VERSION == "medlearn.handoff_to_intake.v4"
     source = json.loads(
         Path("examples/intake/apl-bootstrap-sanitized.json").read_text(encoding="utf-8")
     )
@@ -2722,8 +2781,8 @@ def test_intake_bytes_are_lf_only_no_random_nonce() -> None:
 
     # Verify no UUID/random-like component in the idempotency key
     # (only hex characters after the fixed prefix)
-    assert key1.startswith("medlearn-handoff-v3-")
-    hex_part = key1[len("medlearn-handoff-v3-"):]
+    assert key1.startswith("medlearn-handoff-v4-")
+    hex_part = key1[len("medlearn-handoff-v4-"):]
     assert re.fullmatch(r"[a-f0-9]+", hex_part)
 
 
