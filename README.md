@@ -1,99 +1,80 @@
 # MedLearn Vault
 
-MedLearn Vault is a local-first contract layer for canonical medical concepts,
-cross-disciplinary chapter dossiers, source-backed claims, and learner evidence.
+[中文](#中文说明) · [English](#english)
 
-This repository currently implements hardened contracts, validated bundles, and generic
-bilingual medical previews:
-permanent identifiers, matching fingerprints, versioned JSON Schema, a small CLI,
-tests, and CI. It performs no Vault writes and contains no LLM, database, Obsidian,
-or document-ingestion integration.
+## 中文说明
 
-Version 0.10.0 accepts an untrusted, structured `CaptureDraft` (workflow contract 0.3.0),
-reconciles it deterministically against a `ContractBundle`, and emits a reviewable
-`CaptureProposal`. ChatGPT Work performs language understanding; MedLearn calls no LLM API.
-Drafts contain only context, message IDs, short evidence excerpts, and extracted candidates—not
-complete chat transcripts. Assertion ownership comes only from referenced message roles. Explicit
-learning outcomes map to the persistent learner-evidence taxonomy, and complete proposals can be
-materialized deterministically as validated `LearningCapture` records. Proposals never write the
-knowledge base.
+MedLearn Vault 是一个面向跨学科医学学习知识库的本地优先契约层。它用于管理规范化医学概念、跨学科章节资料、带来源约束的医学陈述、学习表现与错误纠正，并通过严格的身份、摘要、Schema 和不可变写入规则保证数据可追踪、可审计、可重建。
 
-An isolated TypeScript Worker in `worker/` provides the first single-user cloud intake adapter.
-`IntakeEnvelope` 0.1.0 exact bytes are stored in `medlearn-control`; a recoverable JobRecord 0.2.0
-handoff uses conditional R2 writes and a dispatch lease before calling the fixed GitHub workflow
-target. Python's `capture extract-intake` verifies the transport digest and emits deterministic
-CaptureDraft JSON plus its distinct canonical digest. The adapter contains no medical reasoning,
-approval or Vault writing.
+当前仓库已经实现：
 
-The first idempotent `medlearn-propose.yml` workflow reads only the fixed `medlearn-control`
-bucket, verifies exact intake bytes, loads a repository-controlled bundle, and create-only writes a
-deterministic proposal and review. A leased `ProposalExecutionRecord` makes at-least-once dispatch
-resumable without claiming exactly-once execution. It does not approve or commit a LearningCapture.
+- 永久医学概念标识、匹配指纹与外部编码标识；
+- 版本化 JSON Schema、严格 Pydantic 模型、CLI、测试与 CI；
+- `CaptureDraft → CaptureProposal → Approval → VaultPublicationPlan → Vault publication` 的确定性控制链路；
+- Cloudflare Worker + R2 的单用户云端采集与只读发布接口；
+- Windows 端 `medlearn sync` 只读增量同步，可将正式发布内容写入现有 Obsidian Vault 的 `MedLearn/` 目录；
+- `MedLearnHandoff` 结构化导入，以及缺失来源或概念时的人工目录更新与显式 reproposal 流程。
 
-The approval boundary adds immutable `ProposalApprovalRecord` 0.1.0 objects. Approval verifies the
-exact stored Proposal bytes, proposal identity and internal digest, ready status, and expected base
-bundle digest before a create-only write under a fixed control key. One exact Proposal subject has
-one immutable decision slot: the first create-only decision wins and an opposite decision returns
-`APPROVAL_CONFLICT`. `proposal_object_digest` names the exact stored bytes; the Proposal's own
-`proposal_digest` remains its separate internal semantic digest. Rejections require a sanitized
-`rejection_code`; `decided_at` is the only approval timestamp, and unverified `source_job_id` is not
-stored. It does not load or mutate the
-bundle and still performs no LearningCapture, Vault, Obsidian, artifact, or commit write.
+系统不会调用 LLM API。语言理解由 ChatGPT Work 完成，MedLearn 只接收结构化输入，并以确定性规则进行校验、提案、审批、发布和同步。
 
-`medlearn-approve.yml` is the bounded, manually dispatched control-plane approval runner. It
-requires an explicit decision and exact proposal-ID confirmation before exposing its fixed
-control-plane credentials. This release adds no Vault access or credential.
+### 当前架构
 
-`medlearn-verify-approval.yml` attests an existing Approval, Proposal, Job, Execution, and Review
-through fixed `medlearn-control` keys. It is read-only: it writes no attestation object, does not
-authorize publication, does not replace future commit-time revalidation, and does not access the
-Vault, Obsidian, or Remotely Save. Its source job ID is an operational assertion verified against
-the stored Job and Execution, not a field added to `ProposalApprovalRecord`.
+```text
+ChatGPT Work
+→ authenticated Worker intake
+→ medlearn-control R2
+→ deterministic Proposal / Review / Approval
+→ immutable VaultPublicationPlan
+→ medlearn-vault R2
+→ authenticated read-only manifest/files API
+→ Windows sync client
+→ Obsidian Vault/MedLearn
+```
 
-Version 0.9.0 adds `VaultPublicationPlan` 0.1.0: a deterministic, create-only control-plane plan
-containing exact `LearningCapture` JSON and Markdown bytes. It writes only `medlearn-control`;
-`medlearn-vault` remains untouched. See `docs/publication-contracts.md`.
+控制面与发布面严格分离：
 
-Version 0.10.0 adds the immutable medlearn-vault writer: `VaultPublicationWriter` reads a verified
-`VaultPublicationPlan` from `medlearn-control`, re-attests its provenance, then writes the exact
-planned artifact bytes to `medlearn-vault` R2 using create-only semantics. See
-`docs/publication-contracts.md` and `docs/e2e-publication-plan-baseline.md`.
+- `medlearn-control` 保存 intake、job、execution、proposal、review、approval 和 publication plan；
+- `medlearn-vault` 只保存经过批准后发布的不可变 Capture JSON、Markdown 和 publication receipt；
+- Worker 的采集凭据与 Vault 同步凭据完全隔离；
+- 发布使用 create-only 语义，不覆盖既有对象；
+- Windows 同步只允许写入本地 Vault 的 `MedLearn/` 子目录，并对 manifest、digest、字节长度和本地冲突进行校验。
 
-`medlearn-publish-vault.yml` runs only from `main` and scopes separate `CONTROL_R2_*` and
-`VAULT_R2_*` credentials so no single step holds both control-plane and vault write access.
+### 关键契约
 
-Version 0.11.0 adds the immutable `VaultPublicationReceipt` and authenticated read-only Worker
-API. After artifact publication, the writer create-only writes a deterministic receipt at
-`v1/publications/<publication_plan_id>.json` in `medlearn-vault`. The Worker exposes two new
-read-only Vault endpoints: `GET /v1/vault/manifest` (deterministic listing of all published
-artifacts from immutable receipts) and `GET /v1/vault/files?path=...` (download with digest,
-byte-length, and media-type integrity verification). Both support `If-None-Match`/`ETag` with
-SHA-256 ETags. Vault auth uses a separate `MEDLEARN_SYNC_TOKEN`; ingest and vault credentials
-are fully isolated. This release does NOT implement a Windows/Obsidian sync client or any
-write/delete/modify capabilities on the Vault API. See `docs/publication-contracts.md` and
-`docs/migrations/0.11.0-vault-read-api.md`.
+- `ConceptEntity`：一个永久医学概念身份，别名、语义范围、外部编码、学科 lens 和关系均独立建模。
+- `MedicalClaim`：受来源治理的医学陈述。未验证聊天内容不能标记为已支持；source-backed claim 必须具有引用。
+- `ChapterDossier`：只保存前向概念引用，反向链接由系统派生。
+- `LearningCapture`：不可变的学习观察记录；`LearnerState` 是可重建投影。
+- `VaultPublicationPlan`：绑定精确 JSON 与 Markdown 字节的不可变发布计划。
+- `VaultPublicationReceipt`：发布完成后的不可变收据，也是只读 manifest 的来源。
+- ID 为永久且不透明的身份；匹配指纹只用于去重与候选解析，不能替代永久 ID。
 
-Version 0.13.0 adds a production-safe Windows rollout for the read-only `medlearn sync` client.
-It installs from a trusted local wheel bundle into a user-scoped virtual environment, requires a
-dry-run and explicit first-pull confirmation, and can optionally register a bounded Scheduled Task.
-It still reads the existing authenticated Worker manifest, verifies every manifest and artifact
-digest, and writes only `MedLearn/` inside an existing local Obsidian Vault. See
-[Windows sync](docs/windows-sync.md).
+### Handoff 与目录补全
 
-Version 0.14.1 verifies the exact bytes persisted to the content-addressed intake key before any
-JobRecord or GitHub dispatch. Existing byte-identical objects are reused; a different object at the
-same key returns `INTAKE_STORAGE_CONFLICT` without overwrite or deletion. Python remains the second
-exact-byte verification boundary.
+`MedLearnHandoff` 只包含上下文、消息 ID、短证据摘录和结构化候选，不保存完整对话。陈述归属只能来自被引用消息的角色。
 
-Version 0.14.0 adds strict `MedLearnHandoff` 0.1.0 import from a user-selected
-Chat Project Source through the single authenticated Work MCP tool. It derives
-deterministic CaptureDraft bytes and reuses the existing intake, review,
-approval, publication, and read-only Windows sync chain. See
-[Project handoff import](docs/project-handoff-import.md).
+当 Handoff 中出现仓库目录尚未收录的学习来源或医学概念时，Proposal 会以 `CATALOG_UPDATE_REQUIRED` 阻断。系统不会自动创建正式医学概念。正确流程为：生成目录更新提案、人工补全元数据并审查、合并目录 PR，然后通过显式 reproposal 使用原始不可变 Intake 重新生成 Proposal。
 
-`medlearn-synthetic-intake.yml` submits a fixed, excerpt-free synthetic fixture through the real
-Worker intake path, waits for Proposal completion, and reports only sanitized Proposal provenance
-through the read-only inspector. It accepts no dispatch inputs and runs only from `main`.
+### 安装与本地验证
+
+要求 Python 3.12+。
+
+```powershell
+python -m pip install -e ".[dev]"
+medlearn doctor
+medlearn schema export
+medlearn schema check
+medlearn concept validate concept.json
+medlearn bundle validate examples/gerd
+medlearn bundle validate examples/copd
+medlearn preview render examples/gerd preview.md --topic GERD
+medlearn capture validate-draft examples/capture/copd-session/draft.json
+medlearn capture propose examples/copd examples/capture/copd-session/draft.json proposal.json
+medlearn capture review examples/copd proposal.json proposal.md
+pytest
+```
+
+Worker 验证：
 
 ```powershell
 cd worker
@@ -104,18 +85,78 @@ npm test
 npm run contracts:check
 ```
 
-## Contract architecture
+### Schema 与 CI
 
-- `ConceptEntity` is one permanent medical identity with aliases, semantic scope, and external
-  coding-system identifiers. Relations and discipline lenses are independent records.
-- `MedicalClaim` is source-governed medical evidence. An unverified chat claim cannot be
-  marked supported, and source-backed claims require citations. Evidence quality is derived
-  from the cited source records rather than copied onto every claim.
-- `ChapterDossier` owns only forward concept references; backlinks are derived.
-- `LearningCapture` records immutable observations. `LearnerState` is a rebuildable projection.
-- IDs are opaque and permanent. Computed fingerprints use mutable content only for matching.
-- `SourceDocument` owns authority and version; citations carry typed page, slide, section,
-  chat-message, figure, or table locators.
+持久化 Schema 位于 `schemas/current/`，工作流 Schema 位于 `schemas/workflow/current/`，控制面 Schema 位于 `schemas/control/current/`。CI 会在内存中重新生成 Schema；模型发生变化但没有同步更新快照和迁移说明时，检查会失败。
+
+Bundle warning 会输出警告但仍返回成功；完整性错误会返回非零退出码。Preview 主题缺失、歧义、已废弃或仍待 split review 时同样返回非零退出码。
+
+### 使用边界
+
+该项目是单用户、审计优先的医学学习基础设施，不是临床决策系统，也不应被视为医学事实自动验证器。未经权威来源支持的聊天内容不会被提升为医学事实；审批步骤有意保留人工确认。
+
+当前没有自动概念合并、自动 claim 验证、完整对话归档、任意 Vault 写入、删除或远程修改能力。Obsidian 同步是只读远端、受限本地写入模型。
+
+更详细的契约、部署和迁移说明见 `docs/`。
+
+---
+
+## English
+
+MedLearn Vault is a local-first contract layer for a cross-disciplinary medical learning vault. It manages canonical medical concepts, cross-disciplinary chapter dossiers, source-governed medical claims, learner evidence, and misconception correction through strict identity, digest, schema, and immutable-write rules.
+
+The repository currently implements:
+
+- permanent medical concept identifiers, matching fingerprints, and external coding identifiers;
+- versioned JSON Schema, strict Pydantic models, a CLI, tests, and CI;
+- a deterministic `CaptureDraft → CaptureProposal → Approval → VaultPublicationPlan → Vault publication` control chain;
+- a single-user Cloudflare Worker + R2 intake and read-only publication API;
+- a read-only Windows `medlearn sync` client that writes published content only under `MedLearn/` in an existing Obsidian Vault;
+- structured `MedLearnHandoff` import and a manually reviewed catalog-update/reproposal lifecycle for missing sources or concepts.
+
+MedLearn does not call an LLM API. ChatGPT Work performs language understanding; MedLearn accepts structured input and applies deterministic validation, proposal, approval, publication, and synchronization rules.
+
+### Architecture
+
+```text
+ChatGPT Work
+→ authenticated Worker intake
+→ medlearn-control R2
+→ deterministic Proposal / Review / Approval
+→ immutable VaultPublicationPlan
+→ medlearn-vault R2
+→ authenticated read-only manifest/files API
+→ Windows sync client
+→ Obsidian Vault/MedLearn
+```
+
+The control plane and publication plane are strictly separated:
+
+- `medlearn-control` stores intakes, jobs, executions, proposals, reviews, approvals, and publication plans;
+- `medlearn-vault` stores only approved immutable Capture JSON, Markdown, and publication receipts;
+- intake credentials and Vault synchronization credentials are isolated;
+- publication uses create-only semantics and never overwrites existing objects;
+- the Windows client writes only inside the local Vault's `MedLearn/` directory and verifies manifests, digests, byte lengths, and local conflicts.
+
+### Core contracts
+
+- `ConceptEntity`: one permanent medical identity. Aliases, semantic scope, external identifiers, discipline lenses, and relations are modeled independently.
+- `MedicalClaim`: source-governed medical evidence. Unverified chat content cannot be marked supported, and source-backed claims require citations.
+- `ChapterDossier`: stores forward concept references only; backlinks are derived.
+- `LearningCapture`: an immutable learner-observation record; `LearnerState` is a rebuildable projection.
+- `VaultPublicationPlan`: an immutable plan containing exact JSON and Markdown publication bytes.
+- `VaultPublicationReceipt`: an immutable publication receipt and the source for the read-only manifest.
+- IDs are opaque and permanent. Computed fingerprints are used only for matching and deduplication.
+
+### Handoff and catalog completion
+
+`MedLearnHandoff` contains context, message IDs, short evidence excerpts, and structured candidates, not complete chat transcripts. Assertion ownership is derived only from referenced message roles.
+
+When a Handoff introduces a learning source or medical concept that is absent from the repository-controlled catalog, the Proposal is blocked with `CATALOG_UPDATE_REQUIRED`. The system does not auto-promote candidates into permanent concepts. The safe lifecycle is: generate a catalog-update proposal, manually complete and review metadata, merge the catalog PR, then explicitly repropose from the original immutable Intake.
+
+### Installation and local validation
+
+Python 3.12+ is required.
 
 ```powershell
 python -m pip install -e ".[dev]"
@@ -124,23 +165,35 @@ medlearn schema export
 medlearn schema check
 medlearn concept validate concept.json
 medlearn bundle validate examples/gerd
+medlearn bundle validate examples/copd
 medlearn preview render examples/gerd preview.md --topic GERD
-medlearn preview render examples/copd preview.md --topic COPD
 medlearn capture validate-draft examples/capture/copd-session/draft.json
 medlearn capture propose examples/copd examples/capture/copd-session/draft.json proposal.json
 medlearn capture review examples/copd proposal.json proposal.md
 pytest
 ```
 
-Persistent schemas live in `schemas/current/`; workflow schemas live in
-`schemas/workflow/current/`. CI regenerates each schema in memory and
-fails if a model changes without an intentional snapshot and migration-note update.
+Worker validation:
 
-Bundle warnings are printed but return success; integrity errors return nonzero. Preview topics
-that are missing, ambiguous, deprecated, or pending split review also return nonzero.
+```powershell
+cd worker
+npm install
+npm run lint
+npm run typecheck
+npm test
+npm run contracts:check
+```
 
-## Development boundary
+### Schema and CI
 
-P0.1 intentionally contains no registry persistence, contextual resolver, typed textbook
-knowledge-unit union, source ingestion, Obsidian adapter, LLM integration, or PDF pipeline.
-Those capabilities belong to later phases after these contracts stabilize.
+Persistent schemas live in `schemas/current/`, workflow schemas in `schemas/workflow/current/`, and control-plane schemas in `schemas/control/current/`. CI regenerates schemas in memory and fails when a model changes without an intentional snapshot and migration-note update.
+
+Bundle warnings are printed but return success; integrity errors return a nonzero exit code. Missing, ambiguous, deprecated, or pending-split preview topics also return nonzero.
+
+### Operational boundary
+
+This project is single-user, audit-first medical learning infrastructure. It is not a clinical decision system and must not be treated as an automatic medical-fact verifier. Chat content is never promoted to medical truth without authoritative source support, and manual approval is intentionally retained.
+
+The project does not provide automatic concept merging, automatic claim verification, full-transcript storage, arbitrary Vault writes, deletion, or remote modification. Obsidian synchronization is a read-only remote and bounded local-write model.
+
+See `docs/` for detailed contracts, deployment notes, and migration records.
