@@ -1725,12 +1725,21 @@ def test_export_proposal_cli_writes_exact_blocked_outputs(
     assert details["source_candidate"] is None
     assert details["new_concept_candidate_count"] == 0
     assert details["non_matched_or_redirected_concept_resolutions"]
+    draft_diagnostics = json.loads(
+        (tmp_path / "draft-diagnostics.json").read_text(encoding="utf-8")
+    )
+    assert draft_diagnostics["proposal_id"] == proposal_id
+    assert draft_diagnostics["learner_evidence_candidates"] == []
     assert json.loads(result.stdout)["proposal_id"] == proposal_id
+    seeded_job = JobRecord.model_validate_json(
+        store.objects["v1/jobs/job-approval-source.json"].body
+    )
     assert read_only.reads == [
         "v1/jobs/job-approval-source.json",
         "v1/executions/job-approval-source.json",
         f"v1/proposals/{proposal_id}.json",
         f"v1/reviews/{proposal_id}.md",
+        seeded_job.intake_object_key,
     ]
 
 

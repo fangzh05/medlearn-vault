@@ -44,6 +44,7 @@ from medlearn_vault.domain import (
     SourceDocument,
 )
 from medlearn_vault.handoff import MedLearnHandoff
+from medlearn_vault.identifiers import normalize_text
 from medlearn_vault.preview import (
     PreviewBuildError,
     PreviewRequest,
@@ -640,6 +641,7 @@ def workflow_export_proposal(
         proposal_path = output / "proposal.json"
         review_path = output / "review.md"
         details_path = output / "inspect.json"
+        draft_diagnostics_path = output / "draft-diagnostics.json"
         proposal_path.write_bytes(proposal_stored.body)
         review_path.write_bytes(review_stored.body)
         non_resolved = [
@@ -673,6 +675,72 @@ def workflow_export_proposal(
         }
         details_path.write_text(
             json.dumps(details, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+
+        intake_stored = store.get(job.intake_object_key)
+        if intake_stored is None:
+            raise WorkflowError("INTAKE_NOT_FOUND")
+        intake_digest = "sha256:" + hashlib.sha256(intake_stored.body).hexdigest()
+        if intake_digest != job.intake_digest:
+            raise WorkflowError("INTAKE_DIGEST_MISMATCH")
+        draft_bytes, draft_digest = extract_capture_draft(intake_stored.body, intake_digest)
+        draft = CaptureDraft.model_validate_json(draft_bytes)
+        resolution_by_term = {
+            normalize_text(item.surface_text): item for item in proposal.concept_resolutions
+        }
+        learner_evidence = []
+        for index, item in enumerate(draft.learner_evidence_candidates):
+            term_refs = []
+            for term in item.concept_terms:
+                resolution = resolution_by_term.get(normalize_text(term))
+                term_refs.append(
+                    {
+                        "term": term,
+                        "resolution_status": None if resolution is None else resolution.status,
+                        "matched_concept_id": (
+                            None if resolution is None else resolution.matched_concept_id
+                        ),
+                        "candidate_concept_ids": (
+                            [] if resolution is None else list(resolution.candidate_concept_ids)
+                        ),
+                        "new_candidate_id": (
+                            None if resolution is None else resolution.new_candidate_id
+                        ),
+                    }
+                )
+            unique_concept_ids = sorted(
+                {
+                    ref["matched_concept_id"]
+                    for ref in term_refs
+                    if ref["matched_concept_id"] is not None
+                }
+            )
+            learner_evidence.append(
+                {
+                    "index": index,
+                    "concept_terms": list(item.concept_terms),
+                    "evidence_type": item.evidence_type,
+                    "confidence": item.confidence,
+                    "evidence_message_ids": list(item.evidence_message_ids),
+                    "term_refs": term_refs,
+                    "unique_matched_concept_ids": unique_concept_ids,
+                    "valid_single_persistent_concept": (
+                        len(unique_concept_ids) == 1
+                        and len(term_refs) >= 1
+                        and all(ref["matched_concept_id"] is not None for ref in term_refs)
+                    ),
+                }
+            )
+        draft_diagnostics = {
+            "source_job_id": source_job_id,
+            "proposal_id": expected_proposal_id,
+            "intake_digest": intake_digest,
+            "draft_digest": draft_digest,
+            "learner_evidence_candidates": learner_evidence,
+        }
+        draft_diagnostics_path.write_text(
+            json.dumps(draft_diagnostics, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
         )
     except WorkflowError as exc:
         typer.echo(f"error_code={exc.code}", err=True)
