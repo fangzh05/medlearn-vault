@@ -49,4 +49,5 @@ jobs:
           MEDLEARN_SOURCE_JOB_ID: ${{ inputs.source_job_id }}
         run: |
           result=$(medlearn workflow auto-publish "$MEDLEARN_SOURCE_JOB_ID" --json)
+          printf '%s\n' "$result"
           printf '%s\n' "$result" >> "$GITHUB_STEP_SUMMARY"
