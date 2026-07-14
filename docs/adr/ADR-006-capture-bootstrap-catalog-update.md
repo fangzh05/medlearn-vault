@@ -86,7 +86,7 @@ A reproposal Job ID is derived deterministically from:
 
 ```
 reproposal_ + sha256(
-  "0.2.0" +
+  "0.3.0" +
   source_job_id +
   blocked_proposal_id +
   catalog_update_id +
@@ -105,7 +105,7 @@ The new Job record carries provenance fields:
 These fields are immutable, optional, and preserved through the control-plane
 read path.
 
-Reproposal v0.2.0 also passes `reproposal:0.2.0` as a Proposal identity salt
+Reproposal v0.3.0 also passes `reproposal:0.3.0` as a Proposal identity salt
 when rebuilding from the immutable Intake. Ordinary proposal production keeps
 the original Proposal ID algorithm so terminal reruns of older Jobs continue to
 verify existing Proposal and Review objects. The salt prevents a code-only
