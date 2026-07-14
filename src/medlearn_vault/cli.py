@@ -83,6 +83,7 @@ from medlearn_vault.workflow import (
     ProposalOrchestrator,
     ProposalOutputInspector,
     PublicationPlanOrchestrator,
+    ReproposalOrchestrator,
     S3ObjectStore,
     S3ReadOnlyObjectStore,
     WorkflowError,
@@ -381,6 +382,46 @@ def workflow_propose(job_id: str, intake_object_key: str, intake_digest: str) ->
         raise typer.Exit(1) from exc
     typer.echo(
         f"status={result.status} proposal_id={result.proposal_id or 'none'} "
+        f"reused={str(result.reused).lower()}"
+    )
+
+
+@workflow_app.command("repropose")
+def workflow_repropose(
+    source_job_id: str,
+    blocked_proposal_id: str,
+    catalog_update_id: str,
+    previous_base_bundle_digest: str,
+    confirmation: str,
+) -> None:
+    """Create a new immutable Job/Proposal from the same Intake against the current catalog.
+
+    This is the only path from a blocked bootstrap Proposal to a ready
+    Proposal after catalog merge.  It never mutates the terminal blocked Job.
+    """
+    try:
+        store = S3ObjectStore(
+            os.environ.get("CONTROL_R2_ENDPOINT", ""),
+            os.environ.get("CONTROL_R2_ACCESS_KEY_ID", ""),
+            os.environ.get("CONTROL_R2_SECRET_ACCESS_KEY", ""),
+        )
+        result = ReproposalOrchestrator(store, Path.cwd()).run(
+            source_job_id,
+            blocked_proposal_id,
+            catalog_update_id,
+            previous_base_bundle_digest,
+            confirmation,
+            bundle_path=os.environ.get("MEDLEARN_PROPOSE_BUNDLE_PATH", ""),
+        )
+    except WorkflowError as exc:
+        typer.echo(f"error_code={exc.code}", err=True)
+        raise typer.Exit(1) from exc
+    except ValidationError as exc:
+        typer.echo("error_code=INVALID_REPROPOSAL_INPUT", err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(
+        f"source_job_id={result.source_job_id} proposal_id={result.proposal_id} "
+        f"base_bundle_digest={result.base_bundle_digest} "
         f"reused={str(result.reused).lower()}"
     )
 

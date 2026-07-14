@@ -172,6 +172,45 @@
       ],
       "default": null,
       "title": "Error Code"
+    },
+    "reproposal_of_job_id": {
+      "anyOf": [
+        {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Reproposal Of Job Id"
+    },
+    "reproposal_of_proposal_id": {
+      "anyOf": [
+        {
+          "pattern": "^proposal_[a-f0-9]{32}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Reproposal Of Proposal Id"
+    },
+    "catalog_update_id": {
+      "anyOf": [
+        {
+          "pattern": "^catalog_update_[a-f0-9]{32}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Catalog Update Id"
     }
   },
   "required": [

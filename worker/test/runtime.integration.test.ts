@@ -179,4 +179,87 @@ describe("Cloudflare runtime", () => {
     expect(response.headers.get("content-type")).toBe("text/markdown; charset=utf-8");
     expect(await response.text()).toBe(markdown);
   });
+
+  it("uses a separate idempotency namespace for v2 converter — no conflict with old v1 record", async () => {
+    // Simulate production state: an old v1 idempotency record already exists
+    // for the same semantic handoff digest, bound to a different intake digest.
+    const bucket = await runtime.getR2Bucket("CONTROL_BUCKET");
+    const body = readFileSync(resolve("../examples/intake/apl-bootstrap-worker-envelope.json"));
+    const intakeDigest = `sha256:${createHash("sha256").update(body).digest("hex")}`;
+    const intakeKey = `v1/intakes/sha256/${intakeDigest.slice("sha256:".length)}.json`;
+
+    // The semantic digest that convertHandoff produces for this handoff
+    // We construct a v1-style key to simulate old production state
+    const handoffSource = JSON.parse(readFileSync(resolve("../examples/intake/apl-bootstrap-sanitized.json"), "utf8"));
+    const canonicalHandoff = JSON.stringify(handoffSource, (_k: string, v: unknown) => {
+      if (v && typeof v === "object" && !Array.isArray(v)) {
+        return Object.fromEntries(Object.entries(v as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)));
+      }
+      return v;
+    });
+    const handoffDigest = createHash("sha256").update(canonicalHandoff).digest("hex");
+
+    // Old v1 idempotency key: medlearn-handoff-<digest>
+    const v1IdempotencyKey = `medlearn-handoff-${handoffDigest}`;
+    const v1IdemKey = `v1/idempotency/${createHash("sha256").update(v1IdempotencyKey).digest("hex")}.json`;
+
+    // Preload an old v1 idempotency record pointing to a DIFFERENT (old) intake digest
+    const oldIntakeDigest = `sha256:${"f".repeat(64)}`;
+    await bucket.put(v1IdemKey, JSON.stringify({
+      idempotency_version: "0.1.0",
+      job_id: crypto.randomUUID(),
+      intake_digest: oldIntakeDigest,
+      created_at: new Date(0).toISOString(),
+    }));
+
+    // Also preload the intake so the submission doesn't fail on intake storage
+    await bucket.put(intakeKey, body);
+
+    // Now submit the same intake with the v2 idempotency key
+    // This should succeed because v2 uses a different namespace
+    const v2IdempotencyKey = `medlearn-handoff-v2-${handoffDigest}`;
+    const response = await runtime.dispatchFetch("https://example.test/v1/captures", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": v2IdempotencyKey,
+      },
+      body,
+    });
+    expect(response.status).toBe(202); // v2 creates a new job, no conflict
+    const job = await response.json() as { job_id: string; status: string };
+    expect(job.job_id).toBeTruthy();
+    expect(job.status).toBe("dispatched");
+
+    // Verify the old v1 record was NOT touched
+    const oldRecord = await bucket.get(v1IdemKey);
+    expect(oldRecord).not.toBeNull();
+    const oldValue = await oldRecord!.json() as { intake_digest: string };
+    expect(oldValue.intake_digest).toBe(oldIntakeDigest);
+
+    // Verify the v2 idempotency record was created
+    const v2IdemKey = `v1/idempotency/${createHash("sha256").update(v2IdempotencyKey).digest("hex")}.json`;
+    const v2Record = await bucket.get(v2IdemKey);
+    expect(v2Record).not.toBeNull();
+    const v2Value = await v2Record!.json() as { intake_digest: string };
+    expect(v2Value.intake_digest).toBe(intakeDigest);
+
+    // Repeated submission with v2 key remains idempotent
+    const repeat = await runtime.dispatchFetch("https://example.test/v1/captures", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": v2IdempotencyKey,
+      },
+      body,
+    });
+    expect(repeat.status).toBe(202);
+    const repeatJob = await repeat.json() as { job_id: string };
+    expect(repeatJob.job_id).toBe(job.job_id); // Same job — idempotent reuse
+
+    // A different intake under the v2 key with the same key would conflict
+    // (but that's the existing idempotency behavior, not a regression)
+  });
 });

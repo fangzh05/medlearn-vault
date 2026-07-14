@@ -60,6 +60,9 @@ export interface JobRecord {
   created_at: string;
   updated_at: string;
   error_code?: string;
+  reproposal_of_job_id?: string;
+  reproposal_of_proposal_id?: string;
+  catalog_update_id?: string;
 }
 
 interface IdempotencyRecord {
@@ -76,6 +79,7 @@ const MAX_HANDOFF_BODY = 256 * 1024;
 const LEASE_MS = 30_000;
 const CURRENT_INTAKE_VERSION = "0.1.0";
 const CURRENT_DRAFT_VERSION = "0.3.0";
+const HANDOFF_CONVERSION_VERSION = "medlearn.handoff_to_intake.v2";
 const ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 const PROPOSAL_ID = /^proposal_[a-f0-9]{32}$/;
 
@@ -262,6 +266,9 @@ function sanitizeJob(job: JobRecord): JobRecord {
   if (job.dispatch_lease_id !== undefined) clean.dispatch_lease_id = job.dispatch_lease_id;
   if (job.dispatch_lease_expires_at !== undefined) clean.dispatch_lease_expires_at = job.dispatch_lease_expires_at;
   if (job.error_code !== undefined) clean.error_code = job.error_code;
+  if (job.reproposal_of_job_id !== undefined) clean.reproposal_of_job_id = job.reproposal_of_job_id;
+  if (job.reproposal_of_proposal_id !== undefined) clean.reproposal_of_proposal_id = job.reproposal_of_proposal_id;
+  if (job.catalog_update_id !== undefined) clean.catalog_update_id = job.catalog_update_id;
   return clean;
 }
 
@@ -557,7 +564,8 @@ export async function convertHandoff(handoff: Record<string, unknown>): Promise<
   const envelope = { intake_version: "0.1.0", client_kind: "chatgpt_work", draft };
   if (!validateEnvelope(envelope)) throw new Error("HANDOFF_CONVERSION_FAILURE");
   const encoded = new TextEncoder().encode(`${canonicalJson(envelope)}\n`);
-  return { body: encoded.buffer.slice(encoded.byteOffset, encoded.byteOffset + encoded.byteLength), idempotencyKey: `medlearn-handoff-${digest}` };
+  const versionSuffix = HANDOFF_CONVERSION_VERSION.split(".").pop()!; // "v2"
+  return { body: encoded.buffer.slice(encoded.byteOffset, encoded.byteOffset + encoded.byteLength), idempotencyKey: `medlearn-handoff-${versionSuffix}-${digest}` };
 }
 
 const MCP_SCOPE = "medlearn:handoff:submit";

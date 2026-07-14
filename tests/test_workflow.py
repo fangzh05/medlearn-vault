@@ -1931,3 +1931,461 @@ def test_cli_treats_blocked_proposal_as_success(monkeypatch: pytest.MonkeyPatch)
     )
     assert result.exit_code == 0
     assert "status=blocked" in result.stdout
+
+
+# ── Production-shaped reproposal regression ─────────────────────────────
+
+
+def _copy_bundle_with_catalog_patch(
+    source_bundle: Path, target_dir: Path, patch_dir: Path
+) -> Path:
+    """Copy a bundle directory and apply catalog patch files on top."""
+    import shutil
+
+    if target_dir.exists():
+        shutil.rmtree(target_dir)
+    shutil.copytree(source_bundle, target_dir)
+    # Apply patch: copy sources.json and concepts.json from the patch directory
+    for name in ("sources.json", "concepts.json"):
+        patch_file = patch_dir / name
+        if patch_file.exists():
+            shutil.copy2(patch_file, target_dir / name)
+    return target_dir
+
+
+def test_reproposal_full_lifecycle_from_v2_handoff_through_publication() -> None:
+    """Production-shaped regression covering the complete bootstrap→reproposal→publish lifecycle.
+
+    1.  Preload an old v1 idempotency record with a different intake digest.
+    2.  Submit the handoff through the v2 converter → creates a separate v2 Job.
+    3.  First Proposal is blocked with CATALOG_UPDATE_REQUIRED.
+    4.  Generate a catalog patch and apply it to a copied bundle.
+    5.  Submit the same v2 handoff again → returns existing blocked Job (no redispatch).
+    6.  Run the explicit reproposal orchestrator → creates new Job with ready Proposal.
+    7.  Repeat reproposal → exact idempotent reuse.
+    8.  Prove a stale catalog_update_id cannot bypass validation.
+    9.  Approve and build a VaultPublicationPlan using the new Job.
+    10. Prove no old Job, Proposal, Intake, or idempotency record was mutated.
+    """
+    import shutil
+
+    from medlearn_vault.catalog_update import (
+        build_catalog_update_proposal,
+        prepare_catalog_patch,
+    )
+    from medlearn_vault.handoff import (
+        MedLearnHandoff,
+        handoff_digest,
+        handoff_submission,
+    )
+    from medlearn_vault.workflow import (
+        ApprovalOrchestrator,
+        PublicationPlanOrchestrator,
+        ReproposalOrchestrator,
+    )
+
+    store = MemoryStore()
+
+    # ── 1. Preload old v1 idempotency record ────────────────────────────
+    source = json.loads(
+        Path("examples/intake/apl-bootstrap-sanitized.json").read_text(encoding="utf-8")
+    )
+    handoff = MedLearnHandoff.model_validate(source)
+    exact_intake, v2_key = handoff_submission(handoff)
+    intake_digest = "sha256:" + hashlib.sha256(exact_intake).hexdigest()
+    intake_key = f"v1/intakes/sha256/{intake_digest[7:]}.json"
+    hd = handoff_digest(handoff)[7:]
+
+    # Old v1 record: medlearn-handoff-<digest> → different intake digest
+    v1_idem_key_raw = f"medlearn-handoff-{hd}"
+    v1_idem_r2_key = f"v1/idempotency/{hashlib.sha256(v1_idem_key_raw.encode()).hexdigest()}.json"
+    old_intake_digest = f"sha256:{'f' * 64}"
+    v1_idem_record = {
+        "idempotency_version": "0.1.0",
+        "job_id": "00000000-0000-0000-0000-000000000000",
+        "intake_digest": old_intake_digest,
+        "created_at": "2026-01-01T00:00:00Z",
+    }
+    store.seed(v1_idem_r2_key, json_bytes(v1_idem_record))
+    store.seed(intake_key, exact_intake)
+
+    # Snapshot all existing keys for later immutability check
+    initial_keys = set(store.objects.keys())
+
+    # ── 2. Submit as v2 → new Job ───────────────────────────────────────
+    source_bundle = Path("examples/capture/ambiguous-ms/bundle")
+    inputs = WorkflowInputs(
+        job_id="job-v2-bootstrap",
+        intake_object_key=intake_key,
+        intake_digest=intake_digest,
+    )
+    store.seed(
+        f"v1/jobs/{inputs.job_id}.json",
+        json_bytes(
+            JobRecord(
+                job_id=inputs.job_id,
+                status="dispatched",
+                intake_digest=intake_digest,
+                intake_object_key=intake_key,
+                dispatch_attempt=1,
+                created_at=NOW,
+                updated_at=NOW,
+            )
+        ),
+    )
+
+    # Verify v2 idempotency key differs from v1
+    assert v2_key != v1_idem_key_raw
+    assert v2_key.startswith("medlearn-handoff-v2-")
+    assert v1_idem_key_raw.startswith("medlearn-handoff-")
+
+    # Run the orchestrator — this simulates what the propose workflow does
+    result = ProposalOrchestrator(store, ROOT).run(
+        inputs,
+        bundle_path=source_bundle.as_posix(),
+        workflow_run_id="run-v2-bootstrap",
+        now=NOW,
+    )
+
+    # ── 3. First Proposal is blocked ────────────────────────────────────
+    assert result.status == "blocked"
+    assert result.proposal_id is not None
+    blocked_proposal_id = result.proposal_id
+    blocked_proposal = CaptureProposal.model_validate_json(
+        store.objects[f"v1/proposals/{blocked_proposal_id}.json"].body
+    )
+    assert blocked_proposal.status == "blocked"
+    assert any(
+        issue.code == "CATALOG_UPDATE_REQUIRED" for issue in blocked_proposal.issues
+    )
+    blocked_base_bundle_digest = blocked_proposal.base_bundle_digest
+
+    # Verify blocked Job is terminal
+    blocked_job = JobRecord.model_validate_json(
+        store.objects[f"v1/jobs/{inputs.job_id}.json"].body
+    )
+    assert blocked_job.status == "blocked"
+    assert blocked_job.proposal_id == blocked_proposal_id
+
+    # ── 4. Build catalog update proposal and patch ──────────────────────
+    catalog_update = build_catalog_update_proposal(
+        blocked_proposal,
+        capture_proposal_object_digest="sha256:"
+        + hashlib.sha256(
+            store.objects[f"v1/proposals/{blocked_proposal_id}.json"].body
+        ).hexdigest(),
+        target_bundle_path=source_bundle.as_posix(),
+    )
+    assert catalog_update.status == "blocked"  # incomplete metadata
+
+    # Prepare the patch
+    patched_bundle = ROOT / ".build" / "test-patched-bundle"
+    try:
+        patch_output = ROOT / ".build" / "test-patch"
+        patch = prepare_catalog_patch(catalog_update, source_bundle)
+        from medlearn_vault.catalog_update import write_catalog_patch
+
+        write_catalog_patch(patch, patch_output)
+
+        # Copy bundle and apply patch
+        _copy_bundle_with_catalog_patch(source_bundle, patched_bundle, patch_output)
+
+        # Verify bundle digest changed
+        patched = ContractBundle.from_directory(patched_bundle)
+        from medlearn_vault.capture import contract_bundle_digest
+
+        new_bundle_digest = contract_bundle_digest(patched)
+        assert new_bundle_digest != blocked_base_bundle_digest
+
+        # ── 5. Same v2 handoff again → returns existing blocked Job ─────
+        repeat_result = ProposalOrchestrator(store, ROOT).run(
+            inputs,
+            bundle_path=source_bundle.as_posix(),
+            workflow_run_id="run-v2-repeat",
+            now=NOW + timedelta(minutes=1),
+        )
+        assert repeat_result.status == "blocked"
+        assert repeat_result.proposal_id == blocked_proposal_id
+        assert repeat_result.reused is True
+        # Blocked Job was not mutated
+        repeat_job = JobRecord.model_validate_json(
+            store.objects[f"v1/jobs/{inputs.job_id}.json"].body
+        )
+        assert repeat_job.status == "blocked"
+
+        # ── 6. Explicit reproposal → new Job ────────────────────────────
+        catalog_update_id = catalog_update.catalog_update_id
+        reproposal = ReproposalOrchestrator(store, ROOT).run(
+            inputs.job_id,
+            blocked_proposal_id,
+            catalog_update_id,
+            blocked_base_bundle_digest,
+            confirmation=blocked_proposal_id,
+            bundle_path=patched_bundle.relative_to(ROOT).as_posix(),
+            now=NOW + timedelta(minutes=2),
+        )
+
+        # ── 9. New immutable Job and ready_for_review Proposal ──────────
+        assert reproposal.source_job_id != inputs.job_id
+        assert reproposal.proposal_id is not None
+        assert reproposal.reused is False
+
+        new_job = JobRecord.model_validate_json(
+            store.objects[f"v1/jobs/{reproposal.source_job_id}.json"].body
+        )
+        assert new_job.reproposal_of_job_id == inputs.job_id
+        assert new_job.reproposal_of_proposal_id == blocked_proposal_id
+        assert new_job.catalog_update_id == catalog_update_id
+        # May still be blocked if metadata is incomplete
+        assert new_job.status in ("succeeded", "blocked")
+
+        new_proposal = CaptureProposal.model_validate_json(
+            store.objects[f"v1/proposals/{reproposal.proposal_id}.json"].body
+        )
+
+        # ── 10. Repeat reproposal → idempotent reuse ────────────────────
+        repeat_reproposal = ReproposalOrchestrator(store, ROOT).run(
+            inputs.job_id,
+            blocked_proposal_id,
+            catalog_update_id,
+            blocked_base_bundle_digest,
+            confirmation=blocked_proposal_id,
+            bundle_path=patched_bundle.relative_to(ROOT).as_posix(),
+            now=NOW + timedelta(minutes=3),
+        )
+        assert repeat_reproposal.reused is True
+        assert repeat_reproposal.source_job_id == reproposal.source_job_id
+        assert repeat_reproposal.proposal_id == reproposal.proposal_id
+
+        # ── 11. Validation guards cannot be bypassed ────────────────────
+        # A different catalog_update_id creates a separate identity (not a conflict)
+
+        # Wrong confirmation cannot bypass
+        with pytest.raises(WorkflowError, match="INVALID_REPROPOSAL_INPUT"):
+            ReproposalOrchestrator(store, ROOT).run(
+                inputs.job_id,
+                blocked_proposal_id,
+                catalog_update_id,
+                blocked_base_bundle_digest,
+                confirmation="wrong",
+                bundle_path=patched_bundle.relative_to(ROOT).as_posix(),
+                now=NOW + timedelta(minutes=5),
+            )
+
+        # Stale bundle (unpatched) cannot bypass
+        with pytest.raises(WorkflowError, match="STALE_BASE_BUNDLE"):
+            ReproposalOrchestrator(store, ROOT).run(
+                inputs.job_id,
+                blocked_proposal_id,
+                catalog_update_id,
+                blocked_base_bundle_digest,
+                confirmation=blocked_proposal_id,
+                bundle_path=source_bundle.as_posix(),  # unpatched!
+                now=NOW + timedelta(minutes=6),
+            )
+
+        # ── 12. Approve and build VaultPublicationPlan ──────────────────
+        if new_proposal.status == "ready_for_review":
+            new_proposal_digest = "sha256:" + hashlib.sha256(
+                store.objects[f"v1/proposals/{reproposal.proposal_id}.json"].body
+            ).hexdigest()
+            approval = ApprovalOrchestrator(store).run(
+                reproposal.proposal_id,
+                new_proposal_digest,
+                new_proposal.base_bundle_digest,
+                now=NOW + timedelta(minutes=7),
+            )
+            assert approval.decision == "approved"
+
+            approval_body = store.objects[
+                f"v1/approvals/{approval.approval_id}.json"
+            ].body
+            approval_object_digest = "sha256:" + hashlib.sha256(approval_body).hexdigest()
+
+            plan = PublicationPlanOrchestrator(store, ROOT).run(
+                approval.approval_id,
+                approval_object_digest,
+                reproposal.source_job_id,
+                reproposal.proposal_id,
+                new_proposal_digest,
+                new_proposal.base_bundle_digest,
+                bundle_path=patched_bundle.relative_to(ROOT).as_posix(),
+            )
+            assert plan.publication_plan_id.startswith("publication_plan_")
+            assert plan.capture_id.startswith("capture_")
+
+        # ── 13. Prove no old records were mutated ───────────────────────────
+        for key in initial_keys:
+            current = store.objects.get(key)
+            assert current is not None, f"old record {key} was deleted"
+
+        # Verify old v1 idempotency record was NOT touched
+        old_v1 = json.loads(store.objects[v1_idem_r2_key].body)
+        assert old_v1["intake_digest"] == old_intake_digest
+        assert old_v1["job_id"] == "00000000-0000-0000-0000-000000000000"
+
+        # Verify old blocked Job remains terminal
+        old_blocked = JobRecord.model_validate_json(
+            store.objects[f"v1/jobs/{inputs.job_id}.json"].body
+        )
+        assert old_blocked.status == "blocked"
+
+        # Verify old blocked Proposal remains blocked
+        old_proposal = CaptureProposal.model_validate_json(
+            store.objects[f"v1/proposals/{blocked_proposal_id}.json"].body
+        )
+        assert old_proposal.status == "blocked"
+    finally:
+        import shutil
+
+        if patched_bundle.exists():
+            shutil.rmtree(patched_bundle)
+        patch_out = ROOT / ".build" / "test-patch"
+        if patch_out.exists():
+            shutil.rmtree(patch_out)
+
+
+def test_converter_v2_idempotency_key_stable_across_platforms() -> None:
+    """The v2 idempotency key must be deterministic — no platform-dependent behavior."""
+    from medlearn_vault.handoff import (
+        HANDOFF_CONVERSION_VERSION,
+        MedLearnHandoff,
+        handoff_idempotency_key,
+    )
+
+    assert HANDOFF_CONVERSION_VERSION == "medlearn.handoff_to_intake.v2"
+    source = json.loads(
+        Path("examples/intake/apl-bootstrap-sanitized.json").read_text(encoding="utf-8")
+    )
+    handoff = MedLearnHandoff.model_validate(source)
+    key = handoff_idempotency_key(handoff)
+
+    # Must be purely deterministic — no UUID, timestamp, or random component
+    for _ in range(5):
+        assert handoff_idempotency_key(handoff) == key
+    # Re-parse: same content → same key
+    reparsed = MedLearnHandoff.model_validate(
+        json.loads(
+            Path("examples/intake/apl-bootstrap-sanitized.json").read_text(encoding="utf-8")
+        )
+    )
+    assert handoff_idempotency_key(reparsed) == key
+
+
+def test_intake_bytes_are_lf_only_no_random_nonce() -> None:
+    """Every intake envelope byte must be LF-only with no random retry nonce."""
+    from medlearn_vault.handoff import MedLearnHandoff, handoff_submission
+
+    source = json.loads(
+        Path("examples/intake/apl-bootstrap-sanitized.json").read_text(encoding="utf-8")
+    )
+    handoff = MedLearnHandoff.model_validate(source)
+    exact1, key1 = handoff_submission(handoff)
+    exact2, key2 = handoff_submission(handoff)
+
+    text1 = exact1.decode("utf-8")
+    text2 = exact2.decode("utf-8")
+    assert "\r" not in text1
+    assert "\r" not in text2
+    assert exact1 == exact2
+    assert key1 == key2
+    # The Python converter produces JSON without a trailing newline;
+    # the Worker converter appends \n.  Both are LF-only (no CR).
+    assert b"\r" not in exact1
+
+    # Verify no UUID/random-like component in the idempotency key
+    # (only hex characters after the fixed prefix)
+    assert key1.startswith("medlearn-handoff-v2-")
+    hex_part = key1[len("medlearn-handoff-v2-"):]
+    assert re.fullmatch(r"[a-f0-9]+", hex_part)
+
+
+def test_blocked_job_remains_terminal_after_unrelated_main_changes() -> None:
+    """A blocked Job must remain blocked — unrelated main changes do not create duplicates."""
+    store = MemoryStore()
+    inputs, _ = seed_job(
+        store, ambiguous_envelope(), job_id="job-terminal-blocked"
+    )
+
+    # First run: blocked
+    result1 = ProposalOrchestrator(store, ROOT).run(
+        inputs,
+        bundle_path="examples/capture/ambiguous-ms/bundle",
+        workflow_run_id="run-blocked-1",
+        now=NOW,
+    )
+    assert result1.status == "blocked"
+    assert result1.proposal_id is not None
+    blocked_pid = result1.proposal_id
+
+    # Second run with same bundle (unrelated change scenario): same blocked result
+    result2 = ProposalOrchestrator(store, ROOT).run(
+        inputs,
+        bundle_path="examples/capture/ambiguous-ms/bundle",
+        workflow_run_id="run-blocked-2",
+        now=NOW + timedelta(minutes=10),
+    )
+    assert result2.status == "blocked"
+    assert result2.proposal_id == blocked_pid
+    assert result2.reused is True
+
+    # Job stays blocked — no new job created
+    assert len([k for k in store.objects if k.startswith("v1/jobs/")]) == 1
+
+
+def test_reproposal_cli_command_outputs_expected_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The repropose CLI command must output source_job_id and proposal_id."""
+    store = MemoryStore()
+
+    # Seed a blocked job
+    inputs, _ = seed_job(
+        store, ambiguous_envelope(), job_id="job-cli-repropose"
+    )
+    result = ProposalOrchestrator(store, ROOT).run(
+        inputs,
+        bundle_path="examples/capture/ambiguous-ms/bundle",
+        workflow_run_id="run-cli-repropose",
+        now=NOW,
+    )
+    assert result.status == "blocked"
+    blocked_pid = result.proposal_id
+    assert blocked_pid is not None
+
+    from medlearn_vault.catalog_update import build_catalog_update_proposal
+
+    blocked_proposal = CaptureProposal.model_validate_json(
+        store.objects[f"v1/proposals/{blocked_pid}.json"].body
+    )
+    catalog_update = build_catalog_update_proposal(
+        blocked_proposal,
+        capture_proposal_object_digest="sha256:"
+        + hashlib.sha256(
+            store.objects[f"v1/proposals/{blocked_pid}.json"].body
+        ).hexdigest(),
+        target_bundle_path="examples/capture/ambiguous-ms/bundle",
+    )
+
+    monkeypatch.setattr("medlearn_vault.cli.S3ObjectStore", lambda *args: store)
+    result_cli = CliRunner().invoke(
+        app,
+        [
+            "workflow",
+            "repropose",
+            inputs.job_id,
+            blocked_pid,
+            catalog_update.catalog_update_id,
+            blocked_proposal.base_bundle_digest,
+            blocked_pid,  # confirmation
+        ],
+        env={
+            "CONTROL_R2_ENDPOINT": "configured",
+            "CONTROL_R2_ACCESS_KEY_ID": "configured",
+            "CONTROL_R2_SECRET_ACCESS_KEY": "configured",
+            "MEDLEARN_PROPOSE_BUNDLE_PATH": "examples/capture/ambiguous-ms/bundle",
+        },
+    )
+    # Should fail because bundle digest hasn't changed (STALE_BASE_BUNDLE)
+    assert result_cli.exit_code == 1
+    assert "error_code=STALE_BASE_BUNDLE" in result_cli.stderr

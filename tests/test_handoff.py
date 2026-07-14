@@ -257,3 +257,54 @@ def test_handoff_rejects_long_excerpt_and_accepts_misconception_without_correcti
     assert (
         MedLearnHandoff.model_validate(no_correction).misconceptions[0].proposed_correction is None
     )
+
+
+# ── Converter v2 namespace tests ────────────────────────────────────────
+
+
+def test_converter_v2_idempotency_key_is_stable_golden() -> None:
+    """The v2 idempotency key must be deterministic across platforms."""
+    from medlearn_vault.handoff import HANDOFF_CONVERSION_VERSION
+
+    assert HANDOFF_CONVERSION_VERSION == "medlearn.handoff_to_intake.v2"
+    handoff = MedLearnHandoff.model_validate(payload())
+    key = handoff_idempotency_key(handoff)
+    assert key.startswith("medlearn-handoff-v2-")
+    # The key must be 64 hex chars after the prefix: medlearn-handoff-v2- + 64 = 83 chars
+    assert len(key) == len("medlearn-handoff-v2-") + 64
+    assert key == "medlearn-handoff-v2-" + handoff_digest(handoff)[7:]
+
+
+def test_converter_v2_idempotency_key_differs_from_v1() -> None:
+    """The v2 key must use a different prefix namespace than v1."""
+    handoff = MedLearnHandoff.model_validate(payload())
+    v2_key = handoff_idempotency_key(handoff)
+    # The old v1 key would have been medlearn-handoff-<digest>
+    v1_key = "medlearn-handoff-" + handoff_digest(handoff)[7:]
+    assert v1_key != v2_key
+    assert v2_key.startswith("medlearn-handoff-v2-")
+    assert v1_key.startswith("medlearn-handoff-")
+    # Both share the same semantic digest portion after the prefix
+    assert v2_key[len("medlearn-handoff-v2-"):] == v1_key[len("medlearn-handoff-"):]
+
+
+def test_converter_v2_intake_envelope_is_lf_only() -> None:
+    """Exact intake envelope bytes must be LF-only (no CR, no CRLF)."""
+    handoff = MedLearnHandoff.model_validate(payload())
+    exact, _ = handoff_submission(handoff)
+    text = exact.decode("utf-8")
+    assert "\r" not in text
+    # The Python converter produces compact JSON; the Worker appends \n.
+    # In both cases the bytes are CR-free.
+    assert b"\r\n" not in exact
+
+
+def test_converter_v2_no_random_nonce_in_key() -> None:
+    """The idempotency key must be purely deterministic — no UUID, nonce, or random."""
+    handoff = MedLearnHandoff.model_validate(payload())
+    first = handoff_idempotency_key(handoff)
+    second = handoff_idempotency_key(handoff)
+    third = handoff_idempotency_key(
+        MedLearnHandoff.model_validate(json.loads(canonical_handoff_json(handoff)))
+    )
+    assert first == second == third
