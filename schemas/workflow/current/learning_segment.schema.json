@@ -1,0 +1,659 @@
+{
+  "$defs": {
+    "HandoffClaim": {
+      "additionalProperties": false,
+      "properties": {
+        "statement": {
+          "maxLength": 4000,
+          "minLength": 1,
+          "title": "Statement",
+          "type": "string"
+        },
+        "claim_type": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Claim Type",
+          "type": "string"
+        },
+        "concept_terms": {
+          "items": {
+            "maxLength": 4000,
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Concept Terms",
+          "type": "array"
+        },
+        "evidence_local_ids": {
+          "items": {
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "maxItems": 100,
+          "minItems": 1,
+          "title": "Evidence Local Ids",
+          "type": "array"
+        },
+        "question_priority": {
+          "anyOf": [
+            {
+              "enum": [
+                "low",
+                "medium",
+                "high"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Question Priority"
+        }
+      },
+      "required": [
+        "statement",
+        "claim_type",
+        "concept_terms",
+        "evidence_local_ids"
+      ],
+      "title": "HandoffClaim",
+      "type": "object"
+    },
+    "HandoffConcept": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "maxLength": 4000,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "preferred_english": {
+          "anyOf": [
+            {
+              "maxLength": 4000,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Preferred English"
+        },
+        "concept_type": {
+          "enum": [
+            "disease",
+            "syndrome",
+            "symptom",
+            "sign",
+            "anatomy",
+            "physiology",
+            "pathology",
+            "mechanism",
+            "investigation",
+            "imaging_sign",
+            "drug",
+            "drug_class",
+            "procedure",
+            "complication",
+            "score",
+            "guideline",
+            "organism",
+            "gene",
+            "biomarker",
+            "other"
+          ],
+          "title": "Concept Type",
+          "type": "string"
+        },
+        "scope_note": {
+          "anyOf": [
+            {
+              "maxLength": 4000,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Scope Note"
+        },
+        "evidence_local_ids": {
+          "items": {
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "maxItems": 100,
+          "minItems": 1,
+          "title": "Evidence Local Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "concept_type",
+        "evidence_local_ids"
+      ],
+      "title": "HandoffConcept",
+      "type": "object"
+    },
+    "HandoffEvidenceMessage": {
+      "additionalProperties": false,
+      "properties": {
+        "local_id": {
+          "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+          "title": "Local Id",
+          "type": "string"
+        },
+        "role": {
+          "enum": [
+            "user",
+            "assistant"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "observed_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Observed At"
+        },
+        "excerpt": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "title": "Excerpt",
+          "type": "string"
+        },
+        "purpose": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Purpose",
+          "type": "string"
+        }
+      },
+      "required": [
+        "local_id",
+        "role",
+        "excerpt",
+        "purpose"
+      ],
+      "title": "HandoffEvidenceMessage",
+      "type": "object"
+    },
+    "HandoffLearnerEvidence": {
+      "additionalProperties": false,
+      "properties": {
+        "concept_terms": {
+          "items": {
+            "maxLength": 4000,
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Concept Terms",
+          "type": "array"
+        },
+        "evidence_type": {
+          "enum": [
+            "correct_independent",
+            "correct_after_hint",
+            "guessed_correct",
+            "partial",
+            "unknown",
+            "incorrect",
+            "high_confidence_incorrect",
+            "self_report_only"
+          ],
+          "title": "Evidence Type",
+          "type": "string"
+        },
+        "confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "rationale": {
+          "maxLength": 4000,
+          "minLength": 1,
+          "title": "Rationale",
+          "type": "string"
+        },
+        "evidence_local_ids": {
+          "items": {
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "maxItems": 100,
+          "minItems": 1,
+          "title": "Evidence Local Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "concept_terms",
+        "evidence_type",
+        "confidence",
+        "rationale",
+        "evidence_local_ids"
+      ],
+      "title": "HandoffLearnerEvidence",
+      "type": "object"
+    },
+    "HandoffMisconception": {
+      "additionalProperties": false,
+      "properties": {
+        "observed_error_logic": {
+          "maxLength": 4000,
+          "minLength": 1,
+          "title": "Observed Error Logic",
+          "type": "string"
+        },
+        "concept_terms": {
+          "items": {
+            "maxLength": 4000,
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Concept Terms",
+          "type": "array"
+        },
+        "observed_error_local_ids": {
+          "items": {
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "maxItems": 100,
+          "minItems": 1,
+          "title": "Observed Error Local Ids",
+          "type": "array"
+        },
+        "correction_local_ids": {
+          "items": {
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Correction Local Ids",
+          "type": "array"
+        },
+        "proposed_correction": {
+          "anyOf": [
+            {
+              "maxLength": 4000,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Proposed Correction"
+        },
+        "correction_terms": {
+          "items": {
+            "maxLength": 4000,
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Correction Terms",
+          "type": "array"
+        },
+        "severity": {
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "title": "Severity",
+          "type": "string"
+        }
+      },
+      "required": [
+        "observed_error_logic",
+        "concept_terms",
+        "observed_error_local_ids",
+        "correction_local_ids",
+        "correction_terms",
+        "severity"
+      ],
+      "title": "HandoffMisconception",
+      "type": "object"
+    },
+    "HandoffQuestion": {
+      "additionalProperties": false,
+      "properties": {
+        "statement": {
+          "maxLength": 4000,
+          "minLength": 1,
+          "title": "Statement",
+          "type": "string"
+        },
+        "concept_terms": {
+          "items": {
+            "maxLength": 4000,
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Concept Terms",
+          "type": "array"
+        },
+        "evidence_local_ids": {
+          "items": {
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "maxItems": 100,
+          "minItems": 1,
+          "title": "Evidence Local Ids",
+          "type": "array"
+        },
+        "question_priority": {
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "title": "Question Priority",
+          "type": "string"
+        }
+      },
+      "required": [
+        "statement",
+        "concept_terms",
+        "evidence_local_ids",
+        "question_priority"
+      ],
+      "title": "HandoffQuestion",
+      "type": "object"
+    },
+    "HandoffSession": {
+      "additionalProperties": false,
+      "properties": {
+        "title": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "discipline_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Discipline Id",
+          "type": "string"
+        },
+        "course_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Course Id"
+        },
+        "chapter_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Chapter Id"
+        },
+        "session_started_at": {
+          "format": "date-time",
+          "title": "Session Started At",
+          "type": "string"
+        },
+        "captured_at": {
+          "format": "date-time",
+          "title": "Captured At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "discipline_id",
+        "session_started_at",
+        "captured_at"
+      ],
+      "title": "HandoffSession",
+      "type": "object"
+    },
+    "HandoffTopic": {
+      "additionalProperties": false,
+      "properties": {
+        "title": {
+          "maxLength": 4000,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "evidence_local_ids": {
+          "items": {
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "maxItems": 100,
+          "minItems": 1,
+          "title": "Evidence Local Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "title",
+        "evidence_local_ids"
+      ],
+      "title": "HandoffTopic",
+      "type": "object"
+    },
+    "MedLearnHandoff": {
+      "additionalProperties": false,
+      "properties": {
+        "handoff_version": {
+          "const": "0.1.0",
+          "title": "Handoff Version",
+          "type": "string"
+        },
+        "session": {
+          "$ref": "#/$defs/HandoffSession"
+        },
+        "learning_goals": {
+          "items": {
+            "maxLength": 4000,
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Learning Goals",
+          "type": "array"
+        },
+        "evidence_messages": {
+          "items": {
+            "$ref": "#/$defs/HandoffEvidenceMessage"
+          },
+          "maxItems": 100,
+          "title": "Evidence Messages",
+          "type": "array"
+        },
+        "concepts": {
+          "items": {
+            "$ref": "#/$defs/HandoffConcept"
+          },
+          "maxItems": 100,
+          "title": "Concepts",
+          "type": "array"
+        },
+        "claims": {
+          "items": {
+            "$ref": "#/$defs/HandoffClaim"
+          },
+          "maxItems": 100,
+          "title": "Claims",
+          "type": "array"
+        },
+        "learner_evidence": {
+          "items": {
+            "$ref": "#/$defs/HandoffLearnerEvidence"
+          },
+          "maxItems": 100,
+          "title": "Learner Evidence",
+          "type": "array"
+        },
+        "misconceptions": {
+          "items": {
+            "$ref": "#/$defs/HandoffMisconception"
+          },
+          "maxItems": 100,
+          "title": "Misconceptions",
+          "type": "array"
+        },
+        "unresolved_questions": {
+          "items": {
+            "$ref": "#/$defs/HandoffQuestion"
+          },
+          "maxItems": 100,
+          "title": "Unresolved Questions",
+          "type": "array"
+        },
+        "unfinished_topics": {
+          "items": {
+            "$ref": "#/$defs/HandoffTopic"
+          },
+          "maxItems": 100,
+          "title": "Unfinished Topics",
+          "type": "array"
+        }
+      },
+      "required": [
+        "handoff_version",
+        "session",
+        "learning_goals",
+        "evidence_messages",
+        "concepts",
+        "claims",
+        "learner_evidence",
+        "misconceptions",
+        "unresolved_questions",
+        "unfinished_topics"
+      ],
+      "title": "MedLearnHandoff",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Immutable 0.2.0 metadata around one compatible 0.1.0 handoff.",
+  "properties": {
+    "segment_version": {
+      "const": "0.2.0",
+      "default": "0.2.0",
+      "title": "Segment Version",
+      "type": "string"
+    },
+    "learning_session_id": {
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$",
+      "title": "Learning Session Id",
+      "type": "string"
+    },
+    "segment_index": {
+      "minimum": 0,
+      "title": "Segment Index",
+      "type": "integer"
+    },
+    "previous_segment_digest": {
+      "anyOf": [
+        {
+          "pattern": "^sha256:[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Previous Segment Digest"
+    },
+    "first_evidence_marker": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "First Evidence Marker",
+      "type": "string"
+    },
+    "last_evidence_marker": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Last Evidence Marker",
+      "type": "string"
+    },
+    "segment_message_count": {
+      "maximum": 50,
+      "minimum": 1,
+      "title": "Segment Message Count",
+      "type": "integer"
+    },
+    "coverage_status": {
+      "enum": [
+        "complete",
+        "partial",
+        "unknown"
+      ],
+      "title": "Coverage Status",
+      "type": "string"
+    },
+    "coverage_note": {
+      "anyOf": [
+        {
+          "maxLength": 1000,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Coverage Note"
+    },
+    "finalized": {
+      "default": false,
+      "title": "Finalized",
+      "type": "boolean"
+    },
+    "handoff": {
+      "$ref": "#/$defs/MedLearnHandoff"
+    }
+  },
+  "required": [
+    "learning_session_id",
+    "segment_index",
+    "first_evidence_marker",
+    "last_evidence_marker",
+    "segment_message_count",
+    "coverage_status",
+    "handoff"
+  ],
+  "title": "LearningSegment",
+  "type": "object"
+}

@@ -12,6 +12,12 @@ behavior; the Worker remains the enforceable security and validation boundary.
 - `learning_goals` and `unfinished_topics` currently must be empty.
 - Successful submission does not equal approval or publication.
 
+For a long, explicitly authorized learning session, submit only the currently
+visible 30–50-message `LearningSegment` at a time. Segments are hash-chained;
+the client must mark missing coverage as `partial` and must never claim it can
+recover chat history that was not submitted. `MedLearnHandoff 0.1.0` remains
+unchanged for existing clients.
+
 `.app.json.example` is documentation only and cannot be installed. Generate the real ignored `.app.json` after creating a ChatGPT Developer Mode App:
 
 ```powershell

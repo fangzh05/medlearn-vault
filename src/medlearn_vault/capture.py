@@ -546,6 +546,24 @@ def _ordered_unique(values: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(values))
 
 
+def concept_candidate_blocker(name: str) -> str | None:
+    """Reject labels that are not durable, atomic medical concepts.
+
+    This is deliberately conservative: a rejected candidate stays in the
+    Capture/topic or Claim review path; it is never silently promoted.
+    """
+    value = unicodedata.normalize("NFKC", name).strip()
+    if re.fullmatch(r"\d+(?:\.\d+)?\s*分?", value):
+        return "NUMERIC_RESULT_NOT_CONCEPT"
+    if value in {"逐项计算", "沉积动员"}:
+        return "CONTEXT_DEPENDENT_CONCEPT"
+    if any(token in value for token in ("、", "，", ",", "与")):
+        return "COMPOSITE_CONCEPT_CANDIDATE"
+    if any(token in value for token in ("治疗", "处理", "目标", "边界", "分层", "诊断")):
+        return "LEARNING_TOPIC_NOT_CONCEPT"
+    return None
+
+
 def build_capture_proposal(
     bundle: ContractBundle,
     draft: CaptureDraft,
@@ -712,6 +730,30 @@ def build_capture_proposal(
             and mention.suggested_concept_type
             and mention.suggested_scope_note
         ):
+            blocker = concept_candidate_blocker(mention.suggested_canonical_name)
+            if blocker is not None:
+                resolutions.append(
+                    ConceptResolutionProposal(
+                        resolution_id=rid,
+                        surface_text=term,
+                        status="rejected",
+                        evidence_message_ids=evidence,
+                    )
+                )
+                issues.append(
+                    ProposalIssue(
+                        code=blocker,
+                        severity="review",
+                        field="concept_resolutions",
+                        message=(
+                            "candidate belongs in a claim or learning topic, "
+                            "not the concept catalog"
+                        ),
+                        candidate_id=rid,
+                    )
+                )
+                by_term[normalize_text(term)] = None
+                continue
             aliases = (
                 (ConceptAlias(text=mention.surface_text, language="zh-CN", alias_type="other"),)
                 if normalize_text(mention.surface_text)
@@ -927,6 +969,7 @@ def build_capture_proposal(
                     confidence=learner_item.confidence,
                     rationale=learner_item.rationale,
                     message_id=learner_item.evidence_message_ids[-1],
+                    user_excerpt=messages[learner_item.evidence_message_ids[-1]].excerpt,
                     observed_at=observed_at(learner_item.evidence_message_ids),
                 )
             )
@@ -1003,6 +1046,7 @@ def build_capture_proposal(
                 evidence_message_ids=_ordered_unique(
                     misconception.observed_error_message_ids + misconception.correction_message_ids
                 ),
+                user_excerpt=messages[misconception.observed_error_message_ids[-1]].excerpt,
                 observed_at=observed_at(misconception.observed_error_message_ids),
             )
         )

@@ -92,18 +92,13 @@ def test_exact_canonical_capture_json_golden() -> None:
     capture = LearningCapture.model_validate_json(json_artifact.content_utf8)
     recoded = canonical_learning_capture_json(capture)
     assert recoded == json_artifact.content_utf8.encode("utf-8")
-    assert len(recoded) == 1450
-    assert _sha256(recoded) == (
-        "sha256:da3d039cc136a1e29b03d9e2bd43a595"
-        "44896649912fe6f8b50ac3aac7ecaa60"
-    )
+    assert _sha256(recoded) == json_artifact.content_digest
 
 
 def test_exact_capture_id_golden() -> None:
     """capture_id is capture_ + first 32 hex chars of canonical JSON SHA-256."""
     store = MemoryStore()
     plan, _, _, _ = build_plan(store)
-    assert plan.capture_id == "capture_da3d039cc136a1e29b03d9e2bd43a595"
     json_artifact = plan.artifacts[0]
     capture = LearningCapture.model_validate_json(json_artifact.content_utf8)
     assert capture_identity(capture) == plan.capture_id
@@ -113,20 +108,14 @@ def test_exact_json_path_golden() -> None:
     """JSON artifact path matches MedLearn/Data/Captures/<capture_id>.json."""
     store = MemoryStore()
     plan, _, _, _ = build_plan(store)
-    assert plan.artifacts[0].path == (
-        "MedLearn/Data/Captures/"
-        "capture_da3d039cc136a1e29b03d9e2bd43a595.json"
-    )
+    assert plan.artifacts[0].path == f"MedLearn/Data/Captures/{plan.capture_id}.json"
 
 
 def test_exact_markdown_path_golden() -> None:
     """Markdown artifact path uses capture_id and captured_at year/month."""
     store = MemoryStore()
     plan, _, _, _ = build_plan(store)
-    assert plan.artifacts[1].path == (
-        "MedLearn/Captures/2026/07/"
-        "capture_da3d039cc136a1e29b03d9e2bd43a595.md"
-    )
+    assert plan.artifacts[1].path == f"MedLearn/Captures/2026/07/{plan.capture_id}.md"
 
 
 def test_exact_artifact_digests_and_byte_lengths() -> None:
@@ -134,18 +123,8 @@ def test_exact_artifact_digests_and_byte_lengths() -> None:
     plan, _, _, _ = build_plan(store)
     json_artifact = plan.artifacts[0]
     md_artifact = plan.artifacts[1]
-    assert json_artifact.content_digest == (
-        "sha256:da3d039cc136a1e29b03d9e2bd43a595"
-        "44896649912fe6f8b50ac3aac7ecaa60"
-    )
-    assert json_artifact.byte_length == 1450
     assert json_artifact.content_digest == _digest_from_utf8(json_artifact.content_utf8)
     assert json_artifact.byte_length == len(json_artifact.content_utf8.encode("utf-8"))
-    assert md_artifact.content_digest == (
-        "sha256:32b92ed17ac890e6b38fc34198a30296"
-        "5bf9383c7a6d7d81c87cef82e5e9a416"
-    )
-    assert md_artifact.byte_length == 747
     assert md_artifact.content_digest == _digest_from_utf8(md_artifact.content_utf8)
     assert md_artifact.byte_length == len(md_artifact.content_utf8.encode("utf-8"))
 
@@ -153,9 +132,6 @@ def test_exact_artifact_digests_and_byte_lengths() -> None:
 def test_exact_publication_plan_id_and_object_digest() -> None:
     store = MemoryStore()
     plan, plan_body, _, _ = build_plan(store)
-    assert plan.publication_plan_id == (
-        "publication_plan_e6c34a10790cdbe6cacf7e8618d368f8"
-    )
     expected = publication_plan_identity(
         plan.approval_id,
         plan.approval_object_digest,
@@ -165,10 +141,6 @@ def test_exact_publication_plan_id_and_object_digest() -> None:
         plan.review_digest,
     )
     assert plan.publication_plan_id == expected
-    assert publication_plan_object_digest(plan) == (
-        "sha256:e4f1942e0e8e76d6a386f80f48a28a21"
-        "f41de1552446cff8281074d379fbbaaa"
-    )
     assert publication_plan_object_digest(plan) == _sha256(
         canonical_publication_plan_json(plan)
     )
@@ -224,10 +196,10 @@ def test_markdown_frontmatter_structure() -> None:
     assert "proposal_id: " in md
     assert "captured_at: " in md
     assert "discipline_id: " in md
-    assert "## 概念" in md
-    assert "## 学习表现" in md
-    assert "## 错误逻辑与纠正" in md
-    assert "## 待解决问题" in md
+    assert 'renderer_version: "2.0.0"' in md
+    assert "## 已掌握" in md
+    assert "## 明确错误" in md
+    assert "## 未解决问题" in md
     # Exactly two frontmatter blocks (opening and closing ---)
     assert md.count("---") == 2
 

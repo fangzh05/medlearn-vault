@@ -49,6 +49,7 @@ class LearnerEvidence(EventModel):
     confidence: float = Field(ge=0, le=1)
     rationale: str
     message_id: str
+    user_excerpt: str | None = None
     observed_at: AwareDatetime
 
 
@@ -61,6 +62,7 @@ class MisconceptionObservation(EventModel):
     correction_claim_ids: tuple[ClaimId, ...] = ()
     severity: Literal["low", "medium", "high"]
     evidence_message_ids: tuple[str, ...]
+    user_excerpt: str | None = None
     observed_at: AwareDatetime
 
 
