@@ -1,8 +1,7 @@
 from datetime import UTC, datetime, timedelta
 
 from medlearn_vault.bundle import ContractBundle
-from medlearn_vault.capture import concept_candidate_blocker
-from medlearn_vault.domain.learner import LearningCapture
+from medlearn_vault.capture import CaptureProposal, concept_candidate_blocker
 from medlearn_vault.handoff import (
     HandoffEvidenceMessage,
     HandoffSession,
@@ -80,13 +79,11 @@ def test_concept_quality_gate_rejects_topics_and_numeric_results() -> None:
 
 def test_renderer_v2_has_chinese_labels_and_no_internal_ids() -> None:
     bundle = ContractBundle.from_directory(__import__("pathlib").Path("examples/copd"))
-    capture = LearningCapture.model_validate_json(
+    capture = CaptureProposal.model_validate_json(
         __import__("pathlib")
-        .Path(
-            r"C:\Users\16648\iCloudDrive\iCloud~md~obsidian\内科学\MedLearn\Data\Captures\capture_f24b430389225c8c95a2025e29727cf1.json"
-        )
+        .Path("examples/capture/copd-session/expected_proposal.json")
         .read_bytes()
-    )
+    ).learning_capture_candidate.capture
     markdown = render_learning_capture_markdown(
         bundle,
         capture,
