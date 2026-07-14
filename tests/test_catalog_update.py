@@ -379,7 +379,7 @@ def _reviewed_metadata_for(update: CatalogUpdateProposal) -> tuple[ReviewedMetad
     """Produce valid metadata for every incomplete resolution in *update*."""
     incomplete = list(update.incomplete_concept_metadata)
     entries: list[ReviewedMetadataEntry] = []
-    for i, item in enumerate(incomplete):
+    for item in incomplete:
         entries.append(
             ReviewedMetadataEntry(
                 resolution_id=item.resolution_id,
@@ -482,8 +482,6 @@ def test_reject_alias_collision_in_completed_metadata() -> None:
 def test_reject_modified_parent_catalog_update() -> None:
     """A tampered parent_catalog_update_id must not produce the same completed ID."""
     update, _, _ = _build_blocked_update_for_copd()
-    metadata = _reviewed_metadata_for(update)
-
     # Tamper the update's catalog_update_id (as if the parent was modified)
     tampered_data = update.model_dump(mode="json")
     tampered_data["catalog_update_id"] = "catalog_update_" + "f" * 32

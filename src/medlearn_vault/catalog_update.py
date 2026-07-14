@@ -232,7 +232,7 @@ def complete_catalog_update_metadata(
             candidate_id=_id("candidate_concept", concept.concept_id, entry.resolution_id),
             concept=concept,
         )
-        for entry, concept in zip(reviewed_metadata, new_concepts)
+        for entry, concept in zip(reviewed_metadata, new_concepts, strict=True)
     )
     all_promotions = blocked_update.concept_promotions + new_promotions
 
