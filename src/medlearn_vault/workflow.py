@@ -18,6 +18,8 @@ from medlearn_vault.bundle import ContractBundle
 from medlearn_vault.capture import (
     CaptureDraft,
     CaptureProposal,
+    IntakeDigestMismatch,
+    InvalidIntakeEnvelope,
     build_capture_proposal,
     capture_proposal_digest,
     extract_capture_draft,
@@ -935,7 +937,7 @@ class ProposalOrchestrator:
             raise WorkflowError("INTAKE_NOT_FOUND")
         try:
             draft_bytes, _ = extract_capture_draft(intake.body, inputs.intake_digest)
-        except ValueError as exc:
+        except IntakeDigestMismatch as exc:
             self._record_failure(
                 job_key,
                 execution_key,
@@ -944,6 +946,24 @@ class ProposalOrchestrator:
                 current_time,
             )
             raise WorkflowError("INTAKE_DIGEST_MISMATCH") from exc
+        except InvalidIntakeEnvelope as exc:
+            self._record_failure(
+                job_key,
+                execution_key,
+                workflow_run_id,
+                "INVALID_INTAKE_ENVELOPE",
+                current_time,
+            )
+            raise WorkflowError("INVALID_INTAKE_ENVELOPE") from exc
+        except Exception as exc:
+            self._record_failure(
+                job_key,
+                execution_key,
+                workflow_run_id,
+                "ORCHESTRATION_FAILED",
+                current_time,
+            )
+            raise WorkflowError("ORCHESTRATION_FAILED") from exc
         try:
             bundle = ContractBundle.from_directory(
                 resolve_bundle_path(self.repository_root, bundle_path)
@@ -1244,6 +1264,20 @@ class ProposalOrchestrator:
             job_stored = self.store.get(job_key)
             if job_stored:
                 job = JobRecord.model_validate_json(job_stored.body)
+                if execution_stored is None:
+                    self.store.create(
+                        execution_key,
+                        _json_bytes(
+                            ProposalExecutionRecord(
+                                job_id=job.job_id,
+                                status="failed",
+                                error_code=code,
+                                created_at=now,
+                                updated_at=now,
+                            )
+                        ),
+                        content_type="application/json",
+                    )
                 if job.status in {"dispatched", "running"}:
                     failed_job = JobRecord.model_validate(
                         {

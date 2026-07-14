@@ -1,9 +1,15 @@
 import json
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
-from medlearn_vault.capture import CaptureDraft
+from medlearn_vault.capture import (
+    CaptureDraft,
+    IntakeEnvelope,
+    extract_capture_draft,
+    intake_envelope_digest,
+)
 from medlearn_vault.handoff import (
     MAX_EXCERPT,
     MedLearnHandoff,
@@ -184,6 +190,26 @@ def test_handoff_rejects_duplicate_dangling_invalid_types_and_extra_fields() -> 
     ]:
         with pytest.raises(ValidationError):
             MedLearnHandoff.model_validate(value)
+
+
+def test_handoff_rejects_mixed_role_assertion_evidence_before_conversion() -> None:
+    value = payload()
+    value["claims"][0]["evidence_local_ids"] = ["e001", "e002"]  # type: ignore[index]
+    with pytest.raises(ValidationError, match="assertion evidence must have exactly one"):
+        MedLearnHandoff.model_validate(value)
+
+
+def test_synthetic_nonempty_handoff_converts_to_a_valid_intake_envelope() -> None:
+    fixture = Path("examples/intake/project-handoff-synthetic.json")
+    source = json.loads(fixture.read_text(encoding="utf-8"))
+    handoff = MedLearnHandoff.model_validate(source)
+    exact, _ = handoff_submission(handoff)
+    envelope = IntakeEnvelope.model_validate_json(exact)
+    assert extract_capture_draft(exact, intake_envelope_digest(exact))
+    assert len(envelope.draft.concept_mentions) == 5
+    assert len(envelope.draft.claim_candidates) == 4
+    assert len(envelope.draft.learner_evidence_candidates) == 1
+    assert len(envelope.draft.misconception_candidates) == 1
 
 
 def test_handoff_rejects_long_excerpt_and_accepts_misconception_without_correction() -> None:

@@ -10,15 +10,20 @@ import intakeSchema from "../../schemas/workflow/current/intake_envelope.schema.
 import handoffSchema from "../../schemas/workflow/current/medlearn_handoff.schema.json";
 
 class Bucket {
-  objects = new Map<string, { text: string; etag: string; contentType?: string }>();
+  objects = new Map<string, { bytes: Uint8Array; etag: string; contentType?: string }>();
   getCalls = new Map<string, number>();
   bodyConsumes = new Map<string, number>();
   listedMissing = new Set<string>();
   failNextPrefix?: string;
+  hideNextGetPrefix?: string;
   private revision = 0;
 
   async get(key: string) {
     this.getCalls.set(key, (this.getCalls.get(key) ?? 0) + 1);
+    if (this.hideNextGetPrefix && key.startsWith(this.hideNextGetPrefix)) {
+      this.hideNextGetPrefix = undefined;
+      return null;
+    }
     const object = this.objects.get(key);
     if (object === undefined) return null;
     let bodyUsed = false;
@@ -32,10 +37,10 @@ class Bucket {
       httpEtag: `"${object.etag}"`,
       httpMetadata: { contentType: object.contentType ?? "application/octet-stream" },
       get bodyUsed() { return bodyUsed; },
-      json: async <T>() => { consume(); return JSON.parse(object.text) as T; },
-      text: async () => { consume(); return object.text; },
-      blob: async () => { consume(); return new Blob([object.text]); },
-      arrayBuffer: async () => { consume(); return new TextEncoder().encode(object.text).buffer as ArrayBuffer; },
+      json: async <T>() => { consume(); return JSON.parse(new TextDecoder().decode(object.bytes)) as T; },
+      text: async () => { consume(); return new TextDecoder().decode(object.bytes); },
+      blob: async () => { consume(); return new Blob([object.bytes.slice().buffer]); },
+      arrayBuffer: async () => { consume(); return object.bytes.slice().buffer; },
     };
   }
 
@@ -51,8 +56,8 @@ class Bucket {
     const condition = options?.onlyIf;
     if (condition instanceof Headers && condition.get("If-None-Match") === "*" && current) return null;
     if (!(condition instanceof Headers) && condition?.etagMatches && current?.etag !== condition.etagMatches) return null;
-    const text = typeof value === "string" ? value : new TextDecoder().decode(value);
-    const stored = { text, etag: `"etag-${++this.revision}"` };
+    const bytes = typeof value === "string" ? new TextEncoder().encode(value) : new Uint8Array(value.slice(0));
+    const stored = { bytes, etag: `"etag-${++this.revision}"` };
     this.objects.set(key, stored);
     return { key, etag: stored.etag, httpEtag: `"${stored.etag}"` };
   }
@@ -73,12 +78,22 @@ class Bucket {
     };
   }
 
-  seed(key: string, text: string, contentType?: string) {
+  seed(key: string, value: string | ArrayBuffer | Uint8Array, contentType?: string) {
+    const bytes = typeof value === "string" ? new TextEncoder().encode(value) : new Uint8Array(value).slice();
     this.objects.set(key, {
-      text,
+      bytes,
       etag: `"etag-${++this.revision}"`,
       contentType: contentType ?? (key.startsWith("v1/publications/") ? "application/json; charset=utf-8" : undefined),
     });
+  }
+
+  rawBytes(key: string): Uint8Array | undefined {
+    return this.objects.get(key)?.bytes.slice();
+  }
+
+  text(key: string): string | undefined {
+    const bytes = this.rawBytes(key);
+    return bytes ? new TextDecoder().decode(bytes) : undefined;
   }
 }
 
@@ -145,6 +160,12 @@ async function digest(text: string) {
   return [...new Uint8Array(hash)].map((item) => item.toString(16).padStart(2, "0")).join("");
 }
 
+async function digestBytes(bytes: Uint8Array): Promise<string> {
+  const exact = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+  const hash = await crypto.subtle.digest("SHA-256", exact);
+  return [...new Uint8Array(hash)].map((item) => item.toString(16).padStart(2, "0")).join("");
+}
+
 beforeAll(async () => {
   const keys = await generateKeyPair("RS256");
   privateKey = keys.privateKey;
@@ -198,11 +219,33 @@ describe("shared contracts", () => {
     const hex = await digest(fixtureText);
     expect(job.intake_digest).toBe(`sha256:${hex}`);
     expect(job.intake_object_key).toBe(`v1/intakes/sha256/${hex}.json`);
-    expect(bucket.objects.get(job.intake_object_key)?.text).toBe(fixtureText);
+    expect(new TextDecoder().decode(bucket.rawBytes(job.intake_object_key))).toBe(fixtureText);
     const [, init] = dispatch.mock.calls[0] as [string, RequestInit];
     expect(JSON.parse(init.body as string).inputs).toEqual({
       job_id: job.job_id, intake_object_key: job.intake_object_key, intake_digest: job.intake_digest,
     });
+  });
+
+  it("keeps raw bytes distinct from equivalent JSON with an extra LF", async () => {
+    const hex = await digestBytes(fixtureBytes);
+    const key = `v1/intakes/sha256/${hex}.json`;
+    const poisoned = new Uint8Array([...fixtureBytes, 0x0a]);
+    bucket.seed(key, poisoned);
+    const response = await handle(capture(), env);
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: "INTAKE_STORAGE_CONFLICT" });
+    expect(bucket.rawBytes(key)).toEqual(poisoned);
+    expect([...bucket.objects.keys()].filter((objectKey) => objectKey.startsWith("v1/jobs/"))).toHaveLength(0);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when an intake cannot be read back after create-only persistence", async () => {
+    bucket.hideNextGetPrefix = "v1/intakes/";
+    const response = await handle(capture(), env);
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: "CONTROL_STORAGE_UNAVAILABLE" });
+    expect([...bucket.objects.keys()].filter((key) => key.startsWith("v1/jobs/"))).toHaveLength(0);
+    expect(dispatch).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -273,7 +316,7 @@ describe("recovery and concurrency", () => {
     expect((await handle(capture(), env)).status).toBe(503);
     const claim = [...bucket.objects.entries()].find(([key]) => key.startsWith("v1/idempotency/"));
     expect(claim).toBeDefined();
-    const jobId = JSON.parse(claim![1].text).job_id;
+    const jobId = JSON.parse(new TextDecoder().decode(claim![1].bytes)).job_id;
     const retried = await handle(capture(), env);
     expect((await retried.json<JobRecord>()).job_id).toBe(jobId);
     expect(dispatch).toHaveBeenCalledTimes(1);
@@ -330,7 +373,7 @@ describe("recovery and concurrency", () => {
       bucket as unknown as R2Bucket, key, stale,
       { ...received, status: "failed", error_code: "STALE" },
     )).toBe(false);
-    expect(JSON.parse(bucket.objects.get(key)!.text).status).toBe("dispatched");
+    expect(JSON.parse(bucket.text(key)!).status).toBe("dispatched");
   });
 });
 
@@ -479,7 +522,11 @@ describe("Chat Project Source MCP handoff", () => {
     expect(a.result.structuredContent.intake_digest).toMatch(/^sha256:[a-f0-9]{64}$/);
     const stored = [...bucket.objects.entries()].find(([key]) => key.startsWith("v1/intakes/"));
     expect(stored).toBeDefined();
-    const draft = JSON.parse(stored![1].text).draft;
+    expect(Array.from(stored![1].bytes)).toEqual(Array.from(readFileSync(resolve("../examples/intake/project-handoff-empty.json"))));
+    expect(`sha256:${await digestBytes(stored![1].bytes)}`).toBe(
+      readFileSync(resolve("../examples/intake/project-handoff-empty.digest.txt"), "utf8").trim(),
+    );
+    const draft = JSON.parse(new TextDecoder().decode(stored![1].bytes)).draft;
     expect(draft.context.source_id).toMatch(/^source_[a-f0-9]{32}$/);
     expect(draft.evidence_messages[0].observed_at).toBe("2026-07-14T00:20:00+08:00");
   });
@@ -499,9 +546,23 @@ describe("Chat Project Source MCP handoff", () => {
     }
   });
 
+  it("maps poisoned persisted handoff bytes to the stable MCP storage conflict", async () => {
+    const expected = readFileSync(resolve("../examples/intake/project-handoff-empty.digest.txt"), "utf8").trim();
+    const key = `v1/intakes/sha256/${expected.slice("sha256:".length)}.json`;
+    const poisoned = new Uint8Array([...readFileSync(resolve("../examples/intake/project-handoff-empty.json")), 0x0a]);
+    bucket.seed(key, poisoned);
+    const response = await handle(mcp("tools/call", { name: "submit_learning_handoff", arguments: { handoff: handoff() } }), env);
+    const body = await response.json<{ error: { message: string } }>();
+    expect(body.error.message).toBe("INTAKE_STORAGE_CONFLICT");
+    expect(body.error.message).not.toBe("HANDOFF_CONVERSION_FAILURE");
+    expect(bucket.rawBytes(key)).toEqual(poisoned);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["duplicate", (value: ReturnType<typeof handoff>) => { value.evidence_messages.push({ ...value.evidence_messages[0] }); }, "HANDOFF_DUPLICATE_LOCAL_ID"],
     ["dangling", (value: ReturnType<typeof handoff>) => { value.claims[0].evidence_local_ids = ["missing"]; }, "HANDOFF_DANGLING_EVIDENCE_REFERENCE"],
+    ["mixed assertion roles", (value: ReturnType<typeof handoff>) => { value.evidence_messages.push({ local_id: "e002", role: "assistant", observed_at: null, excerpt: "synthetic assistant evidence", purpose: "correction" }); value.claims[0].evidence_local_ids = ["e001", "e002"]; }, "HANDOFF_ASSERTION_EVIDENCE_ROLE_CONFLICT"],
     ["unsupported", (value: ReturnType<typeof handoff>) => { value.handoff_version = "9.9.9"; }, "HANDOFF_UNSUPPORTED_VERSION"],
   ])("returns a stable error for %s input", async (_name, mutate, code) => {
     const value = handoff();
@@ -509,6 +570,19 @@ describe("Chat Project Source MCP handoff", () => {
     const response = await handle(mcp("tools/call", { name: "submit_learning_handoff", arguments: { handoff: value } }), env);
     const body = await response.json<{ error: { message: string } }>();
     expect(body.error.message).toBe(code);
+  });
+
+  it("converts the shared sanitized nonempty handoff to a schema-valid envelope", async () => {
+    const value = JSON.parse(readFileSync(resolve("../examples/intake/project-handoff-synthetic.json"), "utf8"));
+    const response = await handle(mcp("tools/call", { name: "submit_learning_handoff", arguments: { handoff: value } }), env);
+    const body = await response.json<{ result: { structuredContent: { concept_count: number; claim_count: number; learner_evidence_count: number; misconception_count: number; unresolved_count: number; unfinished_count: number; intake_digest: string } } }>();
+    expect(body.result.structuredContent).toMatchObject({ concept_count: 5, claim_count: 3, learner_evidence_count: 1, misconception_count: 1, unresolved_count: 1, unfinished_count: 0 });
+    const key = `v1/intakes/sha256/${body.result.structuredContent.intake_digest.slice("sha256:".length)}.json`;
+    const stored = bucket.rawBytes(key);
+    expect(stored).toBeDefined();
+    const ajv = new Ajv({ strict: false });
+    addFormats(ajv);
+    expect(ajv.compile(intakeSchema)(JSON.parse(new TextDecoder().decode(stored)))).toBe(true);
   });
 
   it("returns an OAuth challenge without a valid access token", async () => {
@@ -547,7 +621,7 @@ describe("Chat Project Source MCP handoff", () => {
       name: "submit_learning_handoff", arguments: { handoff: handoff() },
     }), env);
     expect((await response.text())).not.toContain(validToken);
-    expect([...bucket.objects.values()].map((item) => item.text).join("\n")).not.toContain(validToken);
+    expect([...bucket.objects.values()].map((item) => new TextDecoder().decode(item.bytes)).join("\n")).not.toContain(validToken);
     const noWork = { ...env, MEDLEARN_WORK_OAUTH_ISSUER: undefined };
     expect((await handle(request("/health"), noWork)).status).toBe(200);
     expect((await handle(capture(fixtureText, "no-work"), noWork)).status).toBe(202);
