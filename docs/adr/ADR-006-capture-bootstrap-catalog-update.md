@@ -57,20 +57,20 @@ would weaken the existing approval and exact-byte guarantees.
 The Handoff-to-Intake converter uses an explicit, immutable conversion version:
 
 ```
-HANDOFF_CONVERSION_VERSION = "medlearn.handoff_to_intake.v2"
+HANDOFF_CONVERSION_VERSION = "medlearn.handoff_to_intake.v3"
 ```
 
 The MCP idempotency key includes this version:
 
 ```
-medlearn-handoff-v2-${handoffDigest}
+medlearn-handoff-v3-${handoffDigest}
 ```
 
-This ensures that converter changes (new `learning_chat` source identity,
-final LF added) create a separate idempotency namespace.  Old `v1`
-(`medlearn-handoff-${digest}`) records remain untouched.  The same Handoff
-under the new converter creates one new Intake/Job; repeated submissions
-under the same converter remain idempotent.
+This ensures that converter changes create a separate idempotency namespace.
+Old `v1` (`medlearn-handoff-${digest}`) and `v2`
+(`medlearn-handoff-v2-${digest}`) records remain untouched.  The same Handoff
+under the new converter creates one new Intake/Job; repeated submissions under
+the same converter remain idempotent.
 
 ## Reproposal identity algorithm
 
@@ -110,8 +110,8 @@ read path.
 ## Lifecycle summary
 
 ```
-Handoff submission (v2 converter)
-  → new Job + Intake (v2 idempotency namespace)
+Handoff submission (v3 converter)
+  → new Job + Intake (v3 idempotency namespace)
   → bootstrap Proposal (blocked: CATALOG_UPDATE_REQUIRED)
   → catalog patch PR (manual review and merge)
   → explicit reproposal (medlearn-repropose.yml)

@@ -1993,16 +1993,16 @@ def _write_receipt_to_repo(
     shutil.copy2(receipt_src, receipt_dst)
 
 
-def test_reproposal_full_lifecycle_from_v2_handoff_through_publication() -> None:
+def test_reproposal_full_lifecycle_from_v3_handoff_through_publication() -> None:
     """Production-shaped regression covering the complete bootstrap→reproposal→publish lifecycle.
 
     1.  Preload an old v1 idempotency record with a different intake digest.
-    2.  Submit the handoff through the v2 converter → creates a separate v2 Job.
+    2.  Submit the handoff through the v3 converter → creates a separate v3 Job.
     3.  First Proposal is blocked with CATALOG_UPDATE_REQUIRED.
     4.  Build blocked catalog update; prepare_catalog_patch is rejected.
     5.  Reviewer completes metadata → ready_for_manual_merge update.
     6.  Generate completed catalog patch and apply it to a copied bundle.
-    7.  Same v2 handoff again → returns existing blocked Job (no redispatch).
+    7.  Same v3 handoff again → returns existing blocked Job (no redispatch).
     8.  Explicit reproposal → new succeeded Job with ready_for_review Proposal.
     9.  Repeat reproposal → exact idempotent reuse.
     10. Prove validation guards cannot be bypassed.
@@ -2028,7 +2028,7 @@ def test_reproposal_full_lifecycle_from_v2_handoff_through_publication() -> None
         Path("examples/intake/apl-bootstrap-sanitized.json").read_text(encoding="utf-8")
     )
     handoff = MedLearnHandoff.model_validate(source)
-    exact_intake, v2_key = handoff_submission(handoff)
+    exact_intake, v3_key = handoff_submission(handoff)
     intake_digest = "sha256:" + hashlib.sha256(exact_intake).hexdigest()
     intake_key = f"v1/intakes/sha256/{intake_digest[7:]}.json"
     hd = handoff_digest(handoff)[7:]
@@ -2049,10 +2049,10 @@ def test_reproposal_full_lifecycle_from_v2_handoff_through_publication() -> None
     # Snapshot all existing keys for later immutability check
     initial_keys = set(store.objects.keys())
 
-    # ── 2. Submit as v2 → new Job ───────────────────────────────────────
+    # ── 2. Submit as v3 → new Job ───────────────────────────────────────
     source_bundle = Path("examples/capture/ambiguous-ms/bundle")
     inputs = WorkflowInputs(
-        job_id="job-v2-bootstrap",
+        job_id="job-v3-bootstrap",
         intake_object_key=intake_key,
         intake_digest=intake_digest,
     )
@@ -2071,16 +2071,16 @@ def test_reproposal_full_lifecycle_from_v2_handoff_through_publication() -> None
         ),
     )
 
-    # Verify v2 idempotency key differs from v1
-    assert v2_key != v1_idem_key_raw
-    assert v2_key.startswith("medlearn-handoff-v2-")
+    # Verify v3 idempotency key differs from v1
+    assert v3_key != v1_idem_key_raw
+    assert v3_key.startswith("medlearn-handoff-v3-")
     assert v1_idem_key_raw.startswith("medlearn-handoff-")
 
     # Run the orchestrator — this simulates what the propose workflow does
     result = ProposalOrchestrator(store, ROOT).run(
         inputs,
         bundle_path=source_bundle.as_posix(),
-        workflow_run_id="run-v2-bootstrap",
+        workflow_run_id="run-v3-bootstrap",
         now=NOW,
     )
 
@@ -2663,15 +2663,15 @@ def _cleanup_reproposal(root: Path, cat_id: str) -> None:
             pass
 
 
-def test_converter_v2_idempotency_key_stable_across_platforms() -> None:
-    """The v2 idempotency key must be deterministic — no platform-dependent behavior."""
+def test_converter_v3_idempotency_key_stable_across_platforms() -> None:
+    """The v3 idempotency key must be deterministic — no platform-dependent behavior."""
     from medlearn_vault.handoff import (
         HANDOFF_CONVERSION_VERSION,
         MedLearnHandoff,
         handoff_idempotency_key,
     )
 
-    assert HANDOFF_CONVERSION_VERSION == "medlearn.handoff_to_intake.v2"
+    assert HANDOFF_CONVERSION_VERSION == "medlearn.handoff_to_intake.v3"
     source = json.loads(
         Path("examples/intake/apl-bootstrap-sanitized.json").read_text(encoding="utf-8")
     )
@@ -2713,8 +2713,8 @@ def test_intake_bytes_are_lf_only_no_random_nonce() -> None:
 
     # Verify no UUID/random-like component in the idempotency key
     # (only hex characters after the fixed prefix)
-    assert key1.startswith("medlearn-handoff-v2-")
-    hex_part = key1[len("medlearn-handoff-v2-"):]
+    assert key1.startswith("medlearn-handoff-v3-")
+    hex_part = key1[len("medlearn-handoff-v3-"):]
     assert re.fullmatch(r"[a-f0-9]+", hex_part)
 
 

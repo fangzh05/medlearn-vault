@@ -23,7 +23,7 @@ from medlearn_vault.domain.base import AwareDatetime, DomainModel
 from medlearn_vault.domain.concepts import ConceptType
 
 HANDOFF_VERSION: Literal["0.1.0"] = "0.1.0"
-HANDOFF_CONVERSION_VERSION = "medlearn.handoff_to_intake.v2"
+HANDOFF_CONVERSION_VERSION = "medlearn.handoff_to_intake.v3"
 MAX_HANDOFF_BYTES = 256 * 1024
 MAX_HANDOFF_ITEMS = 100
 MAX_TEXT = 4000
@@ -191,7 +191,7 @@ def handoff_digest(handoff: MedLearnHandoff) -> str:
 def handoff_idempotency_key(handoff: MedLearnHandoff) -> str:
     """Stable, versioned idempotency key.  Changing HANDOFF_CONVERSION_VERSION
     creates a separate idempotency namespace so old records are never touched."""
-    return f"medlearn-handoff-v2-{handoff_digest(handoff)[7:]}"
+    return f"medlearn-handoff-v3-{handoff_digest(handoff)[7:]}"
 
 
 def handoff_to_intake(handoff: MedLearnHandoff) -> IntakeEnvelope:

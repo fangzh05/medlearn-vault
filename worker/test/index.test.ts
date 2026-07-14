@@ -501,13 +501,15 @@ describe("Chat Project Source MCP handoff", () => {
     expect(ajv.compile(intakeSchema)(envelope)).toBe(true);
     expect(envelope.draft.context).toMatchObject({
       session_id: golden.session_id,
-      source_id: golden.source_id,
+      source_id: golden.stable_source_id,
       course_id: "hematology",
       chapter_id: "acute_leukemia",
       session_started_at: "2026-07-14T19:00:00+08:00",
       captured_at: "2026-07-14T19:20:00+08:00",
     });
-    expect(await learningChatSourceId(golden.nullable_context)).toBe(golden.nullable_source_id);
+    expect(await learningChatSourceId(golden.nullable_context)).toBe(
+      golden.stable_nullable_source_id,
+    );
   });
 
   it("supports unauthenticated lifecycle and rejects methods or batches safely", async () => {
