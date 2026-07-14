@@ -136,6 +136,29 @@ describe("Cloudflare runtime", () => {
     expect(await response.json()).toMatchObject({ status: "dispatched" });
   });
 
+  it("rejects a poisoned content-addressed intake before job creation or dispatch", async () => {
+    const bucket = await runtime.getR2Bucket("CONTROL_BUCKET");
+    const body = readFileSync(resolve("../examples/intake/manual-copd.json"), "utf8");
+    const hex = createHash("sha256").update(body).digest("hex");
+    const key = `v1/intakes/sha256/${hex}.json`;
+    const poisoned = Buffer.from(`${body}\n`, "utf8");
+    const before = (await bucket.list({ prefix: "v1/jobs/" })).objects.length;
+    await bucket.put(key, poisoned);
+    const response = await runtime.dispatchFetch("https://example.test/v1/captures", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "idempotency-key": "runtime-r2-poisoned-intake",
+      },
+      body,
+    });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: "INTAKE_STORAGE_CONFLICT" });
+    expect(Buffer.from(await (await bucket.get(key))!.arrayBuffer())).toEqual(poisoned);
+    expect((await bucket.list({ prefix: "v1/jobs/" })).objects).toHaveLength(before);
+  });
+
   it("reads a canonical vault receipt from Miniflare R2", async () => {
     await putVaultReceipt(`capture_${"c".repeat(32)}`, `publication_plan_${"1".repeat(32)}`, "# runtime manifest\n");
     const response = await runtime.dispatchFetch("https://example.test/v1/vault/manifest", {

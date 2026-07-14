@@ -10,6 +10,11 @@ However, the full Proposal → Approval → Publication → Obsidian E2E flow is
 yet finalized, and the repository does not contain any real `.app.json`, App ID,
 or secrets.
 
+With Worker 0.14.1, a submitted handoff is accepted only after the Worker
+re-reads and verifies the raw persisted intake bytes. A content-addressed key
+already occupied by different bytes returns the stable MCP error
+`INTAKE_STORAGE_CONFLICT`; the Worker does not overwrite or delete it.
+
 ## Phase B: real deployment
 
 1. Configure an external OAuth/OIDC provider with Authorization Code, PKCE,

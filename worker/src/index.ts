@@ -184,8 +184,46 @@ async function readStored<T>(bucket: R2Bucket, key: string): Promise<Stored<T> |
   return object ? { value: await object.json<T>(), etag: object.etag } : null;
 }
 
+interface RawStored { body: ArrayBuffer; etag: string }
+
+async function readRawStored(bucket: R2Bucket, key: string): Promise<RawStored | null> {
+  const object = await bucket.get(key);
+  return object ? { body: await object.arrayBuffer(), etag: object.etag } : null;
+}
+
+function bytesOf(value: ArrayBuffer | Uint8Array): Uint8Array {
+  return value instanceof Uint8Array ? value : new Uint8Array(value);
+}
+
+export async function equalBytes(left: ArrayBuffer | Uint8Array, right: ArrayBuffer | Uint8Array): Promise<boolean> {
+  const a = bytesOf(left);
+  const b = bytesOf(right);
+  const [aDigest, bDigest] = await Promise.all([sha256(a), sha256(b)]);
+  if (a.byteLength !== b.byteLength) return false;
+  for (let index = 0; index < a.byteLength; index += 1) if (a[index] !== b[index]) return false;
+  return aDigest === bDigest;
+}
+
 async function putNew(bucket: R2Bucket, key: string, value: string | ArrayBuffer): Promise<boolean> {
   return (await bucket.put(key, value, { onlyIf: new Headers({ "If-None-Match": "*" }) })) !== null;
+}
+
+class IntakeStorageConflict extends Error {
+  constructor() { super("INTAKE_STORAGE_CONFLICT"); }
+}
+
+async function createOrVerifyIntake(
+  bucket: R2Bucket, intakeKey: string, exactBody: ArrayBuffer, expectedDigest: string,
+): Promise<void> {
+  if (!/^sha256:[a-f0-9]{64}$/.test(expectedDigest)) throw new Error("INVALID_INTAKE_DIGEST");
+  const expectedKey = `v1/intakes/sha256/${expectedDigest.slice("sha256:".length)}.json`;
+  if (intakeKey !== expectedKey) throw new Error("INVALID_INTAKE_KEY");
+  await putNew(bucket, intakeKey, exactBody);
+  const stored = await readRawStored(bucket, intakeKey);
+  if (!stored) throw new Error("INTAKE_STORAGE_UNAVAILABLE");
+  const storedDigest = `sha256:${await sha256(stored.body)}`;
+  if (storedDigest !== expectedDigest || !(await equalBytes(stored.body, exactBody)))
+    throw new IntakeStorageConflict();
 }
 
 async function putCas(bucket: R2Bucket, key: string, value: unknown, etag: string): Promise<boolean> {
@@ -273,7 +311,6 @@ async function claimIdempotency(
 async function ensureArtifacts(
   bucket: R2Bucket, claim: IdempotencyRecord, intakeKey: string, exactBody: ArrayBuffer, now: string,
 ): Promise<Stored<JobRecord>> {
-  await putNew(bucket, intakeKey, exactBody);
   const jobKey = `v1/jobs/${claim.job_id}.json`;
   const initial: JobRecord = {
     job_version: "0.2.0", job_id: claim.job_id, status: "received",
@@ -351,6 +388,12 @@ async function submitIntake(
   const idemKey = `v1/idempotency/${await sha256(idempotencyKey)}.json`;
   const claim = await claimIdempotency(env.CONTROL_BUCKET, idemKey, intakeDigest, new Date(nowMs).toISOString());
   if (claim.intake_digest !== intakeDigest) return reply(409, { error: "IDEMPOTENCY_CONFLICT" });
+  try {
+    await createOrVerifyIntake(env.CONTROL_BUCKET, intakeKey, body, intakeDigest);
+  } catch (error) {
+    if (error instanceof IntakeStorageConflict) return reply(409, { error: "INTAKE_STORAGE_CONFLICT" });
+    throw error;
+  }
   const job = await ensureArtifacts(env.CONTROL_BUCKET, claim, intakeKey, body, new Date(nowMs).toISOString());
   if (env.dispatchMode === "persist_only") return reply(202, sanitizeJob(job.value));
   return dispatchRecoverably(env, job, nowMs);
@@ -532,7 +575,7 @@ async function routeMcp(request: Request, env: Env): Promise<Response> {
   if (call.jsonrpc !== "2.0" || typeof call.method !== "string") return mcpError(id, "HANDOFF_INVALID_JSON");
   const notification = !("id" in call);
   const notify = (): Response => new Response(null, { status: 202 });
-  if (call.method === "initialize") return notification ? notify() : reply(200, { jsonrpc: "2.0", id, result: { protocolVersion: "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: "medlearn-work", version: "0.14.0" }, instructions: MCP_INSTRUCTIONS } });
+  if (call.method === "initialize") return notification ? notify() : reply(200, { jsonrpc: "2.0", id, result: { protocolVersion: "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: "medlearn-work", version: "0.14.1" }, instructions: MCP_INSTRUCTIONS } });
   if (call.method === "notifications/initialized") return notify();
   if (call.method === "ping") return notification ? notify() : reply(200, { jsonrpc: "2.0", id, result: {} });
   if (call.method === "tools/list") return notification ? notify() : reply(200, { jsonrpc: "2.0", id, result: { tools: [mcpTool()] } });
@@ -557,7 +600,11 @@ async function routeMcp(request: Request, env: Env): Promise<Response> {
   try {
     const converted = await convertHandoff(handoff);
     const response = await submitIntake(configured, converted.body, converted.idempotencyKey, Date.now());
-    if (!response.ok) return mcpError(id, "HANDOFF_SUBMISSION_FAILURE");
+    if (!response.ok) {
+      const failure = await response.json<{ error?: string }>();
+      if (failure.error === "INTAKE_STORAGE_CONFLICT") return mcpError(id, "INTAKE_STORAGE_CONFLICT");
+      return mcpError(id, "HANDOFF_SUBMISSION_FAILURE");
+    }
     const job = await response.json<JobRecord>();
     const result = {
       status: "submitted", job_id: job.job_id, intake_digest: job.intake_digest,
@@ -569,8 +616,8 @@ async function routeMcp(request: Request, env: Env): Promise<Response> {
     };
     return reply(200, { jsonrpc: "2.0", id, result: { content: [{ type: "text", text: JSON.stringify(result) }], structuredContent: result } });
   } catch (error) {
-    const code = error instanceof Error && error.message === "HANDOFF_CONVERSION_FAILURE" ? error.message : "HANDOFF_CONVERSION_FAILURE";
-    return mcpError(id, code);
+    if (error instanceof Error && error.message === "HANDOFF_CONVERSION_FAILURE") return mcpError(id, error.message);
+    return mcpError(id, "HANDOFF_SUBMISSION_FAILURE");
   }
 }
 

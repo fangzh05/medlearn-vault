@@ -16,6 +16,8 @@ from medlearn_vault.cli import app
 
 FIXTURE = Path("examples/intake/manual-copd.json")
 EXPECTED_DRAFT = Path("examples/intake/expected-draft.json")
+HANDOFF_FIXTURE = Path("examples/intake/project-handoff-empty.json")
+HANDOFF_DIGEST = Path("examples/intake/project-handoff-empty.digest.txt")
 
 
 def test_shared_intake_fixture_extracts_deterministically() -> None:
@@ -50,6 +52,16 @@ def test_intake_rejects_tampering_and_unsupported_versions() -> None:
     payload["draft"]["draft_version"] = "0.2.0"
     with pytest.raises(ValidationError):
         IntakeEnvelope.model_validate(payload)
+
+
+def test_cross_runtime_handoff_fixture_preserves_exact_bytes() -> None:
+    exact = HANDOFF_FIXTURE.read_bytes()
+    expected = HANDOFF_DIGEST.read_text(encoding="utf-8").strip()
+    assert intake_envelope_digest(exact) == expected
+    assert extract_capture_draft(exact, expected)
+    tampered = exact[:-1] + bytes([exact[-1] ^ 1])
+    with pytest.raises(ValueError, match="INTAKE_DIGEST_MISMATCH"):
+        extract_capture_draft(tampered, expected)
 
 
 def test_extract_intake_cli_writes_no_output_on_digest_failure(tmp_path: Path) -> None:

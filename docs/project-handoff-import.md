@@ -53,3 +53,13 @@ The Worker is an OAuth Resource Server, not an Authorization Server. It uses
 an external OIDC/OAuth provider configured with issuer, audience, and one
 allowed subject. Until that provider is configured, discovery remains usable
 but `tools/call` returns the OAuth challenge and cannot submit.
+
+## Persisted-byte integrity (0.14.1)
+
+Following production acceptance failure `INTAKE_DIGEST_MISMATCH` (run
+`29328840172`), the Worker now re-reads the persisted R2 intake as raw bytes
+before it creates a JobRecord or dispatches GitHub Actions. A byte-identical
+content-addressed object is safely reused. A different object at the same key,
+including BOM, whitespace, newline, or JSON key-order differences, returns
+`INTAKE_STORAGE_CONFLICT`; it is never overwritten or deleted. Python retains
+its independent exact-byte validation when the workflow reads the intake.

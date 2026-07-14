@@ -6,6 +6,12 @@ Configure these GitHub Actions secrets:
 - `CONTROL_R2_ACCESS_KEY_ID`
 - `CONTROL_R2_SECRET_ACCESS_KEY`
 
+For the 0.14.1 intake-byte incident, production R2 matched its expected
+content-addressed digest, so no control object must be deleted. Before any
+manual rerun, operators must verify these secrets point to the same Cloudflare
+account, endpoint, and `medlearn-control` view used by the Worker. Do not print,
+guess, or replace their values during diagnosis.
+
 The credentials must be scoped only to the fixed `medlearn-control` bucket. Do not provide
 credentials for `medlearn-vault`.
 

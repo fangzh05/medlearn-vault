@@ -80,6 +80,11 @@ It still reads the existing authenticated Worker manifest, verifies every manife
 digest, and writes only `MedLearn/` inside an existing local Obsidian Vault. See
 [Windows sync](docs/windows-sync.md).
 
+Version 0.14.1 verifies the exact bytes persisted to the content-addressed intake key before any
+JobRecord or GitHub dispatch. Existing byte-identical objects are reused; a different object at the
+same key returns `INTAKE_STORAGE_CONFLICT` without overwrite or deletion. Python remains the second
+exact-byte verification boundary.
+
 Version 0.14.0 adds strict `MedLearnHandoff` 0.1.0 import from a user-selected
 Chat Project Source through the single authenticated Work MCP tool. It derives
 deterministic CaptureDraft bytes and reuses the existing intake, review,
