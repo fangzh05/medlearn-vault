@@ -2484,7 +2484,7 @@ def _seed_reproposal_setup() -> tuple[
     )
 
 
-def test_reproposal_v2_identity_does_not_reuse_existing_v1_reproposal_job() -> None:
+def test_reproposal_v3_identity_does_not_reuse_existing_v1_reproposal_job() -> None:
     from medlearn_vault.capture import (
         CaptureDraft,
         build_capture_proposal,

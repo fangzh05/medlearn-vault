@@ -203,7 +203,7 @@ def test_proposal_identity_extra_preserves_default_and_salts_when_requested() ->
 
     default = build_capture_proposal(bundle, value)
     explicit_default = build_capture_proposal(bundle, value, proposal_identity_extra=None)
-    salted = build_capture_proposal(bundle, value, proposal_identity_extra="reproposal:0.2.0")
+    salted = build_capture_proposal(bundle, value, proposal_identity_extra="reproposal:0.3.0")
 
     assert explicit_default.proposal_id == default.proposal_id
     assert salted.proposal_id != default.proposal_id
