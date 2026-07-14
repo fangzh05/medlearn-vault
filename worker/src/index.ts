@@ -650,7 +650,7 @@ async function routeMcp(request: Request, env: Env): Promise<Response> {
   if (call.jsonrpc !== "2.0" || typeof call.method !== "string") return mcpError(id, "HANDOFF_INVALID_JSON");
   const notification = !("id" in call);
   const notify = (): Response => new Response(null, { status: 202 });
-  if (call.method === "initialize") return notification ? notify() : reply(200, { jsonrpc: "2.0", id, result: { protocolVersion: "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: "medlearn-work", version: "0.14.1" }, instructions: MCP_INSTRUCTIONS } });
+  if (call.method === "initialize") return notification ? notify() : reply(200, { jsonrpc: "2.0", id, result: { protocolVersion: "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: "medlearn-work", version: "0.15.0" }, instructions: MCP_INSTRUCTIONS } });
   if (call.method === "notifications/initialized") return notify();
   if (call.method === "ping") return notification ? notify() : reply(200, { jsonrpc: "2.0", id, result: {} });
   if (call.method === "tools/list") return notification ? notify() : reply(200, { jsonrpc: "2.0", id, result: { tools: [mcpTool()] } });

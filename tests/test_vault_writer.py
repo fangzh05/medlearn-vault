@@ -4,7 +4,8 @@ import hashlib
 import json
 
 import pytest
-from test_workflow import NOW, ROOT, MemoryStore, seed_proposal
+from test_workflow import NOW, ROOT, MemoryStore, copd_envelope, seed_job, seed_proposal
+from typer.testing import CliRunner
 
 from medlearn_vault.cli import app
 from medlearn_vault.publication import (
@@ -20,6 +21,8 @@ from medlearn_vault.vault_writer import (
 from medlearn_vault.workflow import (
     ApprovalAttestor,
     ApprovalOrchestrator,
+    AutoPublicationOrchestrator,
+    ProposalOrchestrator,
     PublicationPlanOrchestrator,
     StoredObject,
     WorkflowError,
@@ -125,6 +128,87 @@ def test_writes_both_artifacts_exact_bytes() -> None:
         stored = vault.objects[key]
         assert stored.body == artifact.content_utf8.encode("utf-8")
         assert stored.content_type == artifact.media_type
+
+
+def test_auto_publication_uses_source_job_only_and_replays() -> None:
+    store = MemoryStore()
+    vault = MemoryVaultStore()
+    envelope = json.loads(copd_envelope())
+    envelope["client_kind"] = "chatgpt_work"
+    exact_envelope = json.dumps(envelope, ensure_ascii=False, separators=(",", ":")).encode()
+    inputs, _ = seed_job(store, exact_envelope, job_id="job-auto-publish")
+    ProposalOrchestrator(store, ROOT).run(
+        inputs, bundle_path="examples/copd", workflow_run_id="run-auto", now=NOW
+    )
+
+    first = AutoPublicationOrchestrator(store, vault, ROOT).run(
+        inputs.job_id, bundle_path="examples/copd"
+    )
+    assert first.status == "published"
+    assert first.created_count == 2
+    assert first.reused_count == 0
+    assert first.receipt_status == "created"
+    assert first.approval_id and first.publication_plan_id and first.capture_id
+
+    second = AutoPublicationOrchestrator(store, vault, ROOT).run(
+        inputs.job_id, bundle_path="examples/copd"
+    )
+    assert second.status == "published"
+    assert second.approval_id == first.approval_id
+    assert second.publication_plan_id == first.publication_plan_id
+    assert second.capture_id == first.capture_id
+    assert second.created_count == 0
+    assert second.reused_count == 2
+    assert second.receipt_status == "reused"
+
+
+def test_auto_publication_returns_manual_review_without_writes() -> None:
+    store = MemoryStore()
+    vault = MemoryVaultStore()
+    proposal_id, _, _, _ = seed_proposal(store, blocked=True)
+
+    result = AutoPublicationOrchestrator(store, vault, ROOT).run(
+        "job-approval-source", bundle_path="examples/capture/ambiguous-ms/bundle"
+    )
+    assert result.status == "manual_review_required"
+    assert result.proposal_id == proposal_id
+    assert result.manual_review_reason == "PROPOSAL_NOT_READY_FOR_REVIEW"
+    assert not vault.objects
+    assert not [key for key in store.objects if key.startswith("v1/approvals/")]
+
+
+def test_auto_publish_cli_emits_compact_json(monkeypatch: pytest.MonkeyPatch) -> None:
+    store = MemoryStore()
+    vault = MemoryVaultStore()
+    envelope = json.loads(copd_envelope())
+    envelope["client_kind"] = "chatgpt_work"
+    exact_envelope = json.dumps(envelope, ensure_ascii=False, separators=(",", ":")).encode()
+    inputs, _ = seed_job(store, exact_envelope, job_id="job-auto-cli")
+    ProposalOrchestrator(store, ROOT).run(
+        inputs, bundle_path="examples/copd", workflow_run_id="run-auto-cli", now=NOW
+    )
+    monkeypatch.setattr("medlearn_vault.cli.S3ObjectStore", lambda *args: store)
+    monkeypatch.setattr("medlearn_vault.vault_writer.S3VaultObjectStore", lambda *args: vault)
+
+    result = CliRunner().invoke(
+        app,
+        ["workflow", "auto-publish", inputs.job_id, "--json"],
+        env={
+            "CONTROL_R2_ENDPOINT": "configured",
+            "CONTROL_R2_ACCESS_KEY_ID": "configured",
+            "CONTROL_R2_SECRET_ACCESS_KEY": "configured",
+            "VAULT_R2_ENDPOINT": "configured",
+            "VAULT_R2_ACCESS_KEY_ID": "configured",
+            "VAULT_R2_SECRET_ACCESS_KEY": "configured",
+            "MEDLEARN_PROPOSE_BUNDLE_PATH": "examples/copd",
+        },
+    )
+    assert result.exit_code == 0
+    assert result.stdout == result.stdout.strip() + "\n"
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "published"
+    assert payload["source_job_id"] == inputs.job_id
+    assert payload["created_count"] == 2
 
 
 def test_content_type_matches_exactly() -> None:
@@ -1071,4 +1155,4 @@ def test_publish_vault_workflow_is_main_only_and_scoped() -> None:
 
 def test_package_version_is_0_14() -> None:
     from medlearn_vault import __version__ as v
-    assert v == "0.14.1"
+    assert v == "0.15.0"

@@ -7,7 +7,7 @@ import json
 import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path, PurePosixPath
-from typing import Any, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 import boto3  # type: ignore[import-untyped]
 from botocore.config import Config  # type: ignore[import-untyped]
@@ -19,15 +19,20 @@ from medlearn_vault.capture import (
     CaptureDraft,
     CaptureProposal,
     IntakeDigestMismatch,
+    IntakeEnvelope,
     InvalidIntakeEnvelope,
     build_capture_proposal,
     capture_proposal_digest,
     contract_bundle_digest,
     exact_capture_proposal_json,
     extract_capture_draft,
+    materialize_learning_capture,
     render_capture_proposal_markdown,
 )
 from medlearn_vault.domain.base import AwareDatetime, DomainModel
+
+if TYPE_CHECKING:
+    from medlearn_vault.vault_writer import VaultObjectStore
 
 CONTROL_BUCKET = "medlearn-control"
 LEASE_DURATION = timedelta(minutes=10)
@@ -297,6 +302,26 @@ class ProposalInspectionResult(DomainModel):
     review_digest: str = Field(pattern=DIGEST_PATTERN)
     workflow_run_id: str = Field(pattern=JOB_ID_PATTERN)
     verified: Literal[True] = True
+
+
+class AutoPublicationResult(DomainModel):
+    """Sanitized result of the source-job-only automatic publication path."""
+
+    status: Literal["published", "manual_review_required"]
+    source_job_id: str = Field(pattern=JOB_ID_PATTERN)
+    proposal_id: str | None = Field(default=None, pattern=PROPOSAL_ID_PATTERN)
+    proposal_status: str | None = None
+    approval_id: str | None = Field(default=None, pattern=APPROVAL_ID_PATTERN)
+    approval_object_digest: str | None = Field(default=None, pattern=DIGEST_PATTERN)
+    publication_plan_id: str | None = Field(
+        default=None, pattern=r"^publication_plan_[a-f0-9]{32}$"
+    )
+    publication_plan_object_digest: str | None = Field(default=None, pattern=DIGEST_PATTERN)
+    capture_id: str | None = Field(default=None, pattern=r"^capture_[a-f0-9]{32}$")
+    created_count: int = Field(default=0, ge=0)
+    reused_count: int = Field(default=0, ge=0)
+    receipt_status: str | None = None
+    manual_review_reason: str | None = None
 
 
 class ReproposalResult(DomainModel):
@@ -754,7 +779,9 @@ class ProposalOutputInspector:
     def __init__(self, store: ReadOnlyObjectStore) -> None:
         self.store = store
 
-    def run(self, source_job_id: str) -> ProposalInspectionResult:
+    def run(
+        self, source_job_id: str, *, allow_blocked: bool = False
+    ) -> ProposalInspectionResult:
         if re.fullmatch(JOB_ID_PATTERN, source_job_id) is None:
             raise WorkflowError("INVALID_ATTESTATION_INPUT")
 
@@ -763,10 +790,11 @@ class ProposalOutputInspector:
             job = JobRecord.model_validate_json(job_stored.body)
         except (ValueError, TypeError) as exc:
             raise WorkflowError("INVALID_JOB") from exc
+        allowed_terminal_statuses = {"succeeded", "blocked"} if allow_blocked else {"succeeded"}
         if (
             job.job_id != source_job_id
             or job.intake_object_key != f"v1/intakes/sha256/{job.intake_digest[7:]}.json"
-            or job.status != "succeeded"
+            or job.status not in allowed_terminal_statuses
             or job.proposal_id is None
             or job.workflow_run_id is None
         ):
@@ -781,7 +809,7 @@ class ProposalOutputInspector:
             raise WorkflowError("INVALID_EXECUTION") from exc
         if (
             execution.job_id != source_job_id
-            or execution.status != "succeeded"
+            or execution.status not in allowed_terminal_statuses
             or execution.proposal_id is None
             or execution.proposal_digest is None
             or execution.review_digest is None
@@ -791,6 +819,7 @@ class ProposalOutputInspector:
         if (
             execution.proposal_id != job.proposal_id
             or execution.workflow_run_id != job.workflow_run_id
+            or execution.status != job.status
         ):
             raise WorkflowError("CONTROL_OUTPUT_MISMATCH")
 
@@ -805,7 +834,9 @@ class ProposalOutputInspector:
         if (
             proposal.proposal_id != job.proposal_id
             or capture_proposal_digest(proposal) != proposal.proposal_digest
-            or proposal.status != "ready_for_review"
+            or proposal.status not in (
+                {"ready_for_review", "blocked"} if allow_blocked else {"ready_for_review"}
+            )
         ):
             raise WorkflowError("INVALID_PROPOSAL")
         if proposal_object_digest != execution.proposal_digest:
@@ -830,6 +861,176 @@ class ProposalOutputInspector:
     def _read(self, key: str, missing_code: str) -> StoredObject:
         try:
             stored = self.store.get(key)
+        except WorkflowError:
+            raise
+        except Exception as exc:
+            raise WorkflowError("CONTROL_STORE_FAILURE") from exc
+        if stored is None:
+            raise WorkflowError(missing_code)
+        return stored
+
+
+AUTO_APPROVABLE_CLIENT_KINDS = frozenset({"chatgpt_work"})
+
+
+class AutoPublicationOrchestrator:
+    """Approve and publish one already-proposed Job without copied identities."""
+
+    def __init__(
+        self,
+        control_store: ObjectStore,
+        vault_store: VaultObjectStore,
+        repository_root: Path,
+    ) -> None:
+        self.control_store = control_store
+        self.vault_store = vault_store
+        self.repository_root = repository_root.resolve()
+
+    def run(self, source_job_id: str, *, bundle_path: str) -> AutoPublicationResult:
+        if re.fullmatch(JOB_ID_PATTERN, source_job_id) is None:
+            raise WorkflowError("INVALID_AUTO_PUBLICATION_INPUT")
+
+        job_stored = self._read(f"v1/jobs/{source_job_id}.json", "JOB_NOT_FOUND")
+        try:
+            job = JobRecord.model_validate_json(job_stored.body)
+        except (TypeError, ValueError) as exc:
+            raise WorkflowError("INVALID_JOB") from exc
+        if job.job_id != source_job_id or job.proposal_id is None:
+            raise WorkflowError("INVALID_JOB")
+
+        proposal_stored = self._read(
+            f"v1/proposals/{job.proposal_id}.json", "PROPOSAL_NOT_FOUND"
+        )
+        try:
+            proposal = CaptureProposal.model_validate_json(proposal_stored.body)
+        except (TypeError, ValueError) as exc:
+            raise WorkflowError("INVALID_PROPOSAL") from exc
+        if (
+            proposal.proposal_id != job.proposal_id
+            or capture_proposal_digest(proposal) != proposal.proposal_digest
+        ):
+            raise WorkflowError("INVALID_PROPOSAL")
+
+        # Verify Job, Execution, Proposal, and Review provenance before policy routing.
+        inspected = ProposalOutputInspector(self.control_store).run(
+            source_job_id, allow_blocked=True
+        )
+        reason = self._eligibility_reason(job, proposal)
+        if reason is not None:
+            return AutoPublicationResult(
+                status="manual_review_required",
+                source_job_id=source_job_id,
+                proposal_id=proposal.proposal_id,
+                proposal_status=proposal.status,
+                manual_review_reason=reason,
+            )
+
+        intake_stored = self._read(job.intake_object_key, "INTAKE_NOT_FOUND")
+        if _digest(intake_stored.body) != job.intake_digest:
+            raise WorkflowError("INTAKE_DIGEST_MISMATCH")
+        try:
+            intake = IntakeEnvelope.model_validate_json(intake_stored.body)
+        except (TypeError, ValueError) as exc:
+            raise WorkflowError("INVALID_INTAKE_ENVELOPE") from exc
+        if intake.client_kind not in AUTO_APPROVABLE_CLIENT_KINDS:
+            return self._manual(inspected, proposal, "CLIENT_KIND_NOT_ALLOWED")
+
+        bundle = ContractBundle.from_directory(
+            resolve_bundle_path(self.repository_root, bundle_path)
+        )
+        if contract_bundle_digest(bundle) != inspected.expected_base_bundle_digest:
+            raise WorkflowError("STALE_BASE_BUNDLE")
+        try:
+            materialize_learning_capture(bundle, proposal)
+        except ValueError as exc:
+            raise WorkflowError(str(exc)) from exc
+
+        approval = ApprovalOrchestrator(self.control_store).run(
+            inspected.proposal_id,
+            inspected.proposal_object_digest,
+            inspected.expected_base_bundle_digest,
+            decision="approved",
+        )
+        attestation = ApprovalAttestor(self.control_store).run(
+            approval.approval_id,
+            source_job_id,
+            inspected.proposal_id,
+            inspected.proposal_object_digest,
+            inspected.expected_base_bundle_digest,
+            expected_decision="approved",
+        )
+        plan = PublicationPlanOrchestrator(self.control_store, self.repository_root).run(
+            attestation.approval_id,
+            attestation.approval_object_digest,
+            source_job_id,
+            attestation.proposal_id,
+            attestation.proposal_object_digest,
+            inspected.expected_base_bundle_digest,
+            bundle_path=bundle_path,
+        )
+        from medlearn_vault.vault_writer import VaultPublicationWriter
+
+        publication = VaultPublicationWriter(self.control_store, self.vault_store).run(
+            plan.publication_plan_id,
+            plan.publication_plan_object_digest,
+            source_job_id,
+        )
+        return AutoPublicationResult(
+            status="published",
+            source_job_id=source_job_id,
+            proposal_id=inspected.proposal_id,
+            proposal_status=proposal.status,
+            approval_id=attestation.approval_id,
+            approval_object_digest=attestation.approval_object_digest,
+            publication_plan_id=plan.publication_plan_id,
+            publication_plan_object_digest=plan.publication_plan_object_digest,
+            capture_id=publication.capture_id,
+            created_count=len(publication.created_paths),
+            reused_count=len(publication.reused_paths),
+            receipt_status=publication.receipt_status,
+        )
+
+    def _eligibility_reason(self, job: JobRecord, proposal: CaptureProposal) -> str | None:
+        if proposal.status != "ready_for_review":
+            return "PROPOSAL_NOT_READY_FOR_REVIEW"
+        if job.status != "succeeded" or job.workflow_run_id is None:
+            raise WorkflowError("INVALID_JOB")
+        if any(item.severity in {"error", "review"} for item in proposal.issues):
+            return "PROPOSAL_HAS_BLOCKING_ISSUES"
+        if proposal.source_candidate is not None:
+            return "SOURCE_BOOTSTRAP_CANDIDATE"
+        if proposal.new_concept_candidates:
+            return "NEW_CONCEPT_CANDIDATE"
+        if any(
+            item.status not in {"matched", "redirected"}
+            for item in proposal.concept_resolutions
+        ):
+            return "UNRESOLVED_CONCEPT"
+        if any(
+            item.proposed_verification_status != "unverified_chat"
+            or item.proposed_evidence_state != "unassessed"
+            for item in proposal.claim_proposals
+        ):
+            return "CLAIM_AUTHORITY_STATE_INVALID"
+        return None
+
+    def _manual(
+        self,
+        inspected: ProposalInspectionResult,
+        proposal: CaptureProposal,
+        reason: str,
+    ) -> AutoPublicationResult:
+        return AutoPublicationResult(
+            status="manual_review_required",
+            source_job_id=inspected.source_job_id,
+            proposal_id=inspected.proposal_id,
+            proposal_status=proposal.status,
+            manual_review_reason=reason,
+        )
+
+    def _read(self, key: str, missing_code: str) -> StoredObject:
+        try:
+            stored = self.control_store.get(key)
         except WorkflowError:
             raise
         except Exception as exc:

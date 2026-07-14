@@ -135,3 +135,25 @@ candidate concept IDs, and issue target IDs. Digests are lowercase `sha256:<64 h
 
 Assistant statements remain `unverified_chat` / `unassessed`. User assertions and errors never
 become medical facts. Review output continues to use the shared bilingual concept formatter.
+
+## Automatic approval and publication (0.15.0)
+
+`medlearn workflow auto-publish SOURCE_JOB_ID --json` is the normal post-Propose path and the
+recovery operation for an existing Job. It discovers every Proposal, Approval and plan identity
+from immutable control objects; callers never copy digests. A successful eligible chain is
+`submitted → proposed → approved → planned → published → Windows pull`.
+
+Only `chatgpt_work` Intakes are eligible. The Job, Execution, Proposal and Review must agree;
+the exact Intake, Proposal and Review bytes and semantic digests are rechecked; the current bundle
+must equal the Proposal bundle. The Proposal must be `ready_for_review`, have no error/review
+issues, no source or new-concept candidate, only matched/redirected concepts, and only
+`unverified_chat` / `unassessed` claims. Materialization is run before approval. Any policy miss
+returns `manual_review_required` with a stable reason and creates no Approval, plan, Vault object,
+receipt, or manifest input. Integrity and storage failures remain nonzero failures.
+
+Approval, plan, artifacts and receipt use their existing create-only identities, so rerunning the
+same source Job reconciles partial work and reuses exact winners. The Worker manifest is derived
+from immutable receipts; publication therefore updates its visible manifest without a mutable
+manifest write. The detailed manual Approve, Plan Publication and Publish Vault workflows remain
+available for audit and recovery. Set repository variable `MEDLEARN_AUTO_PUBLISH_DISABLED` to
+exactly `true` to suppress the automatic post-Propose call; absence enables it.
