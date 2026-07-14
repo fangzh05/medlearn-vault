@@ -1,12 +1,151 @@
 [
   {
     "schema_version": "1.2.0",
+    "concept_id": "concept_09a8e0de3eb33b3b8720f0b1a993bc3d",
+    "canonical_name": "抗磷脂综合征抗体谱与诊断边界",
+    "preferred_english": "antiphospholipid syndrome antibody profile and diagnostic boundary",
+    "concept_type": "investigation",
+    "scope_note": "Reviewed catalog concept for APS antibody profile and diagnostic-boundary discussion.",
+    "inclusion_terms": [],
+    "exclusion_terms": [],
+    "broader_concept_ids": [],
+    "external_identifiers": {
+      "mesh": [],
+      "snomed_ct": [],
+      "icd10": [],
+      "loinc": [],
+      "rxnorm": []
+    },
+    "aliases": [
+      {
+        "text": "APS抗体谱与诊断边界",
+        "normalized": "aps抗体谱与诊断边界",
+        "language": "zh",
+        "alias_type": "other"
+      }
+    ],
+    "status": "active",
+    "match_fingerprint": "cfp_1b9a35297102e700"
+  },
+  {
+    "schema_version": "1.2.0",
+    "concept_id": "concept_10bf237a8113a8336bb5ce4579bdbab9",
+    "canonical_name": "晶体失稳",
+    "preferred_english": "crystal destabilization",
+    "concept_type": "mechanism",
+    "scope_note": "Reviewed catalog concept for crystal destabilization as a mechanism term in gout discussion.",
+    "inclusion_terms": [],
+    "exclusion_terms": [],
+    "broader_concept_ids": [],
+    "external_identifiers": {
+      "mesh": [],
+      "snomed_ct": [],
+      "icd10": [],
+      "loinc": [],
+      "rxnorm": []
+    },
+    "aliases": [],
+    "status": "active",
+    "match_fingerprint": "cfp_ee0ac5e02c477adf"
+  },
+  {
+    "schema_version": "1.2.0",
     "concept_id": "concept_11111111111111111111111111111111",
     "canonical_name": "慢性阻塞性肺疾病",
     "preferred_english": "chronic obstructive pulmonary disease",
     "concept_type": "disease",
     "scope_note": "以持续气流受限为特征的慢性呼吸系统疾病。",
-    "aliases": [{"text": "COPD", "language": "en", "alias_type": "abbreviation"}]
+    "aliases": [
+      {
+        "text": "COPD",
+        "language": "en",
+        "alias_type": "abbreviation"
+      }
+    ]
+  },
+  {
+    "schema_version": "1.2.0",
+    "concept_id": "concept_1997e7d6487ad05b57d2af3da36f5f07",
+    "canonical_name": "急性痛风",
+    "preferred_english": "acute gout",
+    "concept_type": "disease",
+    "scope_note": "Reviewed catalog concept for acute gout as a named clinical presentation.",
+    "inclusion_terms": [],
+    "exclusion_terms": [],
+    "broader_concept_ids": [],
+    "external_identifiers": {
+      "mesh": [],
+      "snomed_ct": [],
+      "icd10": [],
+      "loinc": [],
+      "rxnorm": []
+    },
+    "aliases": [],
+    "status": "active",
+    "match_fingerprint": "cfp_aa41d95ef47dd5d5"
+  },
+  {
+    "schema_version": "1.2.0",
+    "concept_id": "concept_1c06662cb0c4952e270de647371f991f",
+    "canonical_name": "凝血",
+    "preferred_english": "coagulation",
+    "concept_type": "physiology",
+    "scope_note": "Reviewed catalog concept for coagulation as a physiological process.",
+    "inclusion_terms": [],
+    "exclusion_terms": [],
+    "broader_concept_ids": [],
+    "external_identifiers": {
+      "mesh": [],
+      "snomed_ct": [],
+      "icd10": [],
+      "loinc": [],
+      "rxnorm": []
+    },
+    "aliases": [],
+    "status": "active",
+    "match_fingerprint": "cfp_a2acc894d885f9c4"
+  },
+  {
+    "schema_version": "1.2.0",
+    "concept_id": "concept_1f20643c301f35873cfbf258ccac0c81",
+    "canonical_name": "急性痛风发作时继续既有降尿酸药",
+    "preferred_english": "continuing existing urate-lowering therapy during an acute gout flare",
+    "concept_type": "guideline",
+    "scope_note": "Reviewed catalog concept for continuing already prescribed urate-lowering therapy during acute gout flare discussion.",
+    "inclusion_terms": [],
+    "exclusion_terms": [],
+    "broader_concept_ids": [],
+    "external_identifiers": {
+      "mesh": [],
+      "snomed_ct": [],
+      "icd10": [],
+      "loinc": [],
+      "rxnorm": []
+    },
+    "aliases": [],
+    "status": "active",
+    "match_fingerprint": "cfp_484cbb5426e12012"
+  },
+  {
+    "schema_version": "1.2.0",
+    "concept_id": "concept_2048effa7ddf8ff15e3e5e714895a8a5",
+    "canonical_name": "Felty综合征",
+    "preferred_english": "Felty syndrome",
+    "concept_type": "syndrome",
+    "scope_note": "Reviewed catalog concept for Felty syndrome as a named syndrome associated with rheumatoid arthritis.",
+    "inclusion_terms": [],
+    "exclusion_terms": [],
+    "broader_concept_ids": [],
+    "external_identifiers": {
+      "mesh": [],
+      "snomed_ct": [],
+      "icd10": [],
+      "loinc": [],
+      "rxnorm": []
+    },
+    "aliases": [],
+    "status": "active",
+    "match_fingerprint": "cfp_4d26e9c684789455"
   },
   {
     "schema_version": "1.2.0",
@@ -18,11 +157,102 @@
   },
   {
     "schema_version": "1.2.0",
+    "concept_id": "concept_25d6791c31edbee1e70f34eaa9e62bbd",
+    "canonical_name": "沉积动员",
+    "preferred_english": "deposit mobilization",
+    "concept_type": "mechanism",
+    "scope_note": "Reviewed catalog concept for deposit mobilization as a mechanism term in gout learning discussion.",
+    "inclusion_terms": [],
+    "exclusion_terms": [],
+    "broader_concept_ids": [],
+    "external_identifiers": {
+      "mesh": [],
+      "snomed_ct": [],
+      "icd10": [],
+      "loinc": [],
+      "rxnorm": []
+    },
+    "aliases": [],
+    "status": "active",
+    "match_fingerprint": "cfp_9597a2dfc38c3fa9"
+  },
+  {
+    "schema_version": "1.2.0",
     "concept_id": "concept_33333333333333333333333333333333",
     "canonical_name": "吸烟",
     "preferred_english": "smoking",
     "concept_type": "other",
     "scope_note": "烟草暴露行为及其疾病风险语境。"
+  },
+  {
+    "schema_version": "1.2.0",
+    "concept_id": "concept_380a0c80a3656056801da33b7a17dbb2",
+    "canonical_name": "干燥综合征相关远端肾小管酸中毒",
+    "preferred_english": "Sjogren syndrome-associated distal renal tubular acidosis",
+    "concept_type": "complication",
+    "scope_note": "Reviewed catalog concept for distal renal tubular acidosis associated with Sjogren syndrome.",
+    "inclusion_terms": [],
+    "exclusion_terms": [],
+    "broader_concept_ids": [],
+    "external_identifiers": {
+      "mesh": [],
+      "snomed_ct": [],
+      "icd10": [],
+      "loinc": [],
+      "rxnorm": []
+    },
+    "aliases": [],
+    "status": "active",
+    "match_fingerprint": "cfp_9e1c39a36e9a71ca"
+  },
+  {
+    "schema_version": "1.2.0",
+    "concept_id": "concept_3d0423e222a66e9f3479703924b80c77",
+    "canonical_name": "弥散性血管内凝血",
+    "preferred_english": "disseminated intravascular coagulation",
+    "concept_type": "complication",
+    "scope_note": "Reviewed catalog concept for disseminated intravascular coagulation as a named clinical coagulation disorder.",
+    "inclusion_terms": [],
+    "exclusion_terms": [],
+    "broader_concept_ids": [],
+    "external_identifiers": {
+      "mesh": [],
+      "snomed_ct": [],
+      "icd10": [],
+      "loinc": [],
+      "rxnorm": []
+    },
+    "aliases": [
+      {
+        "text": "DIC",
+        "normalized": "dic",
+        "language": "en",
+        "alias_type": "other"
+      }
+    ],
+    "status": "active",
+    "match_fingerprint": "cfp_aa8bdeb5f0107a71"
+  },
+  {
+    "schema_version": "1.2.0",
+    "concept_id": "concept_405b79e807be5d7bfcea02c3b231c6f8",
+    "canonical_name": "尿酸生成减少",
+    "preferred_english": "decreased uric acid production",
+    "concept_type": "mechanism",
+    "scope_note": "Reviewed catalog concept for decreased uric acid production as a mechanism term.",
+    "inclusion_terms": [],
+    "exclusion_terms": [],
+    "broader_concept_ids": [],
+    "external_identifiers": {
+      "mesh": [],
+      "snomed_ct": [],
+      "icd10": [],
+      "loinc": [],
+      "rxnorm": []
+    },
+    "aliases": [],
+    "status": "active",
+    "match_fingerprint": "cfp_8cac6d5ccfbe0620"
   },
   {
     "schema_version": "1.2.0",
@@ -34,11 +264,822 @@
   },
   {
     "schema_version": "1.2.0",
+    "concept_id": "concept_45e7035f550d5e4da8c131f3c61ae8a4",
+    "canonical_name": "2010 ACR/EULAR评分",
+    "preferred_english": "2010 ACR/EULAR classification score",
+    "concept_type": "score",
+    "scope_note": "Reviewed catalog concept for the 2010 ACR/EULAR classification score as referenced in this learning capture.",
+    "inclusion_terms": [],
+    "exclusion_terms": [],
+    "broader_concept_ids": [],
+    "external_identifiers": {
+      "mesh": [],
+      "snomed_ct": [],
+      "icd10": [],
+      "loinc": [],
+      "rxnorm": []
+    },
+    "aliases": [
+      {
+        "text": "2010 ACR/EULAR score",
+        "normalized": "2010 acr/eular score",
+        "language": "en",
+        "alias_type": "other"
+      }
+    ],
+    "status": "active",
+    "match_fingerprint": "cfp_f8135b0dd24ad15d"
+  },
+  {
+    "schema_version": "1.2.0",
+    "concept_id": "concept_52ada4ed548cc3147093a2b6c7242b74",
+    "canonical_name": "逐项计算",
+    "preferred_english": "item-by-item calculation",
+    "concept_type": "procedure",
+    "scope_note": "Reviewed catalog concept for item-by-item calculation used as a learning or scoring operation.",
+    "inclusion_terms": [],
+    "exclusion_terms": [],
+    "broader_concept_ids": [],
+    "external_identifiers": {
+      "mesh": [],
+      "snomed_ct": [],
+      "icd10": [],
+      "loinc": [],
+      "rxnorm": []
+    },
+    "aliases": [],
+    "status": "active",
+    "match_fingerprint": "cfp_103cbd23c5f80409"
+  },
+  {
+    "schema_version": "1.2.0",
     "concept_id": "concept_55555555555555555555555555555555",
     "canonical_name": "肺功能检查",
     "preferred_english": "pulmonary function test",
     "concept_type": "investigation",
     "scope_note": "评价肺通气功能和气流受限的检查。",
-    "aliases": [{"text": "PFT", "language": "en", "alias_type": "abbreviation"}]
+    "aliases": [
+      {
+        "text": "PFT",
+        "language": "en",
+        "alias_type": "abbreviation"
+      }
+    ]
+  },
+  {
+    "schema_version": "1.2.0",
+    "concept_id": "concept_57a4da7f4af951bbf2f3d09c75763229",
+    "canonical_name": "系统性红斑狼疮活动、抗体分工与治疗分层",
+    "preferred_english": "systemic lupus erythematosus activity, antibody roles, and treatment stratification",
+    "concept_type": "guideline",
+    "scope_note": "Reviewed catalog concept for the combined SLE learning topic covering disease activity, antibody roles, and treatment stratification.",
+    "inclusion_terms": [],
+    "exclusion_terms": [],
+    "broader_concept_ids": [],
+    "external_identifiers": {
+      "mesh": [],
+      "snomed_ct": [],
+      "icd10": [],
+      "loinc": [],
+      "rxnorm": []
+    },
+    "aliases": [],
+    "status": "active",
+    "match_fingerprint": "cfp_731c087a9efdc046"
+  },
+  {
+    "schema_version": "1.2.0",
+    "concept_id": "concept_58108cb79bb93c6bdd6f1548857a9a8e",
+    "canonical_name": "痛风石患者长期降尿酸目标与急性期处理",
+    "preferred_english": "long-term urate target and acute management in tophaceous gout",
+    "concept_type": "guideline",
+    "scope_note": "Reviewed catalog concept for long-term urate target and acute-phase handling in a tophaceous gout learning context.",
+    "inclusion_terms": [],
+    "exclusion_terms": [],
+    "broader_concept_ids": [],
+    "external_identifiers": {
+      "mesh": [],
+      "snomed_ct": [],
+      "icd10": [],
+      "loinc": [],
+      "rxnorm": []
+    },
+    "aliases": [],
+    "status": "active",
+    "match_fingerprint": "cfp_864ad2a641a3c798"
+  },
+  {
+    "schema_version": "1.2.0",
+    "concept_id": "concept_5c0073eb444a2783b877f5d593f88ee4",
+    "canonical_name": "关节液",
+    "preferred_english": "synovial fluid",
+    "concept_type": "anatomy",
+    "scope_note": "Reviewed catalog concept for synovial fluid as a named specimen or anatomical fluid in joint evaluation.",
+    "inclusion_terms": [],
+    "exclusion_terms": [],
+    "broader_concept_ids": [],
+    "external_identifiers": {
+      "mesh": [],
+      "snomed_ct": [],
+      "icd10": [],
+      "loinc": [],
+      "rxnorm": []
+    },
+    "aliases": [],
+    "status": "active",
+    "match_fingerprint": "cfp_9c1b4b03296e23f8"
+  },
+  {
+    "schema_version": "1.2.0",
+    "concept_id": "concept_683b628814f966d890a47e1f9dc8e913",
+    "canonical_name": "DIC成分支持",
+    "preferred_english": "component support in DIC",
+    "concept_type": "procedure",
+    "scope_note": "Reviewed catalog concept for component support discussed in disseminated intravascular coagulation management.",
+    "inclusion_terms": [],
+    "exclusion_terms": [],
+    "broader_concept_ids": [],
+    "external_identifiers": {
+      "mesh": [],
+      "snomed_ct": [],
+      "icd10": [],
+      "loinc": [],
+      "rxnorm": []
+    },
+    "aliases": [],
+    "status": "active",
+    "match_fingerprint": "cfp_5b2ea00109d02609"
+  },
+  {
+    "schema_version": "1.2.0",
+    "concept_id": "concept_6c466328a6ee605dd892f9ffd511730f",
+    "canonical_name": "强直性脊柱炎",
+    "preferred_english": "ankylosing spondylitis",
+    "concept_type": "disease",
+    "scope_note": "Reviewed catalog concept for ankylosing spondylitis as a named inflammatory disease.",
+    "inclusion_terms": [],
+    "exclusion_terms": [],
+    "broader_concept_ids": [],
+    "external_identifiers": {
+      "mesh": [],
+      "snomed_ct": [],
+      "icd10": [],
+      "loinc": [],
+      "rxnorm": []
+    },
+    "aliases": [
+      {
+        "text": "AS",
+        "normalized": "as",
+        "language": "en",
+        "alias_type": "other"
+      }
+    ],
+    "status": "active",
+    "match_fingerprint": "cfp_5e0ecfc59f31b4c1"
+  },
+  {
+    "schema_version": "1.2.0",
+    "concept_id": "concept_70c7d87b380bd8aa650c0bc9b072aac9",
+    "canonical_name": "APTT",
+    "preferred_english": "activated partial thromboplastin time",
+    "concept_type": "investigation",
+    "scope_note": "Reviewed catalog concept for activated partial thromboplastin time as a named laboratory test.",
+    "inclusion_terms": [],
+    "exclusion_terms": [],
+    "broader_concept_ids": [],
+    "external_identifiers": {
+      "mesh": [],
+      "snomed_ct": [],
+      "icd10": [],
+      "loinc": [],
+      "rxnorm": []
+    },
+    "aliases": [],
+    "status": "active",
+    "match_fingerprint": "cfp_3452eb35a963fe99"
+  },
+  {
+    "schema_version": "1.2.0",
+    "concept_id": "concept_71f8654e537e409d5d1fd385a4363f53",
+    "canonical_name": "RA典型关节分布",
+    "preferred_english": "typical joint distribution in rheumatoid arthritis",
+    "concept_type": "sign",
+    "scope_note": "Reviewed catalog concept for the typical joint distribution discussed for rheumatoid arthritis.",
+    "inclusion_terms": [],
+    "exclusion_terms": [],
+    "broader_concept_ids": [],
+    "external_identifiers": {
+      "mesh": [],
+      "snomed_ct": [],
+      "icd10": [],
+      "loinc": [],
+      "rxnorm": []
+    },
+    "aliases": [],
+    "status": "active",
+    "match_fingerprint": "cfp_4b5adb473a1552b8"
+  },
+  {
+    "schema_version": "1.2.0",
+    "concept_id": "concept_7d2d266a181cea4c37585a525766631f",
+    "canonical_name": "降尿酸初期发作",
+    "preferred_english": "early flare after urate-lowering therapy initiation",
+    "concept_type": "complication",
+    "scope_note": "Reviewed catalog concept for gout flare occurring after initiation of urate-lowering therapy.",
+    "inclusion_terms": [],
+    "exclusion_terms": [],
+    "broader_concept_ids": [],
+    "external_identifiers": {
+      "mesh": [],
+      "snomed_ct": [],
+      "icd10": [],
+      "loinc": [],
+      "rxnorm": []
+    },
+    "aliases": [],
+    "status": "active",
+    "match_fingerprint": "cfp_3642baf4b55ed240"
+  },
+  {
+    "schema_version": "1.2.0",
+    "concept_id": "concept_809c138184c4f0d1d9e189e60c2c5534",
+    "canonical_name": "降尿酸初期发作机制、长期目标与苯溴马隆边界",
+    "preferred_english": "urate-lowering initiation flare mechanism, long-term target, and benzbromarone boundary",
+    "concept_type": "guideline",
+    "scope_note": "Reviewed catalog concept for the combined urate-lowering therapy learning topic covering early flare mechanism, long-term target, and benzbromarone boundary.",
+    "inclusion_terms": [],
+    "exclusion_terms": [],
+    "broader_concept_ids": [],
+    "external_identifiers": {
+      "mesh": [],
+      "snomed_ct": [],
+      "icd10": [],
+      "loinc": [],
+      "rxnorm": []
+    },
+    "aliases": [],
+    "status": "active",
+    "match_fingerprint": "cfp_11b87c890a669ba9"
+  },
+  {
+    "schema_version": "1.2.0",
+    "concept_id": "concept_882880b074d42d969076d5c0a8da1208",
+    "canonical_name": "类风湿关节炎",
+    "preferred_english": "rheumatoid arthritis",
+    "concept_type": "disease",
+    "scope_note": "Reviewed catalog concept for rheumatoid arthritis as a named inflammatory joint disease.",
+    "inclusion_terms": [],
+    "exclusion_terms": [],
+    "broader_concept_ids": [],
+    "external_identifiers": {
+      "mesh": [],
+      "snomed_ct": [],
+      "icd10": [],
+      "loinc": [],
+      "rxnorm": []
+    },
+    "aliases": [
+      {
+        "text": "RA",
+        "normalized": "ra",
+        "language": "en",
+        "alias_type": "other"
+      }
+    ],
+    "status": "active",
+    "match_fingerprint": "cfp_13bffe8cf6969f5d"
+  },
+  {
+    "schema_version": "1.2.0",
+    "concept_id": "concept_989740b2ff479d41903dab3d0e122a8f",
+    "canonical_name": "交联纤维蛋白",
+    "preferred_english": "cross-linked fibrin",
+    "concept_type": "pathology",
+    "scope_note": "Reviewed catalog concept for cross-linked fibrin as referenced in coagulation and fibrinolysis discussion.",
+    "inclusion_terms": [],
+    "exclusion_terms": [],
+    "broader_concept_ids": [],
+    "external_identifiers": {
+      "mesh": [],
+      "snomed_ct": [],
+      "icd10": [],
+      "loinc": [],
+      "rxnorm": []
+    },
+    "aliases": [],
+    "status": "active",
+    "match_fingerprint": "cfp_9bfed81d309d3505"
+  },
+  {
+    "schema_version": "1.2.0",
+    "concept_id": "concept_993d0210a4587e1dc1fa3c99f8a26d11",
+    "canonical_name": "8分",
+    "preferred_english": "8-point score result",
+    "concept_type": "score",
+    "scope_note": "Reviewed catalog concept for an 8-point score result mentioned in the learning capture.",
+    "inclusion_terms": [],
+    "exclusion_terms": [],
+    "broader_concept_ids": [],
+    "external_identifiers": {
+      "mesh": [],
+      "snomed_ct": [],
+      "icd10": [],
+      "loinc": [],
+      "rxnorm": []
+    },
+    "aliases": [],
+    "status": "active",
+    "match_fingerprint": "cfp_3971d8cc69dab300"
+  },
+  {
+    "schema_version": "1.2.0",
+    "concept_id": "concept_a78ea53f8473b8cb95245253bb4dac9a",
+    "canonical_name": "纤溶",
+    "preferred_english": "fibrinolysis",
+    "concept_type": "physiology",
+    "scope_note": "Reviewed catalog concept for fibrinolysis as a coagulation-related physiological process.",
+    "inclusion_terms": [],
+    "exclusion_terms": [],
+    "broader_concept_ids": [],
+    "external_identifiers": {
+      "mesh": [],
+      "snomed_ct": [],
+      "icd10": [],
+      "loinc": [],
+      "rxnorm": []
+    },
+    "aliases": [],
+    "status": "active",
+    "match_fingerprint": "cfp_346f719fd2bda54d"
+  },
+  {
+    "schema_version": "1.2.0",
+    "concept_id": "concept_a846e678ef0b22c88b80ec29f626fd5a",
+    "canonical_name": "秋水仙碱",
+    "preferred_english": "colchicine",
+    "concept_type": "drug",
+    "scope_note": "Reviewed catalog concept for colchicine as a named drug.",
+    "inclusion_terms": [],
+    "exclusion_terms": [],
+    "broader_concept_ids": [],
+    "external_identifiers": {
+      "mesh": [],
+      "snomed_ct": [],
+      "icd10": [],
+      "loinc": [],
+      "rxnorm": []
+    },
+    "aliases": [],
+    "status": "active",
+    "match_fingerprint": "cfp_6ff466d1f61d743d"
+  },
+  {
+    "schema_version": "1.2.0",
+    "concept_id": "concept_b0c6d4a4417f132f5e6c3f1b721404dc",
+    "canonical_name": "DIC治疗",
+    "preferred_english": "DIC treatment",
+    "concept_type": "procedure",
+    "scope_note": "Reviewed catalog concept for treatment considerations for disseminated intravascular coagulation.",
+    "inclusion_terms": [],
+    "exclusion_terms": [],
+    "broader_concept_ids": [],
+    "external_identifiers": {
+      "mesh": [],
+      "snomed_ct": [],
+      "icd10": [],
+      "loinc": [],
+      "rxnorm": []
+    },
+    "aliases": [],
+    "status": "active",
+    "match_fingerprint": "cfp_eadc03f568a819c1"
+  },
+  {
+    "schema_version": "1.2.0",
+    "concept_id": "concept_bc9132d313b0a4e6d58faaeb35a8cbcc",
+    "canonical_name": "别嘌醇",
+    "preferred_english": "allopurinol",
+    "concept_type": "drug",
+    "scope_note": "Reviewed catalog concept for allopurinol as a named drug.",
+    "inclusion_terms": [],
+    "exclusion_terms": [],
+    "broader_concept_ids": [],
+    "external_identifiers": {
+      "mesh": [],
+      "snomed_ct": [],
+      "icd10": [],
+      "loinc": [],
+      "rxnorm": []
+    },
+    "aliases": [],
+    "status": "active",
+    "match_fingerprint": "cfp_d533d202f4e52e70"
+  },
+  {
+    "schema_version": "1.2.0",
+    "concept_id": "concept_bf3fbd6d172fd3254ab9b40fe00ed280",
+    "canonical_name": "SLE活动与狼疮性肾炎",
+    "preferred_english": "SLE activity and lupus nephritis",
+    "concept_type": "complication",
+    "scope_note": "Reviewed catalog concept for systemic lupus erythematosus activity and lupus nephritis as discussed together.",
+    "inclusion_terms": [],
+    "exclusion_terms": [],
+    "broader_concept_ids": [],
+    "external_identifiers": {
+      "mesh": [],
+      "snomed_ct": [],
+      "icd10": [],
+      "loinc": [],
+      "rxnorm": []
+    },
+    "aliases": [],
+    "status": "active",
+    "match_fingerprint": "cfp_be81a6d38e04614a"
+  },
+  {
+    "schema_version": "1.2.0",
+    "concept_id": "concept_c3c1cab3932e14e4668f750c8832af19",
+    "canonical_name": "D-二聚体形成机制",
+    "preferred_english": "D-dimer formation mechanism",
+    "concept_type": "mechanism",
+    "scope_note": "Reviewed catalog concept for the mechanism by which D-dimer forms from cross-linked fibrin degradation.",
+    "inclusion_terms": [],
+    "exclusion_terms": [],
+    "broader_concept_ids": [],
+    "external_identifiers": {
+      "mesh": [],
+      "snomed_ct": [],
+      "icd10": [],
+      "loinc": [],
+      "rxnorm": []
+    },
+    "aliases": [],
+    "status": "active",
+    "match_fingerprint": "cfp_566bbbfb6a518b49"
+  },
+  {
+    "schema_version": "1.2.0",
+    "concept_id": "concept_c72eb2a3a97bc856bccee2a6cee7189a",
+    "canonical_name": "单钠尿酸盐结晶",
+    "preferred_english": "monosodium urate crystals",
+    "concept_type": "pathology",
+    "scope_note": "Reviewed catalog concept for monosodium urate crystals as a named crystal finding.",
+    "inclusion_terms": [],
+    "exclusion_terms": [],
+    "broader_concept_ids": [],
+    "external_identifiers": {
+      "mesh": [],
+      "snomed_ct": [],
+      "icd10": [],
+      "loinc": [],
+      "rxnorm": []
+    },
+    "aliases": [
+      {
+        "text": "MSU crystals",
+        "normalized": "msu crystals",
+        "language": "en",
+        "alias_type": "other"
+      }
+    ],
+    "status": "active",
+    "match_fingerprint": "cfp_fa17dfd9cbeadbeb"
+  },
+  {
+    "schema_version": "1.2.0",
+    "concept_id": "concept_c92fa5fd40b6c2c0ffc233a748f61240",
+    "canonical_name": "类风湿关节炎典型分布、分类评分、甲氨蝶呤与Felty综合征",
+    "preferred_english": "rheumatoid arthritis distribution, classification score, methotrexate, and Felty syndrome",
+    "concept_type": "guideline",
+    "scope_note": "Reviewed catalog concept for the combined RA learning topic covering distribution, classification score, methotrexate, and Felty syndrome.",
+    "inclusion_terms": [],
+    "exclusion_terms": [],
+    "broader_concept_ids": [],
+    "external_identifiers": {
+      "mesh": [],
+      "snomed_ct": [],
+      "icd10": [],
+      "loinc": [],
+      "rxnorm": []
+    },
+    "aliases": [],
+    "status": "active",
+    "match_fingerprint": "cfp_e9d5715f67aa1493"
+  },
+  {
+    "schema_version": "1.2.0",
+    "concept_id": "concept_cdabb84f1d2119899026bff5b2ad140d",
+    "canonical_name": "苯溴马隆与尿酸性肾结石",
+    "preferred_english": "benzbromarone and uric acid nephrolithiasis",
+    "concept_type": "drug",
+    "scope_note": "Reviewed catalog concept for benzbromarone use boundary in relation to uric acid kidney stones.",
+    "inclusion_terms": [],
+    "exclusion_terms": [],
+    "broader_concept_ids": [],
+    "external_identifiers": {
+      "mesh": [],
+      "snomed_ct": [],
+      "icd10": [],
+      "loinc": [],
+      "rxnorm": []
+    },
+    "aliases": [],
+    "status": "active",
+    "match_fingerprint": "cfp_47fa663c3e2336e2"
+  },
+  {
+    "schema_version": "1.2.0",
+    "concept_id": "concept_dabe3bd75c985d34d98fe96e08010839",
+    "canonical_name": "急性痛风抗炎药",
+    "preferred_english": "anti-inflammatory drugs for acute gout",
+    "concept_type": "drug_class",
+    "scope_note": "Reviewed catalog concept for anti-inflammatory drug choices discussed for acute gout.",
+    "inclusion_terms": [],
+    "exclusion_terms": [],
+    "broader_concept_ids": [],
+    "external_identifiers": {
+      "mesh": [],
+      "snomed_ct": [],
+      "icd10": [],
+      "loinc": [],
+      "rxnorm": []
+    },
+    "aliases": [],
+    "status": "active",
+    "match_fingerprint": "cfp_c63287e4e692893f"
+  },
+  {
+    "schema_version": "1.2.0",
+    "concept_id": "concept_dd106a94b051f7a3cc66244ddbaa3542",
+    "canonical_name": "甲氨蝶呤治疗RA",
+    "preferred_english": "methotrexate treatment for rheumatoid arthritis",
+    "concept_type": "procedure",
+    "scope_note": "Reviewed catalog concept for methotrexate treatment in rheumatoid arthritis discussion.",
+    "inclusion_terms": [],
+    "exclusion_terms": [],
+    "broader_concept_ids": [],
+    "external_identifiers": {
+      "mesh": [],
+      "snomed_ct": [],
+      "icd10": [],
+      "loinc": [],
+      "rxnorm": []
+    },
+    "aliases": [],
+    "status": "active",
+    "match_fingerprint": "cfp_c6df215a503efb28"
+  },
+  {
+    "schema_version": "1.2.0",
+    "concept_id": "concept_dfe456b015e835f023ffa9025ca68bab",
+    "canonical_name": "痛风诊断、急性期抗炎与既有降尿酸药处理",
+    "preferred_english": "gout diagnosis, acute anti-inflammatory treatment, and existing urate-lowering therapy handling",
+    "concept_type": "guideline",
+    "scope_note": "Reviewed catalog concept for the combined gout diagnosis and treatment-handling topic in this capture.",
+    "inclusion_terms": [],
+    "exclusion_terms": [],
+    "broader_concept_ids": [],
+    "external_identifiers": {
+      "mesh": [],
+      "snomed_ct": [],
+      "icd10": [],
+      "loinc": [],
+      "rxnorm": []
+    },
+    "aliases": [],
+    "status": "active",
+    "match_fingerprint": "cfp_7875e1566a69ac76"
+  },
+  {
+    "schema_version": "1.2.0",
+    "concept_id": "concept_e267a2683cad20f167fffafa728f223d",
+    "canonical_name": "降尿酸初期发作机制",
+    "preferred_english": "mechanism of early flare after urate-lowering therapy initiation",
+    "concept_type": "mechanism",
+    "scope_note": "Reviewed catalog concept for the mechanism of early gout flare after urate-lowering therapy initiation.",
+    "inclusion_terms": [],
+    "exclusion_terms": [],
+    "broader_concept_ids": [],
+    "external_identifiers": {
+      "mesh": [],
+      "snomed_ct": [],
+      "icd10": [],
+      "loinc": [],
+      "rxnorm": []
+    },
+    "aliases": [],
+    "status": "active",
+    "match_fingerprint": "cfp_96164a3602d0c41c"
+  },
+  {
+    "schema_version": "1.2.0",
+    "concept_id": "concept_e431bad5c7e0a2d45344eea8866834cf",
+    "canonical_name": "血友病筛查图景",
+    "preferred_english": "hemophilia screening pattern",
+    "concept_type": "investigation",
+    "scope_note": "Reviewed catalog concept for the laboratory screening pattern discussed for hemophilia.",
+    "inclusion_terms": [],
+    "exclusion_terms": [],
+    "broader_concept_ids": [],
+    "external_identifiers": {
+      "mesh": [],
+      "snomed_ct": [],
+      "icd10": [],
+      "loinc": [],
+      "rxnorm": []
+    },
+    "aliases": [],
+    "status": "active",
+    "match_fingerprint": "cfp_774c06c83a9b31b3"
+  },
+  {
+    "schema_version": "1.2.0",
+    "concept_id": "concept_e4f21962b76dcc57844b048233747fd4",
+    "canonical_name": "SLE治疗分层",
+    "preferred_english": "SLE treatment stratification",
+    "concept_type": "guideline",
+    "scope_note": "Reviewed catalog concept for treatment stratification in systemic lupus erythematosus.",
+    "inclusion_terms": [],
+    "exclusion_terms": [],
+    "broader_concept_ids": [],
+    "external_identifiers": {
+      "mesh": [],
+      "snomed_ct": [],
+      "icd10": [],
+      "loinc": [],
+      "rxnorm": []
+    },
+    "aliases": [],
+    "status": "active",
+    "match_fingerprint": "cfp_8f81595b823da8cc"
+  },
+  {
+    "schema_version": "1.2.0",
+    "concept_id": "concept_ecdda41f2929c90fbd99f9cfe97d3100",
+    "canonical_name": "抗dsDNA与SLE活动及肾损害",
+    "preferred_english": "anti-dsDNA antibody, SLE activity, and renal involvement",
+    "concept_type": "biomarker",
+    "scope_note": "Reviewed catalog concept for anti-dsDNA in relation to SLE activity and renal involvement as discussed in the capture.",
+    "inclusion_terms": [],
+    "exclusion_terms": [],
+    "broader_concept_ids": [],
+    "external_identifiers": {
+      "mesh": [],
+      "snomed_ct": [],
+      "icd10": [],
+      "loinc": [],
+      "rxnorm": []
+    },
+    "aliases": [],
+    "status": "active",
+    "match_fingerprint": "cfp_3d0aaa71c3ec820a"
+  },
+  {
+    "schema_version": "1.2.0",
+    "concept_id": "concept_ed2e6cd6ee2ec8e6979ad667ec393d4f",
+    "canonical_name": "强直性脊柱炎与HLA-B27诊断边界",
+    "preferred_english": "ankylosing spondylitis and HLA-B27 diagnostic boundary",
+    "concept_type": "investigation",
+    "scope_note": "Reviewed catalog concept for the diagnostic-boundary discussion involving ankylosing spondylitis and HLA-B27.",
+    "inclusion_terms": [],
+    "exclusion_terms": [],
+    "broader_concept_ids": [],
+    "external_identifiers": {
+      "mesh": [],
+      "snomed_ct": [],
+      "icd10": [],
+      "loinc": [],
+      "rxnorm": []
+    },
+    "aliases": [],
+    "status": "active",
+    "match_fingerprint": "cfp_73ed8fcab98fbe28"
+  },
+  {
+    "schema_version": "1.2.0",
+    "concept_id": "concept_eda9f456fdce41465e71da8631e84723",
+    "canonical_name": "HLA-B27诊断边界",
+    "preferred_english": "HLA-B27 diagnostic boundary",
+    "concept_type": "investigation",
+    "scope_note": "Reviewed catalog concept for the diagnostic boundary of HLA-B27 testing discussed in the capture.",
+    "inclusion_terms": [],
+    "exclusion_terms": [],
+    "broader_concept_ids": [],
+    "external_identifiers": {
+      "mesh": [],
+      "snomed_ct": [],
+      "icd10": [],
+      "loinc": [],
+      "rxnorm": []
+    },
+    "aliases": [],
+    "status": "active",
+    "match_fingerprint": "cfp_7f07981b23d241e4"
+  },
+  {
+    "schema_version": "1.2.0",
+    "concept_id": "concept_f0f73a128d1a8a14bbee61bc2c71a8f4",
+    "canonical_name": "血友病",
+    "preferred_english": "hemophilia",
+    "concept_type": "disease",
+    "scope_note": "Reviewed catalog concept for hemophilia as a named bleeding disorder.",
+    "inclusion_terms": [],
+    "exclusion_terms": [],
+    "broader_concept_ids": [],
+    "external_identifiers": {
+      "mesh": [],
+      "snomed_ct": [],
+      "icd10": [],
+      "loinc": [],
+      "rxnorm": []
+    },
+    "aliases": [],
+    "status": "active",
+    "match_fingerprint": "cfp_fdd1fdc68d053191"
+  },
+  {
+    "schema_version": "1.2.0",
+    "concept_id": "concept_f864cd538e866123be9543e910624aa2",
+    "canonical_name": "D-二聚体",
+    "preferred_english": "D-dimer",
+    "concept_type": "biomarker",
+    "scope_note": "Reviewed catalog concept for D-dimer as a named coagulation and fibrinolysis biomarker.",
+    "inclusion_terms": [],
+    "exclusion_terms": [],
+    "broader_concept_ids": [],
+    "external_identifiers": {
+      "mesh": [],
+      "snomed_ct": [],
+      "icd10": [],
+      "loinc": [],
+      "rxnorm": []
+    },
+    "aliases": [],
+    "status": "active",
+    "match_fingerprint": "cfp_dc9944e8faa9dcd5"
+  },
+  {
+    "schema_version": "1.2.0",
+    "concept_id": "concept_fb1d7ae804d70b1a0c514efe9cb1921a",
+    "canonical_name": "痛风",
+    "preferred_english": "gout",
+    "concept_type": "disease",
+    "scope_note": "Reviewed catalog concept for gout as a named crystal arthropathy.",
+    "inclusion_terms": [],
+    "exclusion_terms": [],
+    "broader_concept_ids": [],
+    "external_identifiers": {
+      "mesh": [],
+      "snomed_ct": [],
+      "icd10": [],
+      "loinc": [],
+      "rxnorm": []
+    },
+    "aliases": [],
+    "status": "active",
+    "match_fingerprint": "cfp_bfb57e1e7538a5a4"
+  },
+  {
+    "schema_version": "1.2.0",
+    "concept_id": "concept_fc4fcb0e7d10c770f42987171700ece3",
+    "canonical_name": "DIC诊断",
+    "preferred_english": "DIC diagnosis",
+    "concept_type": "investigation",
+    "scope_note": "Reviewed catalog concept for diagnosis of disseminated intravascular coagulation.",
+    "inclusion_terms": [],
+    "exclusion_terms": [],
+    "broader_concept_ids": [],
+    "external_identifiers": {
+      "mesh": [],
+      "snomed_ct": [],
+      "icd10": [],
+      "loinc": [],
+      "rxnorm": []
+    },
+    "aliases": [],
+    "status": "active",
+    "match_fingerprint": "cfp_5cb000e72f6505ad"
+  },
+  {
+    "schema_version": "1.2.0",
+    "concept_id": "concept_fe1aa113718dbd306d5f3f4de1c90b0f",
+    "canonical_name": "诊断金标准",
+    "preferred_english": "diagnostic gold standard",
+    "concept_type": "guideline",
+    "scope_note": "Reviewed catalog concept for the diagnostic gold-standard idea as referenced in this capture.",
+    "inclusion_terms": [],
+    "exclusion_terms": [],
+    "broader_concept_ids": [],
+    "external_identifiers": {
+      "mesh": [],
+      "snomed_ct": [],
+      "icd10": [],
+      "loinc": [],
+      "rxnorm": []
+    },
+    "aliases": [],
+    "status": "active",
+    "match_fingerprint": "cfp_89b8dab651471f1c"
   }
 ]
