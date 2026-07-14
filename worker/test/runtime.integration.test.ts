@@ -180,8 +180,8 @@ describe("Cloudflare runtime", () => {
     expect(await response.text()).toBe(markdown);
   });
 
-  it("uses a separate idempotency namespace for v2 converter — no conflict with old v1 record", async () => {
-    // Simulate production state: an old v1 idempotency record already exists
+  it("uses a separate idempotency namespace for v3 converter — no conflict with old v1/v2 records", async () => {
+    // Simulate production state: old v1/v2 idempotency records already exist
     // for the same semantic handoff digest, bound to a different intake digest.
     const bucket = await runtime.getR2Bucket("CONTROL_BUCKET");
     const body = readFileSync(resolve("../examples/intake/apl-bootstrap-worker-envelope.json"));
@@ -202,6 +202,8 @@ describe("Cloudflare runtime", () => {
     // Old v1 idempotency key: medlearn-handoff-<digest>
     const v1IdempotencyKey = `medlearn-handoff-${handoffDigest}`;
     const v1IdemKey = `v1/idempotency/${createHash("sha256").update(v1IdempotencyKey).digest("hex")}.json`;
+    const v2IdempotencyKey = `medlearn-handoff-v2-${handoffDigest}`;
+    const v2IdemKey = `v1/idempotency/${createHash("sha256").update(v2IdempotencyKey).digest("hex")}.json`;
 
     // Preload an old v1 idempotency record pointing to a DIFFERENT (old) intake digest
     const oldIntakeDigest = `sha256:${"f".repeat(64)}`;
@@ -211,23 +213,29 @@ describe("Cloudflare runtime", () => {
       intake_digest: oldIntakeDigest,
       created_at: new Date(0).toISOString(),
     }));
+    await bucket.put(v2IdemKey, JSON.stringify({
+      idempotency_version: "0.1.0",
+      job_id: crypto.randomUUID(),
+      intake_digest: oldIntakeDigest,
+      created_at: new Date(0).toISOString(),
+    }));
 
     // Also preload the intake so the submission doesn't fail on intake storage
     await bucket.put(intakeKey, body);
 
-    // Now submit the same intake with the v2 idempotency key
-    // This should succeed because v2 uses a different namespace
-    const v2IdempotencyKey = `medlearn-handoff-v2-${handoffDigest}`;
+    // Now submit the same intake with the v3 idempotency key.
+    // This should succeed because v3 uses a different namespace.
+    const v3IdempotencyKey = `medlearn-handoff-v3-${handoffDigest}`;
     const response = await runtime.dispatchFetch("https://example.test/v1/captures", {
       method: "POST",
       headers: {
         authorization: `Bearer ${token}`,
         "content-type": "application/json",
-        "idempotency-key": v2IdempotencyKey,
+        "idempotency-key": v3IdempotencyKey,
       },
       body,
     });
-    expect(response.status).toBe(202); // v2 creates a new job, no conflict
+    expect(response.status).toBe(202); // v3 creates a new job, no conflict
     const job = await response.json() as { job_id: string; status: string };
     expect(job.job_id).toBeTruthy();
     expect(job.status).toBe("dispatched");
@@ -238,20 +246,25 @@ describe("Cloudflare runtime", () => {
     const oldValue = await oldRecord!.json() as { intake_digest: string };
     expect(oldValue.intake_digest).toBe(oldIntakeDigest);
 
-    // Verify the v2 idempotency record was created
-    const v2IdemKey = `v1/idempotency/${createHash("sha256").update(v2IdempotencyKey).digest("hex")}.json`;
     const v2Record = await bucket.get(v2IdemKey);
     expect(v2Record).not.toBeNull();
     const v2Value = await v2Record!.json() as { intake_digest: string };
-    expect(v2Value.intake_digest).toBe(intakeDigest);
+    expect(v2Value.intake_digest).toBe(oldIntakeDigest);
 
-    // Repeated submission with v2 key remains idempotent
+    // Verify the v3 idempotency record was created
+    const v3IdemKey = `v1/idempotency/${createHash("sha256").update(v3IdempotencyKey).digest("hex")}.json`;
+    const v3Record = await bucket.get(v3IdemKey);
+    expect(v3Record).not.toBeNull();
+    const v3Value = await v3Record!.json() as { intake_digest: string };
+    expect(v3Value.intake_digest).toBe(intakeDigest);
+
+    // Repeated submission with v3 key remains idempotent
     const repeat = await runtime.dispatchFetch("https://example.test/v1/captures", {
       method: "POST",
       headers: {
         authorization: `Bearer ${token}`,
         "content-type": "application/json",
-        "idempotency-key": v2IdempotencyKey,
+        "idempotency-key": v3IdempotencyKey,
       },
       body,
     });

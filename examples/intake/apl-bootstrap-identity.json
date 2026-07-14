@@ -1,10 +1,12 @@
 {
-  "algorithm": "medlearn.learning_chat_source.v1",
+  "algorithm": "medlearn.learning_chat_source.v2",
+  "legacy_algorithm": "medlearn.learning_chat_source.v1",
   "handoff_fixture": "apl-bootstrap-sanitized.json",
   "session_id": "session_0cbdef9d7fc3c84e80e5139f6d9d69b4",
   "source_id": "source_37351a40f6f7d39d1e014586b3d8b385",
-  "intake_sha256": "sha256:2b08d7c013858c7da303a123b8d460effb33048a6f3cc362dc487a289dc21dcf",
-  "worker_intake_sha256": "sha256:806bf41398d8351d0fe997aeac1a070bf8cf3c4d636e18ce6de87078e23ce5cf",
+  "stable_source_id": "source_2567de19f706eca855a0f7d0f04b3566",
+  "intake_sha256": "sha256:251e99f4db0b13b13b94ecf3f5eb046d5c7b74cdb9416daabbfea3c23a070e0d",
+  "worker_intake_sha256": "sha256:4b1d3b76368cf875e3a084056b2d475f69721992824d08c218a2c154c58476c5",
   "nullable_context": {
     "session_id": "session_0123456789abcdef0123456789abcdef",
     "discipline_id": "medicine",
@@ -14,5 +16,6 @@
     "session_started_at": "2026-07-14T19:00:00+08:00",
     "captured_at": "2026-07-14T19:20:00+08:00"
   },
-  "nullable_source_id": "source_0c45e11174bf483f43a6ded1bbae5f84"
+  "nullable_source_id": "source_0c45e11174bf483f43a6ded1bbae5f84",
+  "stable_nullable_source_id": "source_933ce6b5b37489416921a3bcf11f9b83"
 }

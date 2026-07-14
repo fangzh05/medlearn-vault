@@ -79,7 +79,7 @@ const MAX_HANDOFF_BODY = 256 * 1024;
 const LEASE_MS = 30_000;
 const CURRENT_INTAKE_VERSION = "0.1.0";
 const CURRENT_DRAFT_VERSION = "0.3.0";
-const HANDOFF_CONVERSION_VERSION = "medlearn.handoff_to_intake.v2";
+const HANDOFF_CONVERSION_VERSION = "medlearn.handoff_to_intake.v3";
 const ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 const PROPOSAL_ID = /^proposal_[a-f0-9]{32}$/;
 
@@ -466,7 +466,7 @@ function handoffSemanticError(handoff: Record<string, unknown>): string | null {
   return null;
 }
 
-const LEARNING_CHAT_SOURCE_IDENTITY_VERSION = "medlearn.learning_chat_source.v1";
+const LEARNING_CHAT_SOURCE_IDENTITY_VERSION = "medlearn.learning_chat_source.v2";
 
 function sourceIdentityField(value: string | null): Uint8Array {
   if (value === null) return new TextEncoder().encode("N");
@@ -484,10 +484,9 @@ function learningChatSourceIdentityPayload(context: {
 }): Uint8Array {
   const fields = [
     new TextEncoder().encode(LEARNING_CHAT_SOURCE_IDENTITY_VERSION),
-    sourceIdentityField(context.session_id), sourceIdentityField(context.discipline_id),
+    sourceIdentityField(context.discipline_id),
     sourceIdentityField(context.course_id), sourceIdentityField(context.chapter_id),
-    sourceIdentityField(context.locale), sourceIdentityField(context.session_started_at),
-    sourceIdentityField(context.captured_at),
+    sourceIdentityField(context.locale),
   ];
   const length = fields.reduce((total, field) => total + field.byteLength, fields.length - 1);
   const result = new Uint8Array(length);
@@ -564,7 +563,7 @@ export async function convertHandoff(handoff: Record<string, unknown>): Promise<
   const envelope = { intake_version: "0.1.0", client_kind: "chatgpt_work", draft };
   if (!validateEnvelope(envelope)) throw new Error("HANDOFF_CONVERSION_FAILURE");
   const encoded = new TextEncoder().encode(`${canonicalJson(envelope)}\n`);
-  const versionSuffix = HANDOFF_CONVERSION_VERSION.split(".").pop()!; // "v2"
+  const versionSuffix = HANDOFF_CONVERSION_VERSION.split(".").pop()!; // "v3"
   return { body: encoded.buffer.slice(encoded.byteOffset, encoded.byteOffset + encoded.byteLength), idempotencyKey: `medlearn-handoff-${versionSuffix}-${digest}` };
 }
 

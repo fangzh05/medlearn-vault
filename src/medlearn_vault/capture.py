@@ -27,7 +27,8 @@ from medlearn_vault.registry import resolve_alias
 from medlearn_vault.terminology import english_abbreviations, format_concept_label
 
 WORKFLOW_VERSION: Literal["0.3.0"] = "0.3.0"
-LEARNING_CHAT_SOURCE_IDENTITY_VERSION = "medlearn.learning_chat_source.v1"
+LEGACY_LEARNING_CHAT_SOURCE_IDENTITY_VERSION = "medlearn.learning_chat_source.v1"
+LEARNING_CHAT_SOURCE_IDENTITY_VERSION = "medlearn.learning_chat_source.v2"
 MAX_EVIDENCE_MESSAGES = 200
 MAX_CANDIDATES_PER_KIND = 200
 MAX_EXCERPT_LENGTH = 1000
@@ -65,18 +66,20 @@ class CaptureContext(DomainModel):
         return self
 
 
-def learning_chat_source_identity_bytes(context: CaptureContext) -> bytes:
-    """Length-delimited v1 source identity payload; it deliberately excludes source_id."""
+def _source_identity_field(value: str | None) -> bytes:
+    if value is None:
+        return b"N"
+    encoded = value.encode("utf-8")
+    return b"S" + str(len(encoded)).encode("ascii") + b":" + encoded
 
-    def field(value: str | None) -> bytes:
-        if value is None:
-            return b"N"
-        encoded = value.encode("utf-8")
-        return b"S" + str(len(encoded)).encode("ascii") + b":" + encoded
 
+def legacy_learning_chat_source_identity_bytes(context: CaptureContext) -> bytes:
+    """Length-delimited v1 identity for immutable pre-v3 intakes."""
+
+    field = _source_identity_field
     return b"\0".join(
         (
-            LEARNING_CHAT_SOURCE_IDENTITY_VERSION.encode("ascii"),
+            LEGACY_LEARNING_CHAT_SOURCE_IDENTITY_VERSION.encode("ascii"),
             field(str(context.session_id)),
             field(context.discipline_id),
             field(context.course_id),
@@ -88,9 +91,48 @@ def learning_chat_source_identity_bytes(context: CaptureContext) -> bytes:
     )
 
 
+def learning_chat_source_identity_bytes(context: CaptureContext) -> bytes:
+    """Length-delimited v2 source identity payload; it deliberately excludes source_id.
+
+    Session identifiers and timestamps are capture provenance, not catalog source
+    identity.  Excluding them keeps repeated ChatGPT Work captures in the same
+    course/chapter bucket from minting a new catalog source every time.
+    """
+
+    def field(value: str | None) -> bytes:
+        return _source_identity_field(value)
+
+    return b"\0".join(
+        (
+            LEARNING_CHAT_SOURCE_IDENTITY_VERSION.encode("ascii"),
+            field(context.discipline_id),
+            field(context.course_id),
+            field(context.chapter_id),
+            field(context.locale),
+        )
+    )
+
+
 def learning_chat_source_id(context: CaptureContext) -> SourceId:
     """Derive the only missing source ID eligible for bootstrap promotion."""
     return "source_" + hashlib.sha256(learning_chat_source_identity_bytes(context)).hexdigest()[:32]
+
+
+def legacy_learning_chat_source_id(context: CaptureContext) -> SourceId:
+    """Derive the v1 source ID used by immutable pre-v3 intakes."""
+    return (
+        "source_"
+        + hashlib.sha256(legacy_learning_chat_source_identity_bytes(context)).hexdigest()[:32]
+    )
+
+
+def learning_chat_source_title(context: CaptureContext) -> str:
+    parts = [context.discipline_id]
+    if context.course_id is not None:
+        parts.append(context.course_id)
+    if context.chapter_id is not None:
+        parts.append(context.chapter_id)
+    return "Learning chat captures for " + " / ".join(parts)
 
 
 class LearningChatSourceCandidate(DomainModel):
@@ -474,18 +516,21 @@ def _id(prefix: str, *parts: Any) -> str:
 
 
 def learning_chat_source_candidate(context: CaptureContext) -> LearningChatSourceCandidate:
-    """Return deterministic, non-authoritative provenance for a session source."""
-    source_id = learning_chat_source_id(context)
-    if context.source_id != source_id:
+    """Return deterministic, non-authoritative provenance for a chat source."""
+    expected_source_ids = {
+        learning_chat_source_id(context),
+        legacy_learning_chat_source_id(context),
+    }
+    if context.source_id not in expected_source_ids:
         raise ValueError("capture context source_id is not a derived learning chat source")
     context_digest = _digest(context)
     return LearningChatSourceCandidate(
         candidate_id=_id("candidate_source", context_digest),
         context_digest=context_digest,
         source=SourceDocument(
-            source_id=source_id,
+            source_id=context.source_id,
             source_type="learning_chat",
-            title=f"Learning chat session {context.session_id}",
+            title=learning_chat_source_title(context),
             authority=0,
         ),
     )
