@@ -1,0 +1,531 @@
+{
+  "$defs": {
+    "CatalogConceptPromotion": {
+      "additionalProperties": false,
+      "properties": {
+        "candidate_id": {
+          "pattern": "^candidate_concept_[a-f0-9]{32}$",
+          "title": "Candidate Id",
+          "type": "string"
+        },
+        "concept": {
+          "$ref": "#/$defs/ConceptEntity"
+        }
+      },
+      "required": [
+        "candidate_id",
+        "concept"
+      ],
+      "title": "CatalogConceptPromotion",
+      "type": "object"
+    },
+    "ConceptAlias": {
+      "additionalProperties": false,
+      "properties": {
+        "text": {
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        },
+        "normalized": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Normalized"
+        },
+        "language": {
+          "title": "Language",
+          "type": "string"
+        },
+        "alias_type": {
+          "enum": [
+            "abbreviation",
+            "translation",
+            "synonym",
+            "legacy",
+            "trade_name",
+            "other"
+          ],
+          "title": "Alias Type",
+          "type": "string"
+        },
+        "source_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Id"
+        }
+      },
+      "required": [
+        "text",
+        "language",
+        "alias_type"
+      ],
+      "title": "ConceptAlias",
+      "type": "object"
+    },
+    "ConceptEntity": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.2.0",
+          "default": "1.2.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "concept_id": {
+          "pattern": "^concept_[a-f0-9]{32}$",
+          "title": "Concept Id",
+          "type": "string"
+        },
+        "canonical_name": {
+          "minLength": 1,
+          "title": "Canonical Name",
+          "type": "string"
+        },
+        "preferred_english": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Preferred English"
+        },
+        "concept_type": {
+          "enum": [
+            "disease",
+            "syndrome",
+            "symptom",
+            "sign",
+            "anatomy",
+            "physiology",
+            "pathology",
+            "mechanism",
+            "investigation",
+            "imaging_sign",
+            "drug",
+            "drug_class",
+            "procedure",
+            "complication",
+            "score",
+            "guideline",
+            "organism",
+            "gene",
+            "biomarker",
+            "other"
+          ],
+          "title": "Concept Type",
+          "type": "string"
+        },
+        "scope_note": {
+          "minLength": 1,
+          "title": "Scope Note",
+          "type": "string"
+        },
+        "definition": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Definition"
+        },
+        "inclusion_terms": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Inclusion Terms",
+          "type": "array"
+        },
+        "exclusion_terms": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Exclusion Terms",
+          "type": "array"
+        },
+        "broader_concept_ids": {
+          "default": [],
+          "items": {
+            "pattern": "^concept_[a-f0-9]{32}$",
+            "type": "string"
+          },
+          "title": "Broader Concept Ids",
+          "type": "array"
+        },
+        "external_identifiers": {
+          "$ref": "#/$defs/ExternalIdentifiers"
+        },
+        "aliases": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ConceptAlias"
+          },
+          "title": "Aliases",
+          "type": "array"
+        },
+        "status": {
+          "default": "active",
+          "enum": [
+            "active",
+            "deprecated",
+            "merged",
+            "split_pending"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "merged_into": {
+          "anyOf": [
+            {
+              "pattern": "^concept_[a-f0-9]{32}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Merged Into"
+        },
+        "match_fingerprint": {
+          "default": "",
+          "pattern": "^cfp_[a-f0-9]{16}$",
+          "title": "Match Fingerprint",
+          "type": "string"
+        }
+      },
+      "required": [
+        "concept_id",
+        "canonical_name",
+        "concept_type",
+        "scope_note"
+      ],
+      "title": "ConceptEntity",
+      "type": "object"
+    },
+    "ExternalIdentifiers": {
+      "additionalProperties": false,
+      "properties": {
+        "mesh": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Mesh",
+          "type": "array"
+        },
+        "snomed_ct": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Snomed Ct",
+          "type": "array"
+        },
+        "icd10": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Icd10",
+          "type": "array"
+        },
+        "loinc": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Loinc",
+          "type": "array"
+        },
+        "rxnorm": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Rxnorm",
+          "type": "array"
+        }
+      },
+      "title": "ExternalIdentifiers",
+      "type": "object"
+    },
+    "IncompleteConceptMetadata": {
+      "additionalProperties": false,
+      "properties": {
+        "resolution_id": {
+          "title": "Resolution Id",
+          "type": "string"
+        },
+        "surface_text": {
+          "title": "Surface Text",
+          "type": "string"
+        },
+        "evidence_message_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Evidence Message Ids",
+          "type": "array"
+        },
+        "required_fields": {
+          "items": {
+            "enum": [
+              "canonical_name",
+              "concept_type",
+              "scope_note"
+            ],
+            "type": "string"
+          },
+          "title": "Required Fields",
+          "type": "array"
+        }
+      },
+      "required": [
+        "resolution_id",
+        "surface_text",
+        "evidence_message_ids",
+        "required_fields"
+      ],
+      "title": "IncompleteConceptMetadata",
+      "type": "object"
+    },
+    "LearningChatSourceCandidate": {
+      "additionalProperties": false,
+      "description": "Non-authoritative source provenance awaiting a reviewed catalog patch.",
+      "properties": {
+        "candidate_id": {
+          "pattern": "^candidate_source_[a-f0-9]{32}$",
+          "title": "Candidate Id",
+          "type": "string"
+        },
+        "context_digest": {
+          "pattern": "^sha256:[a-f0-9]{64}$",
+          "title": "Context Digest",
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/SourceDocument"
+        }
+      },
+      "required": [
+        "candidate_id",
+        "context_digest",
+        "source"
+      ],
+      "title": "LearningChatSourceCandidate",
+      "type": "object"
+    },
+    "SourceDocument": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.2.0",
+          "default": "1.2.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "source_id": {
+          "pattern": "^source_[a-f0-9]{32}$",
+          "title": "Source Id",
+          "type": "string"
+        },
+        "source_type": {
+          "enum": [
+            "textbook",
+            "guideline",
+            "course_slide",
+            "paper",
+            "question_bank",
+            "learning_chat",
+            "web"
+          ],
+          "title": "Source Type",
+          "type": "string"
+        },
+        "title": {
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "authority": {
+          "maximum": 5,
+          "minimum": 0,
+          "title": "Authority",
+          "type": "integer"
+        },
+        "publication_date": {
+          "anyOf": [
+            {
+              "format": "date",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Publication Date"
+        },
+        "version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Version"
+        },
+        "vault_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Vault Path"
+        }
+      },
+      "required": [
+        "source_id",
+        "source_type",
+        "title",
+        "authority"
+      ],
+      "title": "SourceDocument",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "catalog_update_version": {
+      "const": "0.1.0",
+      "default": "0.1.0",
+      "title": "Catalog Update Version",
+      "type": "string"
+    },
+    "catalog_update_id": {
+      "pattern": "^catalog_update_[a-f0-9]{32}$",
+      "title": "Catalog Update Id",
+      "type": "string"
+    },
+    "capture_proposal_id": {
+      "pattern": "^proposal_[a-f0-9]{32}$",
+      "title": "Capture Proposal Id",
+      "type": "string"
+    },
+    "capture_proposal_digest": {
+      "pattern": "^sha256:[a-f0-9]{64}$",
+      "title": "Capture Proposal Digest",
+      "type": "string"
+    },
+    "capture_proposal_object_digest": {
+      "pattern": "^sha256:[a-f0-9]{64}$",
+      "title": "Capture Proposal Object Digest",
+      "type": "string"
+    },
+    "base_bundle_digest": {
+      "pattern": "^sha256:[a-f0-9]{64}$",
+      "title": "Base Bundle Digest",
+      "type": "string"
+    },
+    "target_bundle_path": {
+      "minLength": 1,
+      "title": "Target Bundle Path",
+      "type": "string"
+    },
+    "source_candidate": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/LearningChatSourceCandidate"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "concept_promotions": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/CatalogConceptPromotion"
+      },
+      "title": "Concept Promotions",
+      "type": "array"
+    },
+    "incomplete_concept_metadata": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/IncompleteConceptMetadata"
+      },
+      "title": "Incomplete Concept Metadata",
+      "type": "array"
+    },
+    "parent_catalog_update_id": {
+      "anyOf": [
+        {
+          "pattern": "^catalog_update_[a-f0-9]{32}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Parent Catalog Update Id"
+    },
+    "status": {
+      "enum": [
+        "ready_for_manual_merge",
+        "blocked"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "next_action": {
+      "title": "Next Action",
+      "type": "string"
+    }
+  },
+  "required": [
+    "catalog_update_id",
+    "capture_proposal_id",
+    "capture_proposal_digest",
+    "capture_proposal_object_digest",
+    "base_bundle_digest",
+    "target_bundle_path",
+    "status",
+    "next_action"
+  ],
+  "title": "CatalogUpdateProposal",
+  "type": "object"
+}

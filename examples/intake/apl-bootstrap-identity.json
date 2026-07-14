@@ -1,0 +1,18 @@
+{
+  "algorithm": "medlearn.learning_chat_source.v1",
+  "handoff_fixture": "apl-bootstrap-sanitized.json",
+  "session_id": "session_0cbdef9d7fc3c84e80e5139f6d9d69b4",
+  "source_id": "source_37351a40f6f7d39d1e014586b3d8b385",
+  "intake_sha256": "sha256:2b08d7c013858c7da303a123b8d460effb33048a6f3cc362dc487a289dc21dcf",
+  "worker_intake_sha256": "sha256:806bf41398d8351d0fe997aeac1a070bf8cf3c4d636e18ce6de87078e23ce5cf",
+  "nullable_context": {
+    "session_id": "session_0123456789abcdef0123456789abcdef",
+    "discipline_id": "medicine",
+    "course_id": null,
+    "chapter_id": null,
+    "locale": "zh-CN",
+    "session_started_at": "2026-07-14T19:00:00+08:00",
+    "captured_at": "2026-07-14T19:20:00+08:00"
+  },
+  "nullable_source_id": "source_0c45e11174bf483f43a6ded1bbae5f84"
+}

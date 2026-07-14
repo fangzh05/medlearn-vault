@@ -4,11 +4,15 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from medlearn_vault.bundle import ContractBundle
 from medlearn_vault.capture import (
+    CaptureContext,
     CaptureDraft,
     IntakeEnvelope,
+    build_capture_proposal,
     extract_capture_draft,
     intake_envelope_digest,
+    learning_chat_source_id,
 )
 from medlearn_vault.handoff import (
     MAX_EXCERPT,
@@ -110,7 +114,7 @@ def test_handoff_is_utf8_deterministic_and_revalidates_draft() -> None:
     assert handoff_digest(handoff).startswith("sha256:")
     draft = handoff_to_intake(handoff).draft
     assert CaptureDraft.model_validate_json(draft.model_dump_json()) == draft
-    assert draft.context.source_id == f"source_{handoff_digest(handoff)[7:39]}"
+    assert draft.context.source_id == learning_chat_source_id(draft.context)
     assert draft.evidence_messages[0].observed_at == draft.context.captured_at
     assert (
         handoff_to_intake(handoff).draft.evidence_messages[0].message_id
@@ -212,6 +216,35 @@ def test_synthetic_nonempty_handoff_converts_to_a_valid_intake_envelope() -> Non
     assert len(envelope.draft.misconception_candidates) == 1
 
 
+def test_apl_worker_python_source_identity_golden_bootstraps_a_candidate() -> None:
+    handoff = MedLearnHandoff.model_validate_json(
+        Path("examples/intake/apl-bootstrap-sanitized.json").read_text(encoding="utf-8")
+    )
+    golden = json.loads(
+        Path("examples/intake/apl-bootstrap-identity.json").read_text(encoding="utf-8")
+    )
+    exact, _ = handoff_submission(handoff)
+    envelope = IntakeEnvelope.model_validate_json(exact)
+    assert envelope.draft.context.session_id == golden["session_id"]
+    assert envelope.draft.context.source_id == golden["source_id"]
+    assert intake_envelope_digest(exact) == golden["intake_sha256"]
+    nullable = CaptureContext(
+        source_id="source_00000000000000000000000000000000",
+        **golden["nullable_context"],
+    )
+    assert learning_chat_source_id(nullable) == golden["nullable_source_id"]
+    worker_exact = Path("examples/intake/apl-bootstrap-worker-envelope.json").read_bytes()
+    worker_envelope = IntakeEnvelope.model_validate_json(worker_exact)
+    assert intake_envelope_digest(worker_exact) == golden["worker_intake_sha256"]
+    assert extract_capture_draft(worker_exact, intake_envelope_digest(worker_exact))
+    assert worker_envelope.draft.context.source_id == golden["source_id"]
+    proposal = build_capture_proposal(
+        ContractBundle.from_directory(Path("examples/copd")), worker_envelope.draft
+    )
+    assert proposal.source_candidate is not None
+    assert "MISSING_SOURCE" not in {issue.code for issue in proposal.issues}
+
+
 def test_handoff_rejects_long_excerpt_and_accepts_misconception_without_correction() -> None:
     too_long = payload()
     too_long["evidence_messages"][0]["excerpt"] = "x" * (MAX_EXCERPT + 1)  # type: ignore[index]
@@ -224,3 +257,54 @@ def test_handoff_rejects_long_excerpt_and_accepts_misconception_without_correcti
     assert (
         MedLearnHandoff.model_validate(no_correction).misconceptions[0].proposed_correction is None
     )
+
+
+# ── Converter v2 namespace tests ────────────────────────────────────────
+
+
+def test_converter_v2_idempotency_key_is_stable_golden() -> None:
+    """The v2 idempotency key must be deterministic across platforms."""
+    from medlearn_vault.handoff import HANDOFF_CONVERSION_VERSION
+
+    assert HANDOFF_CONVERSION_VERSION == "medlearn.handoff_to_intake.v2"
+    handoff = MedLearnHandoff.model_validate(payload())
+    key = handoff_idempotency_key(handoff)
+    assert key.startswith("medlearn-handoff-v2-")
+    # The key must be 64 hex chars after the prefix: medlearn-handoff-v2- + 64 = 83 chars
+    assert len(key) == len("medlearn-handoff-v2-") + 64
+    assert key == "medlearn-handoff-v2-" + handoff_digest(handoff)[7:]
+
+
+def test_converter_v2_idempotency_key_differs_from_v1() -> None:
+    """The v2 key must use a different prefix namespace than v1."""
+    handoff = MedLearnHandoff.model_validate(payload())
+    v2_key = handoff_idempotency_key(handoff)
+    # The old v1 key would have been medlearn-handoff-<digest>
+    v1_key = "medlearn-handoff-" + handoff_digest(handoff)[7:]
+    assert v1_key != v2_key
+    assert v2_key.startswith("medlearn-handoff-v2-")
+    assert v1_key.startswith("medlearn-handoff-")
+    # Both share the same semantic digest portion after the prefix
+    assert v2_key[len("medlearn-handoff-v2-"):] == v1_key[len("medlearn-handoff-"):]
+
+
+def test_converter_v2_intake_envelope_is_lf_only() -> None:
+    """Exact intake envelope bytes must be LF-only (no CR, no CRLF)."""
+    handoff = MedLearnHandoff.model_validate(payload())
+    exact, _ = handoff_submission(handoff)
+    text = exact.decode("utf-8")
+    assert "\r" not in text
+    # The Python converter produces compact JSON; the Worker appends \n.
+    # In both cases the bytes are CR-free.
+    assert b"\r\n" not in exact
+
+
+def test_converter_v2_no_random_nonce_in_key() -> None:
+    """The idempotency key must be purely deterministic — no UUID, nonce, or random."""
+    handoff = MedLearnHandoff.model_validate(payload())
+    first = handoff_idempotency_key(handoff)
+    second = handoff_idempotency_key(handoff)
+    third = handoff_idempotency_key(
+        MedLearnHandoff.model_validate(json.loads(canonical_handoff_json(handoff)))
+    )
+    assert first == second == third

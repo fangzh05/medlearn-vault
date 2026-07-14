@@ -22,6 +22,8 @@ from medlearn_vault.capture import (
     InvalidIntakeEnvelope,
     build_capture_proposal,
     capture_proposal_digest,
+    contract_bundle_digest,
+    exact_capture_proposal_json,
     extract_capture_draft,
     render_capture_proposal_markdown,
 )
@@ -136,6 +138,11 @@ class JobRecord(DomainModel):
     created_at: AwareDatetime
     updated_at: AwareDatetime
     error_code: str | None = Field(default=None, pattern=r"^[A-Z][A-Z0-9_]{0,127}$")
+    reproposal_of_job_id: str | None = Field(default=None, pattern=JOB_ID_PATTERN)
+    reproposal_of_proposal_id: str | None = Field(default=None, pattern=PROPOSAL_ID_PATTERN)
+    catalog_update_id: str | None = Field(
+        default=None, pattern=r"^catalog_update_[a-f0-9]{32}$"
+    )
 
     @model_validator(mode="after")
     def validate_status_fields(self) -> JobRecord:
@@ -292,6 +299,18 @@ class ProposalInspectionResult(DomainModel):
     verified: Literal[True] = True
 
 
+class ReproposalResult(DomainModel):
+    """Sanitized result of an explicit catalog reproposal operation."""
+
+    source_job_id: str = Field(pattern=JOB_ID_PATTERN)
+    proposal_id: str = Field(pattern=PROPOSAL_ID_PATTERN)
+    base_bundle_digest: str = Field(pattern=DIGEST_PATTERN)
+    reused: bool = False
+
+
+CATALOG_UPDATE_ID_PATTERN = r"^catalog_update_[a-f0-9]{32}$"
+
+
 class OrchestrationResult(DomainModel):
     status: Literal["succeeded", "blocked", "lease_held"]
     proposal_id: str | None = None
@@ -314,6 +333,24 @@ def _canonical_json_bytes(value: DomainModel | dict[str, Any] | tuple[Any, ...])
     return json.dumps(
         value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     ).encode("utf-8")
+
+
+def _id(prefix: str, *parts: Any) -> str:
+    """Deterministic content-addressed identity from the canonical JSON of parts."""
+
+    def _serialize(value: Any) -> Any:
+        if isinstance(value, DomainModel):
+            return _serialize(value.model_dump(mode="json"))
+        if isinstance(value, dict):
+            return {key: _serialize(val) for key, val in sorted(value.items())}
+        if isinstance(value, (list, tuple)):
+            return [_serialize(item) for item in value]
+        return value
+
+    payload = json.dumps(
+        _serialize(parts), ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return f"{prefix}_{hashlib.sha256(payload).hexdigest()[:32]}"
 
 
 def approval_identity(
@@ -988,7 +1025,7 @@ class ProposalOrchestrator:
         try:
             draft = CaptureDraft.model_validate_json(draft_bytes)
             proposal = build_capture_proposal(bundle, draft)
-            proposal_bytes = _json_bytes(proposal)
+            proposal_bytes = exact_capture_proposal_json(proposal)
             review_bytes = render_capture_proposal_markdown(proposal, bundle=bundle).encode()
             if execution.status in {"succeeded", "blocked"}:
                 self._verify_terminal_outputs(execution, proposal, proposal_bytes, review_bytes)
@@ -1297,3 +1334,354 @@ class ProposalOrchestrator:
                     )
         except Exception:
             return
+
+
+class ReproposalOrchestrator:
+    """Explicit, bounded manual reproposal that reuses the exact immutable Intake
+    but creates a new Job/Proposal against the current catalog.
+
+    This is the only path from a blocked bootstrap Proposal to a ready
+    Proposal after catalog merge.  It never mutates the terminal blocked Job.
+
+    It cryptographically verifies a repository-tracked CatalogMergeReceipt
+    committed at catalog_updates/<catalog_update_id>/receipt.json — the
+    only proof that the catalog patch was actually merged.
+    """
+
+    def __init__(self, store: ObjectStore, repository_root: Path) -> None:
+        self.store = store
+        self.repository_root = repository_root.resolve()
+
+    def run(
+        self,
+        source_job_id: str,
+        blocked_proposal_id: str,
+        catalog_update_id: str,
+        previous_base_bundle_digest: str,
+        confirmation: str,
+        *,
+        bundle_path: str,
+        now: datetime | None = None,
+    ) -> ReproposalResult:
+        from medlearn_vault.catalog_update import (
+            CatalogMergeReceipt,
+            canonical_receipt_json,
+            receipt_object_digest,
+        )
+
+        current_time = now or datetime.now(UTC)
+        if current_time.tzinfo is None:
+            raise WorkflowError("INVALID_REPROPOSAL_INPUT")
+        valid_input = (
+            re.fullmatch(JOB_ID_PATTERN, source_job_id) is not None
+            and re.fullmatch(PROPOSAL_ID_PATTERN, blocked_proposal_id) is not None
+            and re.fullmatch(CATALOG_UPDATE_ID_PATTERN, catalog_update_id) is not None
+            and re.fullmatch(DIGEST_PATTERN, previous_base_bundle_digest) is not None
+            and confirmation == blocked_proposal_id
+        )
+        if not valid_input:
+            raise WorkflowError("INVALID_REPROPOSAL_INPUT")
+
+        # 1. Read and verify the existing blocked Job
+        job_key = f"v1/jobs/{source_job_id}.json"
+        job_stored = self._read(job_key, "JOB_NOT_FOUND")
+        try:
+            job = JobRecord.model_validate_json(job_stored.body)
+        except (ValueError, TypeError) as exc:
+            raise WorkflowError("INVALID_JOB") from exc
+        if (
+            job.job_id != source_job_id
+            or job.status != "blocked"
+            or job.proposal_id is None
+            or job.proposal_id != blocked_proposal_id
+            or job.workflow_run_id is None
+        ):
+            raise WorkflowError("INVALID_JOB")
+
+        # 2. Read and verify the blocked Execution
+        execution_key = f"v1/executions/{source_job_id}.json"
+        execution_stored = self._read(execution_key, "EXECUTION_NOT_FOUND")
+        try:
+            execution = ProposalExecutionRecord.model_validate_json(execution_stored.body)
+        except (ValueError, TypeError) as exc:
+            raise WorkflowError("INVALID_EXECUTION") from exc
+        if (
+            execution.job_id != source_job_id
+            or execution.status != "blocked"
+            or execution.proposal_id != blocked_proposal_id
+            or execution.proposal_digest is None
+            or execution.review_digest is None
+        ):
+            raise WorkflowError("INVALID_EXECUTION")
+
+        # 3. Read and verify exact Intake bytes
+        intake_key = job.intake_object_key
+        intake_stored = self._read(intake_key, "INTAKE_NOT_FOUND")
+        intake_digest = _digest(intake_stored.body)
+        if intake_digest != job.intake_digest:
+            raise WorkflowError("INTAKE_DIGEST_MISMATCH")
+
+        # 4. Read and verify the blocked Proposal
+        proposal_key = f"v1/proposals/{blocked_proposal_id}.json"
+        proposal_stored = self._read(proposal_key, "PROPOSAL_NOT_FOUND")
+        try:
+            blocked_proposal = CaptureProposal.model_validate_json(proposal_stored.body)
+        except (ValueError, TypeError) as exc:
+            raise WorkflowError("INVALID_PROPOSAL") from exc
+        if blocked_proposal.proposal_id != blocked_proposal_id:
+            raise WorkflowError("INVALID_PROPOSAL")
+        if capture_proposal_digest(blocked_proposal) != blocked_proposal.proposal_digest:
+            raise WorkflowError("INVALID_PROPOSAL")
+        if blocked_proposal.status != "blocked":
+            raise WorkflowError("PROPOSAL_NOT_BLOCKED")
+        if not any(
+            issue.code == "CATALOG_UPDATE_REQUIRED" for issue in blocked_proposal.issues
+        ):
+            raise WorkflowError("PROPOSAL_NOT_BLOCKED")
+        if blocked_proposal.base_bundle_digest != previous_base_bundle_digest:
+            raise WorkflowError("BASE_BUNDLE_DIGEST_MISMATCH")
+
+        # 5. Read and verify Review
+        review_key = f"v1/reviews/{blocked_proposal_id}.md"
+        review_stored = self._read(review_key, "REVIEW_NOT_FOUND")
+        if _digest(review_stored.body) != execution.review_digest:
+            raise WorkflowError("REVIEW_DIGEST_MISMATCH")
+
+        # 6. Load the current bundle and verify it differs from the blocked bundle
+        resolved_bundle_path = resolve_bundle_path(self.repository_root, bundle_path)
+        try:
+            bundle = ContractBundle.from_directory(resolved_bundle_path)
+        except WorkflowError as exc:
+            raise WorkflowError("INVALID_BUNDLE") from exc
+        current_bundle_digest = contract_bundle_digest(bundle)
+        if current_bundle_digest == previous_base_bundle_digest:
+            raise WorkflowError("STALE_BASE_BUNDLE")
+
+        # 7. Load and cryptographically verify the catalog merge receipt.
+        #    The receipt is the only proof that the catalog patch identified
+        #    by catalog_update_id was actually merged into the repository.
+        receipt_path = (
+            self.repository_root
+            / "catalog_updates"
+            / catalog_update_id
+            / "receipt.json"
+        )
+        try:
+            receipt_bytes = receipt_path.read_bytes()
+        except (OSError, ValueError) as exc:
+            raise WorkflowError("RECEIPT_NOT_FOUND") from exc
+
+        # Verify receipt is valid UTF-8, LF-only, LF-terminated
+        try:
+            receipt_text = receipt_bytes.decode("utf-8")
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise WorkflowError("INVALID_RECEIPT") from exc
+        if "\r" in receipt_text or not receipt_text.endswith("\n"):
+            raise WorkflowError("INVALID_RECEIPT")
+
+        # Parse and validate receipt
+        try:
+            receipt = CatalogMergeReceipt.model_validate_json(receipt_bytes)
+        except (ValueError, TypeError) as exc:
+            raise WorkflowError("INVALID_RECEIPT") from exc
+
+        # Verify canonical byte-for-byte consistency
+        expected_canonical = canonical_receipt_json(receipt)
+        if expected_canonical != receipt_bytes:
+            raise WorkflowError("INVALID_RECEIPT")
+
+        receipt_digest = receipt_object_digest(receipt)
+
+        # Verify receipt identity
+        if receipt.catalog_update_id != catalog_update_id:
+            raise WorkflowError("RECEIPT_CATALOG_MISMATCH")
+
+        # Verify receipt is bound to the blocked Proposal
+        if receipt.capture_proposal_id != blocked_proposal_id:
+            raise WorkflowError("RECEIPT_PROPOSAL_MISMATCH")
+        if receipt.capture_proposal_digest != blocked_proposal.proposal_digest:
+            raise WorkflowError("RECEIPT_PROPOSAL_MISMATCH")
+        proposal_object_digest = _digest(proposal_stored.body)
+        if receipt.capture_proposal_object_digest != proposal_object_digest:
+            raise WorkflowError("RECEIPT_PROPOSAL_MISMATCH")
+
+        # Verify base bundle digest matches the blocked Proposal
+        if receipt.previous_base_bundle_digest != previous_base_bundle_digest:
+            raise WorkflowError("RECEIPT_BUNDLE_MISMATCH")
+
+        # Verify target bundle path
+        if receipt.target_bundle_path != bundle_path:
+            raise WorkflowError("RECEIPT_BUNDLE_PATH_MISMATCH")
+
+        # Hash the current exact sources.json and concepts.json from the bundle
+        # and require them to equal the receipt's sources_new_digest and
+        # concepts_new_digest.  This proves the catalog patch was actually
+        # applied.
+        sources_path = resolved_bundle_path / "sources.json"
+        concepts_path = resolved_bundle_path / "concepts.json"
+        try:
+            current_sources = sources_path.read_bytes()
+            current_concepts = concepts_path.read_bytes()
+        except (OSError, ValueError) as exc:
+            raise WorkflowError("INVALID_BUNDLE") from exc
+
+        current_sources_digest = _digest(current_sources)
+        current_concepts_digest = _digest(current_concepts)
+        if current_sources_digest != receipt.sources_new_digest:
+            raise WorkflowError("RECEIPT_SOURCES_MISMATCH")
+        if current_concepts_digest != receipt.concepts_new_digest:
+            raise WorkflowError("RECEIPT_CONCEPTS_MISMATCH")
+
+        # 8. Derive the reproposal Job identity, bound to the receipt digest.
+        #    This cryptographically links the reproposal to the exact merged
+        #    catalog patch, not just the user-supplied catalog_update_id.
+        reproposal_job_id = _id(
+            "reproposal",
+            "0.1.0",
+            source_job_id,
+            blocked_proposal_id,
+            catalog_update_id,
+            receipt_digest,
+            current_bundle_digest,
+            intake_digest,
+        )
+
+        # 9. Check idempotency: if the reproposal Job already exists, verify and return
+        reproposal_job_key = f"v1/jobs/{reproposal_job_id}.json"
+        existing_job = self.store.get(reproposal_job_key)
+        if existing_job is not None:
+            try:
+                existing = JobRecord.model_validate_json(existing_job.body)
+            except (ValueError, TypeError) as exc:
+                raise WorkflowError("REPROPOSAL_CONFLICT") from exc
+            if (
+                existing.job_id != reproposal_job_id
+                or existing.intake_digest != intake_digest
+                or existing.intake_object_key != intake_key
+                or existing.reproposal_of_job_id != source_job_id
+                or existing.reproposal_of_proposal_id != blocked_proposal_id
+                or existing.catalog_update_id != catalog_update_id
+            ):
+                raise WorkflowError("REPROPOSAL_CONFLICT")
+            if existing.status in {"succeeded", "blocked"} and existing.proposal_id:
+                return ReproposalResult(
+                    source_job_id=reproposal_job_id,
+                    proposal_id=existing.proposal_id,
+                    base_bundle_digest=current_bundle_digest,
+                    reused=True,
+                )
+            raise WorkflowError("REPROPOSAL_CONFLICT")
+
+        # 10. Extract draft from exact Intake bytes and rebuild Proposal
+        try:
+            draft_bytes, _ = extract_capture_draft(intake_stored.body, intake_digest)
+        except (IntakeDigestMismatch, InvalidIntakeEnvelope) as exc:
+            raise WorkflowError("INVALID_INTAKE_ENVELOPE") from exc
+        try:
+            draft = CaptureDraft.model_validate_json(draft_bytes)
+        except (ValueError, TypeError) as exc:
+            raise WorkflowError("INVALID_INTAKE_ENVELOPE") from exc
+
+        proposal = build_capture_proposal(bundle, draft)
+        proposal_bytes = exact_capture_proposal_json(proposal)
+        review_bytes = render_capture_proposal_markdown(proposal, bundle=bundle).encode()
+        proposal_digest = _digest(proposal_bytes)
+
+        # 11. Create-only write the new reproposal Job
+        reproposal_now = current_time
+        reproposal_job = JobRecord(
+            job_id=reproposal_job_id,
+            status="succeeded" if proposal.status == "ready_for_review" else "blocked",
+            intake_digest=intake_digest,
+            intake_object_key=intake_key,
+            proposal_id=proposal.proposal_id,
+            workflow_run_id=reproposal_job_id,
+            dispatch_attempt=0,
+            created_at=reproposal_now,
+            updated_at=reproposal_now,
+            reproposal_of_job_id=source_job_id,
+            reproposal_of_proposal_id=blocked_proposal_id,
+            catalog_update_id=catalog_update_id,
+        )
+        if not self.store.create(
+            reproposal_job_key,
+            _json_bytes(reproposal_job),
+            content_type="application/json",
+        ):
+            winner = self.store.get(reproposal_job_key)
+            if winner is None:
+                raise WorkflowError("CONTROL_STORE_FAILURE")
+            try:
+                existing = JobRecord.model_validate_json(winner.body)
+            except (ValueError, TypeError) as exc:
+                raise WorkflowError("REPROPOSAL_CONFLICT") from exc
+            if (
+                existing.job_id != reproposal_job_id
+                or existing.status != reproposal_job.status
+                or existing.proposal_id != proposal.proposal_id
+                or existing.intake_digest != intake_digest
+            ):
+                raise WorkflowError("REPROPOSAL_CONFLICT")
+            return ReproposalResult(
+                source_job_id=reproposal_job_id,
+                proposal_id=proposal.proposal_id,
+                base_bundle_digest=current_bundle_digest,
+                reused=True,
+            )
+
+        # 12. Create-only write Execution
+        execution_status: Literal["succeeded", "blocked"] = (
+            "blocked" if proposal.status == "blocked" else "succeeded"
+        )
+        reproposal_execution = ProposalExecutionRecord(
+            job_id=reproposal_job_id,
+            status=execution_status,
+            proposal_id=proposal.proposal_id,
+            proposal_digest=proposal_digest,
+            review_digest=_digest(review_bytes),
+            workflow_run_id=reproposal_job_id,
+            created_at=reproposal_now,
+            updated_at=reproposal_now,
+        )
+        if not self.store.create(
+            f"v1/executions/{reproposal_job_id}.json",
+            _json_bytes(reproposal_execution),
+            content_type="application/json",
+        ):
+            raise WorkflowError("CONTROL_STORE_FAILURE")
+
+        # 13. Create-only write Proposal and Review
+        self._create_or_verify(
+            f"v1/proposals/{proposal.proposal_id}.json",
+            proposal_bytes,
+            "application/json",
+        )
+        self._create_or_verify(
+            f"v1/reviews/{proposal.proposal_id}.md",
+            review_bytes,
+            "text/markdown; charset=utf-8",
+        )
+
+        return ReproposalResult(
+            source_job_id=reproposal_job_id,
+            proposal_id=proposal.proposal_id,
+            base_bundle_digest=current_bundle_digest,
+        )
+
+    def _read(self, key: str, missing_code: str) -> StoredObject:
+        try:
+            stored = self.store.get(key)
+        except WorkflowError:
+            raise
+        except Exception as exc:
+            raise WorkflowError("CONTROL_STORE_FAILURE") from exc
+        if stored is None:
+            raise WorkflowError(missing_code)
+        return stored
+
+    def _create_or_verify(self, key: str, expected: bytes, content_type: str) -> None:
+        if self.store.create(key, expected, content_type=content_type):
+            return
+        existing = self.store.get(key)
+        if existing is None or existing.body != expected:
+            raise WorkflowError("PROPOSAL_COLLISION")

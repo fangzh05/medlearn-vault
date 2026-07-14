@@ -17,11 +17,13 @@ from medlearn_vault.capture import (
     ExtractedLearnerEvidenceCandidate,
     ExtractedMisconceptionCandidate,
     IntakeEnvelope,
+    learning_chat_source_id,
 )
 from medlearn_vault.domain.base import AwareDatetime, DomainModel
 from medlearn_vault.domain.concepts import ConceptType
 
 HANDOFF_VERSION: Literal["0.1.0"] = "0.1.0"
+HANDOFF_CONVERSION_VERSION = "medlearn.handoff_to_intake.v2"
 MAX_HANDOFF_BYTES = 256 * 1024
 MAX_HANDOFF_ITEMS = 100
 MAX_TEXT = 4000
@@ -187,7 +189,9 @@ def handoff_digest(handoff: MedLearnHandoff) -> str:
 
 
 def handoff_idempotency_key(handoff: MedLearnHandoff) -> str:
-    return "medlearn-handoff-" + handoff_digest(handoff)[7:]
+    """Stable, versioned idempotency key.  Changing HANDOFF_CONVERSION_VERSION
+    creates a separate idempotency namespace so old records are never touched."""
+    return f"medlearn-handoff-v2-{handoff_digest(handoff)[7:]}"
 
 
 def handoff_to_intake(handoff: MedLearnHandoff) -> IntakeEnvelope:
@@ -234,16 +238,18 @@ def handoff_to_intake(handoff: MedLearnHandoff) -> IntakeEnvelope:
         )
         for item in handoff.unresolved_questions
     )
-    draft = CaptureDraft(
-        context=CaptureContext(
-            source_id=f"source_{digest[:32]}",
+    context = CaptureContext(
+            source_id="source_00000000000000000000000000000000",
             session_id=f"session_{digest[:32]}",
             discipline_id=handoff.session.discipline_id,
             course_id=handoff.session.course_id,
             chapter_id=handoff.session.chapter_id,
             session_started_at=handoff.session.session_started_at,
             captured_at=handoff.session.captured_at,
-        ),
+        )
+    context = context.model_copy(update={"source_id": learning_chat_source_id(context)})
+    draft = CaptureDraft(
+        context=context,
         evidence_messages=evidence,
         concept_mentions=tuple(
             ExtractedConceptMention(

@@ -60,6 +60,9 @@ export interface JobRecord {
   created_at: string;
   updated_at: string;
   error_code?: string;
+  reproposal_of_job_id?: string;
+  reproposal_of_proposal_id?: string;
+  catalog_update_id?: string;
 }
 
 interface IdempotencyRecord {
@@ -76,6 +79,7 @@ const MAX_HANDOFF_BODY = 256 * 1024;
 const LEASE_MS = 30_000;
 const CURRENT_INTAKE_VERSION = "0.1.0";
 const CURRENT_DRAFT_VERSION = "0.3.0";
+const HANDOFF_CONVERSION_VERSION = "medlearn.handoff_to_intake.v2";
 const ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 const PROPOSAL_ID = /^proposal_[a-f0-9]{32}$/;
 
@@ -262,6 +266,9 @@ function sanitizeJob(job: JobRecord): JobRecord {
   if (job.dispatch_lease_id !== undefined) clean.dispatch_lease_id = job.dispatch_lease_id;
   if (job.dispatch_lease_expires_at !== undefined) clean.dispatch_lease_expires_at = job.dispatch_lease_expires_at;
   if (job.error_code !== undefined) clean.error_code = job.error_code;
+  if (job.reproposal_of_job_id !== undefined) clean.reproposal_of_job_id = job.reproposal_of_job_id;
+  if (job.reproposal_of_proposal_id !== undefined) clean.reproposal_of_proposal_id = job.reproposal_of_proposal_id;
+  if (job.catalog_update_id !== undefined) clean.catalog_update_id = job.catalog_update_id;
   return clean;
 }
 
@@ -459,7 +466,48 @@ function handoffSemanticError(handoff: Record<string, unknown>): string | null {
   return null;
 }
 
-async function convertHandoff(handoff: Record<string, unknown>): Promise<{ body: ArrayBuffer; idempotencyKey: string }> {
+const LEARNING_CHAT_SOURCE_IDENTITY_VERSION = "medlearn.learning_chat_source.v1";
+
+function sourceIdentityField(value: string | null): Uint8Array {
+  if (value === null) return new TextEncoder().encode("N");
+  const encoded = new TextEncoder().encode(value);
+  const header = new TextEncoder().encode(`S${encoded.byteLength}:`);
+  const result = new Uint8Array(header.byteLength + encoded.byteLength);
+  result.set(header);
+  result.set(encoded, header.byteLength);
+  return result;
+}
+
+function learningChatSourceIdentityPayload(context: {
+  session_id: string; discipline_id: string; course_id: string | null; chapter_id: string | null;
+  locale: string; session_started_at: string; captured_at: string;
+}): Uint8Array {
+  const fields = [
+    new TextEncoder().encode(LEARNING_CHAT_SOURCE_IDENTITY_VERSION),
+    sourceIdentityField(context.session_id), sourceIdentityField(context.discipline_id),
+    sourceIdentityField(context.course_id), sourceIdentityField(context.chapter_id),
+    sourceIdentityField(context.locale), sourceIdentityField(context.session_started_at),
+    sourceIdentityField(context.captured_at),
+  ];
+  const length = fields.reduce((total, field) => total + field.byteLength, fields.length - 1);
+  const result = new Uint8Array(length);
+  let offset = 0;
+  for (const field of fields) {
+    result.set(field, offset);
+    offset += field.byteLength;
+    if (offset < result.byteLength) result[offset++] = 0;
+  }
+  return result;
+}
+
+export async function learningChatSourceId(context: {
+  session_id: string; discipline_id: string; course_id: string | null; chapter_id: string | null;
+  locale: string; session_started_at: string; captured_at: string;
+}): Promise<string> {
+  return `source_${(await sha256(learningChatSourceIdentityPayload(context))).slice(0, 32)}`;
+}
+
+export async function convertHandoff(handoff: Record<string, unknown>): Promise<{ body: ArrayBuffer; idempotencyKey: string }> {
   if ((handoff.learning_goals as unknown[]).length || (handoff.unfinished_topics as unknown[]).length)
     throw new Error("HANDOFF_CONVERSION_FAILURE");
   const canonical = canonicalJson(handoff);
@@ -481,12 +529,16 @@ async function convertHandoff(handoff: Record<string, unknown>): Promise<{ body:
     claims.push({ statement: item.statement, claim_type: "question", concept_terms: item.concept_terms,
       evidence_message_ids: refs(item.evidence_local_ids as string[]), question_priority: item.question_priority as string });
   }
+  const context = {
+    session_id: `session_${digest.slice(0, 32)}`,
+    discipline_id: session.discipline_id as string, course_id: session.course_id,
+    chapter_id: session.chapter_id, locale: "zh-CN",
+    session_started_at: session.session_started_at as string, captured_at: session.captured_at as string,
+  };
   const draft = {
     draft_version: "0.3.0",
     context: {
-      source_id: `source_${digest.slice(0, 32)}`, session_id: `session_${digest.slice(0, 32)}`,
-      discipline_id: session.discipline_id, course_id: session.course_id, chapter_id: session.chapter_id,
-      locale: "zh-CN", session_started_at: session.session_started_at, captured_at: session.captured_at,
+      source_id: await learningChatSourceId(context), ...context,
     },
     evidence_messages: messages.map((item) => ({
       message_id: messageIds.get(item.local_id as string), role: item.role,
@@ -511,8 +563,9 @@ async function convertHandoff(handoff: Record<string, unknown>): Promise<{ body:
   };
   const envelope = { intake_version: "0.1.0", client_kind: "chatgpt_work", draft };
   if (!validateEnvelope(envelope)) throw new Error("HANDOFF_CONVERSION_FAILURE");
-  const encoded = new TextEncoder().encode(canonicalJson(envelope));
-  return { body: encoded.buffer.slice(encoded.byteOffset, encoded.byteOffset + encoded.byteLength), idempotencyKey: `medlearn-handoff-${digest}` };
+  const encoded = new TextEncoder().encode(`${canonicalJson(envelope)}\n`);
+  const versionSuffix = HANDOFF_CONVERSION_VERSION.split(".").pop()!; // "v2"
+  return { body: encoded.buffer.slice(encoded.byteOffset, encoded.byteOffset + encoded.byteLength), idempotencyKey: `medlearn-handoff-${versionSuffix}-${digest}` };
 }
 
 const MCP_SCOPE = "medlearn:handoff:submit";
