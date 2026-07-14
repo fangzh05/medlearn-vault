@@ -1,18 +1,15 @@
-name: MedLearn Propose
+name: MedLearn Auto Publish
 
 on:
+  workflow_call:
+    inputs:
+      source_job_id:
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
-      job_id:
-        description: Fixed control-plane job identifier
-        required: true
-        type: string
-      intake_object_key:
-        description: Content-addressed control intake object
-        required: true
-        type: string
-      intake_digest:
-        description: SHA-256 digest of exact IntakeEnvelope bytes
+      source_job_id:
+        description: Existing control-plane Job identifier
         required: true
         type: string
 
@@ -20,11 +17,11 @@ permissions:
   contents: read
 
 concurrency:
-  group: medlearn-propose-${{ inputs.job_id }}
+  group: medlearn-auto-publish-${{ inputs.source_job_id }}
   cancel-in-progress: false
 
 jobs:
-  propose:
+  auto-publish:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -40,22 +37,16 @@ jobs:
       - run: |
           python -m pip install --require-hashes -r requirements/workflow.txt
           python -m pip install --no-build-isolation --no-deps .
-      - name: Build or verify proposal
+      - name: Auto-approve and publish eligible Job
         env:
           CONTROL_R2_ENDPOINT: ${{ secrets.CONTROL_R2_ENDPOINT }}
           CONTROL_R2_ACCESS_KEY_ID: ${{ secrets.CONTROL_R2_ACCESS_KEY_ID }}
           CONTROL_R2_SECRET_ACCESS_KEY: ${{ secrets.CONTROL_R2_SECRET_ACCESS_KEY }}
+          VAULT_R2_ENDPOINT: ${{ secrets.VAULT_R2_ENDPOINT }}
+          VAULT_R2_ACCESS_KEY_ID: ${{ secrets.VAULT_R2_ACCESS_KEY_ID }}
+          VAULT_R2_SECRET_ACCESS_KEY: ${{ secrets.VAULT_R2_SECRET_ACCESS_KEY }}
           MEDLEARN_PROPOSE_BUNDLE_PATH: ${{ vars.MEDLEARN_PROPOSE_BUNDLE_PATH }}
-          MEDLEARN_JOB_ID: ${{ inputs.job_id }}
-          MEDLEARN_INTAKE_OBJECT_KEY: ${{ inputs.intake_object_key }}
-          MEDLEARN_INTAKE_DIGEST: ${{ inputs.intake_digest }}
-        run: >-
-          medlearn workflow propose "$MEDLEARN_JOB_ID"
-          "$MEDLEARN_INTAKE_OBJECT_KEY" "$MEDLEARN_INTAKE_DIGEST"
-  auto-publish:
-    needs: propose
-    if: github.ref == 'refs/heads/main' && vars.MEDLEARN_AUTO_PUBLISH_DISABLED != 'true'
-    uses: ./.github/workflows/medlearn-auto-publish.yml
-    with:
-      source_job_id: ${{ inputs.job_id }}
-    secrets: inherit
+          MEDLEARN_SOURCE_JOB_ID: ${{ inputs.source_job_id }}
+        run: |
+          result=$(medlearn workflow auto-publish "$MEDLEARN_SOURCE_JOB_ID" --json)
+          printf '%s\n' "$result" >> "$GITHUB_STEP_SUMMARY"

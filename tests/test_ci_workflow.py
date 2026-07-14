@@ -99,3 +99,32 @@ def test_publication_workflow_is_main_only_and_scopes_control_credentials() -> N
     assert "MEDLEARN_PROPOSE_BUNDLE_PATH" in final["env"]
     assert "medlearn-vault" not in text and "upload-artifact" not in text
     assert "GITHUB_STEP_SUMMARY" not in text and "set -x" not in text
+
+
+def test_auto_publish_workflow_is_reusable_and_propose_calls_it() -> None:
+    text = Path(".github/workflows/medlearn-auto-publish.yml").read_text(encoding="utf-8")
+    data = yaml.load(text, Loader=yaml.BaseLoader)
+    assert set(data["on"]) == {"workflow_call", "workflow_dispatch"}
+    for trigger in data["on"].values():
+        assert trigger["inputs"]["source_job_id"]["required"] == "true"
+    assert data["permissions"] == {"contents": "read"}
+    assert data["concurrency"]["group"] == "medlearn-auto-publish-${{ inputs.source_job_id }}"
+    job = data["jobs"]["auto-publish"]
+    assert job["if"] == "github.ref == 'refs/heads/main'"
+    assert job["timeout-minutes"] == "15"
+    assert "env" not in job
+    for step in job["steps"]:
+        if "uses" in step:
+            assert re.fullmatch(r"[^@]+@[0-9a-f]{40}", step["uses"])
+    assert job["steps"][0]["with"] == {"persist-credentials": "false", "ref": "main"}
+    final = job["steps"][-1]
+    assert "medlearn workflow auto-publish" in final["run"]
+    assert set(key for key in final["env"] if key.endswith("SECRET_ACCESS_KEY")) == {
+        "CONTROL_R2_SECRET_ACCESS_KEY",
+        "VAULT_R2_SECRET_ACCESS_KEY",
+    }
+
+    propose = Path(".github/workflows/medlearn-propose.yml").read_text(encoding="utf-8")
+    assert "MEDLEARN_AUTO_PUBLISH_DISABLED != 'true'" in propose
+    assert "./.github/workflows/medlearn-auto-publish.yml" in propose
+    assert "secrets: inherit" in propose

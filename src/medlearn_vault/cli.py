@@ -79,6 +79,7 @@ from medlearn_vault.windows_rollout import (
 from medlearn_vault.workflow import (
     ApprovalAttestor,
     ApprovalOrchestrator,
+    AutoPublicationOrchestrator,
     JobRecord,
     ProposalApprovalRecord,
     ProposalExecutionRecord,
@@ -571,6 +572,48 @@ def workflow_inspect_proposal(source_job_id: str) -> None:
         f"expected_base_bundle_digest={result.expected_base_bundle_digest} "
         f"review_digest={result.review_digest} workflow_run_id={result.workflow_run_id}"
     )
+
+
+@workflow_app.command("auto-publish")
+def workflow_auto_publish(
+    source_job_id: str,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Approve and publish one eligible completed Job using only its Job ID."""
+    from medlearn_vault.vault_writer import S3VaultObjectStore
+
+    try:
+        control_store = S3ObjectStore(
+            os.environ.get("CONTROL_R2_ENDPOINT", ""),
+            os.environ.get("CONTROL_R2_ACCESS_KEY_ID", ""),
+            os.environ.get("CONTROL_R2_SECRET_ACCESS_KEY", ""),
+        )
+        vault_store = S3VaultObjectStore(
+            os.environ.get("VAULT_R2_ENDPOINT", ""),
+            os.environ.get("VAULT_R2_ACCESS_KEY_ID", ""),
+            os.environ.get("VAULT_R2_SECRET_ACCESS_KEY", ""),
+        )
+        result = AutoPublicationOrchestrator(control_store, vault_store, Path.cwd()).run(
+            source_job_id,
+            bundle_path=os.environ.get("MEDLEARN_PROPOSE_BUNDLE_PATH", ""),
+        )
+    except WorkflowError as exc:
+        if json_output:
+            typer.echo(json.dumps({"error_code": exc.code}, separators=(",", ":")))
+        else:
+            typer.echo(f"error_code={exc.code}", err=True)
+        raise typer.Exit(1) from exc
+    except ValidationError as exc:
+        if json_output:
+            typer.echo('{"error_code":"INVALID_AUTO_PUBLICATION_INPUT"}')
+        else:
+            typer.echo("error_code=INVALID_AUTO_PUBLICATION_INPUT", err=True)
+        raise typer.Exit(1) from exc
+    payload = result.model_dump(exclude_none=True)
+    if json_output:
+        typer.echo(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+    else:
+        typer.echo(" ".join(f"{key}={value}" for key, value in payload.items()))
 
 
 @workflow_app.command("publish-vault")

@@ -51,6 +51,16 @@ permission. Submit a synthetic intake and verify the job, execution, proposal, a
 No approval, LearningCapture commit, Vault bucket access, Obsidian sync, or mobile intake setup is
 part of this deployment.
 
+## Automatic publication (0.15.0)
+
+`medlearn-propose.yml` now calls `medlearn-auto-publish.yml` after a successful Proposal unless
+repository variable `MEDLEARN_AUTO_PUBLISH_DISABLED` is exactly `true`. The reusable workflow and
+its manual dispatch recovery route accept only `source_job_id`, check out fixed `main`, and scope
+control and Vault credentials to the single business step. It verifies immutable provenance and
+only auto-approves eligible `chatgpt_work` Proposals; blocked or unsafe Proposals return
+`manual_review_required` without writes. Existing manual Approve, Plan Publication and Publish
+Vault workflows remain available for audit and recovery.
+
 ## Vault read API (0.11.0)
 
 PR #19 adds two read-only Vault endpoints to the Worker. Deploy with:
