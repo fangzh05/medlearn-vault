@@ -1,18 +1,26 @@
 {
   "name": "medlearn",
   "version": "0.14.0",
-  "description": "Submit explicit MedLearnHandoff Project Sources through the authenticated MedLearn workflow.",
-  "skills": "./skills/",
+  "description": "Submit exactly one explicit MedLearnHandoff through the authenticated MedLearn MCP workflow.",
   "interface": {
     "displayName": "MedLearn",
     "shortDescription": "Submit structured learning handoffs",
-    "longDescription": "Reads an explicitly selected MedLearnHandoff from the current Work context and submits it through the authenticated MedLearn intake pipeline.",
+    "longDescription": "Submits exactly one explicitly selected or provided MedLearnHandoff through the authenticated MedLearn intake pipeline. It must not scan other sources, infer missing evidence, alter the handoff, auto-approve content, or auto-publish.",
     "developerName": "fangzh05",
     "category": "Productivity",
-    "capabilities": ["Read", "Write"],
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
     "defaultPrompt": [
-      "Read the explicitly selected MedLearnHandoff Project Source and submit it with the MedLearn tool.",
-      "Do not infer or add evidence that is absent from the selected Handoff."
+      "Process exactly one MedLearnHandoff 0.1.0 explicitly selected or explicitly provided by the user in the current context.",
+      "If no single handoff is selected, or more than one handoff is a candidate, stop and ask the user to select exactly one.",
+      "Do not search or inspect other chats, Project Sources, project memory, files, or conversation history for additional evidence.",
+      "Do not infer, rewrite, summarize, correct, supplement, or add concepts, claims, learner evidence, misconceptions, corrections, unresolved questions, unfinished topics, learning goals, or any other handoff field.",
+      "Require handoff_version to equal 0.1.0 and require learning_goals and unfinished_topics to be empty until the conversion boundary supports them.",
+      "Pass the handoff object unchanged to submit_learning_handoff. Do not JSON-encode it as a string, call HTTP directly, or use another submission tool.",
+      "Do not auto-approve, auto-publish, or represent a successful submission as published knowledge.",
+      "On success return only status, job_id, intake_digest, and the returned counts. On failure return the stable error code without fallback."
     ]
   }
 }

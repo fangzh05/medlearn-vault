@@ -3,9 +3,12 @@
 ## Phase A: code complete
 
 The repository contains the MCP lifecycle, OAuth Resource Server boundary, the
-explicit-source Skill, and plugin manifest. No production `.app.json` is
-generated or OAuth provider is configured, so this phase cannot submit to
-production.
+Plugin instructions, and the plugin manifest. In the actual production environment,
+the OAuth provider is configured, the ChatGPT Developer App is connected, and
+`submit_learning_handoff` has successfully returned `job_id` and `intake_digest`.
+However, the full Proposal → Approval → Publication → Obsidian E2E flow is not
+yet finalized, and the repository does not contain any real `.app.json`, App ID,
+or secrets.
 
 ## Phase B: real deployment
 
@@ -25,7 +28,7 @@ production.
 
 5. Commit the generated `.app.json` and manifest wiring, install the local
    plugin, then in a new Work task explicitly select one Project Source and
-   invoke `@MedLearn` / `submit-learning-handoff`.
+   invoke `submit_learning_handoff`.
 6. Verify the returned `job_id`, then repeat the same Source to confirm
    idempotency.
 
