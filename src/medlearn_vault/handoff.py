@@ -26,6 +26,7 @@ HANDOFF_VERSION: Literal["0.1.0"] = "0.1.0"
 HANDOFF_CONVERSION_VERSION = "medlearn.handoff_to_intake.v4"
 MAX_HANDOFF_BYTES = 256 * 1024
 MAX_HANDOFF_ITEMS = 100
+MAX_SEGMENT_MESSAGES = 50
 MAX_TEXT = 4000
 MAX_EXCERPT = 1000
 HandoffText = Annotated[str, StringConstraints(max_length=MAX_TEXT)]
@@ -176,6 +177,113 @@ class MedLearnHandoff(DomainModel):
         ):
             raise ValueError("evidence times must fall within the capture interval")
         return self
+
+
+class LearningSegment(DomainModel):
+    """Immutable 0.2.0 metadata around one compatible 0.1.0 handoff."""
+
+    segment_version: Literal["0.2.0"] = "0.2.0"
+    learning_session_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+    segment_index: int = Field(ge=0)
+    previous_segment_digest: str | None = Field(default=None, pattern=r"^sha256:[a-f0-9]{64}$")
+    first_evidence_marker: str = Field(min_length=1, max_length=256)
+    last_evidence_marker: str = Field(min_length=1, max_length=256)
+    segment_message_count: int = Field(ge=1, le=MAX_SEGMENT_MESSAGES)
+    coverage_status: Literal["complete", "partial", "unknown"]
+    coverage_note: str | None = Field(default=None, max_length=1000)
+    finalized: bool = False
+    handoff: MedLearnHandoff
+
+    @model_validator(mode="after")
+    def validate_segment(self) -> LearningSegment:
+        if self.segment_message_count != len(self.handoff.evidence_messages):
+            raise ValueError("segment_message_count must match evidence_messages")
+        if len(self.handoff.evidence_messages) > MAX_SEGMENT_MESSAGES:
+            raise ValueError("segment exceeds maximum evidence messages")
+        if (self.segment_index == 0) != (self.previous_segment_digest is None):
+            raise ValueError("first segment has no predecessor; later segments require one")
+        if self.coverage_status != "complete" and not self.coverage_note:
+            raise ValueError("partial or unknown coverage requires coverage_note")
+        return self
+
+
+def segment_digest(segment: LearningSegment) -> str:
+    payload = json.dumps(
+        segment.model_dump(mode="json"), ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
+class AggregatedLearningSession(DomainModel):
+    """Verified session summary. It never claims recovery of unsubmitted chat."""
+
+    protocol_version: Literal["0.2.0"] = "0.2.0"
+    learning_session_id: str
+    coverage_status: Literal["complete", "partial", "unknown"]
+    coverage_note: str | None = None
+    finalized: bool
+    segment_digests: tuple[str, ...]
+    evidence_message_count: int
+    learner_evidence_count: int
+    misconception_count: int
+    unresolved_count: int
+
+
+def aggregate_segments(segments: tuple[LearningSegment, ...]) -> AggregatedLearningSession:
+    """Verify ordering and content-addressed linkage before finalization.
+
+    Replayed segment bytes have the same digest and are deliberately ignored.
+    A gap or an explicitly partial input can only produce partial coverage.
+    """
+    if not segments:
+        raise ValueError("SEGMENT_SESSION_EMPTY")
+    unique = {segment_digest(item): item for item in segments}
+    ordered = tuple(sorted(unique.values(), key=lambda item: item.segment_index))
+    if len({item.learning_session_id for item in ordered}) != 1:
+        raise ValueError("SEGMENT_SESSION_MISMATCH")
+    digests = tuple(segment_digest(item) for item in ordered)
+    contiguous = [item.segment_index for item in ordered] == list(range(len(ordered)))
+    chain = contiguous and all(
+        index == 0 or item.previous_segment_digest == digests[index - 1]
+        for index, item in enumerate(ordered)
+    )
+    if contiguous and not chain:
+        raise ValueError("SEGMENT_CHAIN_INVALID")
+    partial = not contiguous or any(item.coverage_status != "complete" for item in ordered)
+    notes = [item.coverage_note for item in ordered if item.coverage_status != "complete"]
+    if not contiguous:
+        notes.append("segment gap detected")
+    evidence_ids = {
+        (message.local_id, message.excerpt)
+        for item in ordered
+        for message in item.handoff.evidence_messages
+    }
+    learner_ids = {
+        (item.evidence_type, item.concept_terms, item.evidence_local_ids)
+        for segment in ordered
+        for item in segment.handoff.learner_evidence
+    }
+    misconception_ids = {
+        (item.observed_error_logic, item.observed_error_local_ids)
+        for segment in ordered
+        for item in segment.handoff.misconceptions
+    }
+    question_ids = {
+        (item.statement, item.evidence_local_ids)
+        for segment in ordered
+        for item in segment.handoff.unresolved_questions
+    }
+    return AggregatedLearningSession(
+        learning_session_id=ordered[0].learning_session_id,
+        coverage_status="partial" if partial else "complete",
+        coverage_note="; ".join(note for note in notes if note) or None,
+        finalized=ordered[-1].finalized,
+        segment_digests=digests,
+        evidence_message_count=len(evidence_ids),
+        learner_evidence_count=len(learner_ids),
+        misconception_count=len(misconception_ids),
+        unresolved_count=len(question_ids),
+    )
 
 
 def canonical_handoff_json(handoff: MedLearnHandoff) -> bytes:

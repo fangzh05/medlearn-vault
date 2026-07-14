@@ -4,10 +4,10 @@
 ✅ READY_FOR_REVIEW
 
 ## 提案身份
-- Proposal ID: `proposal_76ed3895131b47f9f911bea832360344`
+- Proposal ID: `proposal_a85230257d06f0f2a1c8a4aa728c6fee`
 - Draft digest: `sha256:3b8e2334e4e89d85fc349f43c3bd8df86be6a1b538a596837fb1ff09093e28ad`
-- Base bundle digest: `sha256:7a3b0ffdf137e3c53c57b7030643f5e4adbab47a0525c0c319d34238ab62116d`
-- Proposal digest: `sha256:bff082408c6c6b5b524e8d45071ff3c7a3e5fac5b53508fc45dd6d77e85deaa1`
+- Base bundle digest: `sha256:c127cccf3bf76397c1be4e820e7eaa6fd697bd3b4c5a46acde55fc40de191347`
+- Proposal digest: `sha256:ba4e7d92b6b73603342d7a929b0bc611b9f98b59e866fb9d5e41c843bd997fdc`
 
 ## 已匹配概念
 - COPD → COPD（慢性阻塞性肺疾病）

@@ -173,7 +173,7 @@
       "rxnorm": []
     },
     "aliases": [],
-    "status": "active",
+    "status": "deprecated",
     "match_fingerprint": "cfp_9597a2dfc38c3fa9"
   },
   {
@@ -308,7 +308,7 @@
       "rxnorm": []
     },
     "aliases": [],
-    "status": "active",
+    "status": "deprecated",
     "match_fingerprint": "cfp_103cbd23c5f80409"
   },
   {
@@ -344,7 +344,7 @@
       "rxnorm": []
     },
     "aliases": [],
-    "status": "active",
+    "status": "deprecated",
     "match_fingerprint": "cfp_731c087a9efdc046"
   },
   {
@@ -365,7 +365,7 @@
       "rxnorm": []
     },
     "aliases": [],
-    "status": "active",
+    "status": "deprecated",
     "match_fingerprint": "cfp_864ad2a641a3c798"
   },
   {
@@ -407,7 +407,7 @@
       "rxnorm": []
     },
     "aliases": [],
-    "status": "active",
+    "status": "deprecated",
     "match_fingerprint": "cfp_5b2ea00109d02609"
   },
   {
@@ -498,7 +498,7 @@
       "rxnorm": []
     },
     "aliases": [],
-    "status": "active",
+    "status": "deprecated",
     "match_fingerprint": "cfp_3642baf4b55ed240"
   },
   {
@@ -519,7 +519,7 @@
       "rxnorm": []
     },
     "aliases": [],
-    "status": "active",
+    "status": "deprecated",
     "match_fingerprint": "cfp_11b87c890a669ba9"
   },
   {
@@ -589,7 +589,7 @@
       "rxnorm": []
     },
     "aliases": [],
-    "status": "active",
+    "status": "deprecated",
     "match_fingerprint": "cfp_3971d8cc69dab300"
   },
   {
@@ -652,7 +652,7 @@
       "rxnorm": []
     },
     "aliases": [],
-    "status": "active",
+    "status": "deprecated",
     "match_fingerprint": "cfp_eadc03f568a819c1"
   },
   {
@@ -764,7 +764,7 @@
       "rxnorm": []
     },
     "aliases": [],
-    "status": "active",
+    "status": "deprecated",
     "match_fingerprint": "cfp_e9d5715f67aa1493"
   },
   {
@@ -785,7 +785,7 @@
       "rxnorm": []
     },
     "aliases": [],
-    "status": "active",
+    "status": "deprecated",
     "match_fingerprint": "cfp_47fa663c3e2336e2"
   },
   {
@@ -827,7 +827,7 @@
       "rxnorm": []
     },
     "aliases": [],
-    "status": "active",
+    "status": "deprecated",
     "match_fingerprint": "cfp_c6df215a503efb28"
   },
   {
@@ -848,7 +848,7 @@
       "rxnorm": []
     },
     "aliases": [],
-    "status": "active",
+    "status": "deprecated",
     "match_fingerprint": "cfp_7875e1566a69ac76"
   },
   {
@@ -890,7 +890,7 @@
       "rxnorm": []
     },
     "aliases": [],
-    "status": "active",
+    "status": "deprecated",
     "match_fingerprint": "cfp_774c06c83a9b31b3"
   },
   {
@@ -911,7 +911,7 @@
       "rxnorm": []
     },
     "aliases": [],
-    "status": "active",
+    "status": "deprecated",
     "match_fingerprint": "cfp_8f81595b823da8cc"
   },
   {
@@ -953,7 +953,7 @@
       "rxnorm": []
     },
     "aliases": [],
-    "status": "active",
+    "status": "deprecated",
     "match_fingerprint": "cfp_73ed8fcab98fbe28"
   },
   {

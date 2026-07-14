@@ -30,6 +30,7 @@ from medlearn_vault.capture import (
     render_capture_proposal_markdown,
 )
 from medlearn_vault.domain.base import AwareDatetime, DomainModel
+from medlearn_vault.domain.learner import LearningCapture
 
 if TYPE_CHECKING:
     from medlearn_vault.vault_writer import VaultObjectStore
@@ -70,9 +71,7 @@ class ObjectStore(Protocol):
 
     def create(self, key: str, body: bytes, *, content_type: str) -> bool: ...
 
-    def compare_and_swap(
-        self, key: str, body: bytes, etag: str, *, content_type: str
-    ) -> bool: ...
+    def compare_and_swap(self, key: str, body: bytes, etag: str, *, content_type: str) -> bool: ...
 
 
 class ReadOnlyObjectStore(Protocol):
@@ -115,9 +114,7 @@ class JobRecord(DomainModel):
                 {
                     "if": {
                         "properties": {
-                            "status": {
-                                "enum": ["succeeded", "blocked", "failed", "expired"]
-                            }
+                            "status": {"enum": ["succeeded", "blocked", "failed", "expired"]}
                         }
                     },
                     "then": {
@@ -146,9 +143,7 @@ class JobRecord(DomainModel):
     error_code: str | None = Field(default=None, pattern=r"^[A-Z][A-Z0-9_]{0,127}$")
     reproposal_of_job_id: str | None = Field(default=None, pattern=JOB_ID_PATTERN)
     reproposal_of_proposal_id: str | None = Field(default=None, pattern=PROPOSAL_ID_PATTERN)
-    catalog_update_id: str | None = Field(
-        default=None, pattern=r"^catalog_update_[a-f0-9]{32}$"
-    )
+    catalog_update_id: str | None = Field(default=None, pattern=r"^catalog_update_[a-f0-9]{32}$")
 
     @model_validator(mode="after")
     def validate_status_fields(self) -> JobRecord:
@@ -199,9 +194,7 @@ class ProposalExecutionRecord(DomainModel):
             raise ValueError("successful executions require output identities")
         if self.status == "failed" and self.error_code is None:
             raise ValueError("failed executions require error_code")
-        if self.status == "running" and (
-            self.lease_owner is None or self.lease_expires_at is None
-        ):
+        if self.status == "running" and (self.lease_owner is None or self.lease_expires_at is None):
             raise ValueError("running executions require a lease")
         return self
 
@@ -325,6 +318,26 @@ class AutoPublicationResult(DomainModel):
     manual_review_reason: str | None = None
 
 
+class WorkflowTraceResult(DomainModel):
+    """Read-only correlation of the control-plane objects for one source Job."""
+
+    source_job_id: str
+    intake_digest: str
+    proposal_id: str | None = None
+    proposal_status: str | None = None
+    approval_id: str | None = None
+    publication_plan_id: str | None = None
+    capture_id: str | None = None
+    json_path: str | None = None
+    markdown_path: str | None = None
+    publication_status: Literal[
+        "not_proposed", "blocked", "manual_review_required", "planned", "published"
+    ]
+    blocker_code: str | None = None
+    submitted_counts: dict[str, int]
+    materialized_counts: dict[str, int]
+
+
 class ReproposalResult(DomainModel):
     """Sanitized result of an explicit catalog reproposal operation."""
 
@@ -343,10 +356,146 @@ class OrchestrationResult(DomainModel):
     reused: bool = False
 
 
+def trace_source_job(store: ReadOnlyObjectStore, source_job_id: str) -> WorkflowTraceResult:
+    """Follow only exact stored identities; never guess a Capture by timestamp."""
+    job_stored = store.get(f"v1/jobs/{source_job_id}.json")
+    if job_stored is None:
+        raise WorkflowError("JOB_NOT_FOUND")
+    job = JobRecord.model_validate_json(job_stored.body)
+    intake_stored = store.get(job.intake_object_key)
+    if intake_stored is None or _digest(intake_stored.body) != job.intake_digest:
+        raise WorkflowError("INTAKE_DIGEST_MISMATCH")
+    intake = IntakeEnvelope.model_validate_json(intake_stored.body)
+    draft = intake.draft
+    submitted = {
+        "concept_count": len(draft.concept_mentions),
+        "claim_count": len(draft.claim_candidates),
+        "learner_evidence_count": len(draft.learner_evidence_candidates),
+        "misconception_count": len(draft.misconception_candidates),
+        "unresolved_count": sum(item.claim_type == "question" for item in draft.claim_candidates),
+        "unfinished_count": 0,
+    }
+    empty = {
+        "concept_count": 0,
+        "learner_evidence_count": 0,
+        "misconception_count": 0,
+        "unresolved_count": 0,
+    }
+    if job.proposal_id is None:
+        return WorkflowTraceResult(
+            source_job_id=source_job_id,
+            intake_digest=job.intake_digest,
+            publication_status="not_proposed",
+            blocker_code=job.error_code,
+            submitted_counts=submitted,
+            materialized_counts=empty,
+        )
+    proposal_stored = store.get(f"v1/proposals/{job.proposal_id}.json")
+    if proposal_stored is None:
+        raise WorkflowError("PROPOSAL_NOT_FOUND")
+    proposal = CaptureProposal.model_validate_json(proposal_stored.body)
+    blockers = [item.code for item in proposal.issues if item.severity in {"error", "review"}]
+    if proposal.status == "blocked":
+        return WorkflowTraceResult(
+            source_job_id=source_job_id,
+            intake_digest=job.intake_digest,
+            proposal_id=proposal.proposal_id,
+            proposal_status=proposal.status,
+            publication_status="manual_review_required",
+            blocker_code=blockers[0] if blockers else None,
+            submitted_counts=submitted,
+            materialized_counts=empty,
+        )
+    approval_id = approval_identity(
+        proposal.proposal_id, _digest(proposal_stored.body), proposal.base_bundle_digest
+    )
+    approval_stored = store.get(f"v1/approvals/{approval_id}.json")
+    if approval_stored is None:
+        return WorkflowTraceResult(
+            source_job_id=source_job_id,
+            intake_digest=job.intake_digest,
+            proposal_id=proposal.proposal_id,
+            proposal_status=proposal.status,
+            approval_id=approval_id,
+            publication_status="planned",
+            blocker_code="APPROVAL_NOT_FOUND",
+            submitted_counts=submitted,
+            materialized_counts=empty,
+        )
+    approval = ProposalApprovalRecord.model_validate_json(approval_stored.body)
+    if approval.decision != "approved":
+        return WorkflowTraceResult(
+            source_job_id=source_job_id,
+            intake_digest=job.intake_digest,
+            proposal_id=proposal.proposal_id,
+            proposal_status=proposal.status,
+            approval_id=approval_id,
+            publication_status="manual_review_required",
+            blocker_code=approval.rejection_code,
+            submitted_counts=submitted,
+            materialized_counts=empty,
+        )
+    from medlearn_vault.publication import publication_plan_identity
+
+    execution_stored = store.get(f"v1/executions/{source_job_id}.json")
+    execution = (
+        ProposalExecutionRecord.model_validate_json(execution_stored.body)
+        if execution_stored
+        else None
+    )
+    if execution is None or execution.review_digest is None:
+        raise WorkflowError("EXECUTION_NOT_FOUND")
+    plan_id = publication_plan_identity(
+        approval_id,
+        _digest(approval_stored.body),
+        proposal.proposal_id,
+        _digest(proposal_stored.body),
+        proposal.base_bundle_digest,
+        execution.review_digest,
+    )
+    plan_stored = store.get(f"v1/publication-plans/{plan_id}.json")
+    if plan_stored is None:
+        return WorkflowTraceResult(
+            source_job_id=source_job_id,
+            intake_digest=job.intake_digest,
+            proposal_id=proposal.proposal_id,
+            proposal_status=proposal.status,
+            approval_id=approval_id,
+            publication_plan_id=plan_id,
+            publication_status="planned",
+            blocker_code="PUBLICATION_PLAN_NOT_FOUND",
+            submitted_counts=submitted,
+            materialized_counts=empty,
+        )
+    from medlearn_vault.publication import VaultPublicationPlan
+
+    plan = VaultPublicationPlan.model_validate_json(plan_stored.body)
+    capture = LearningCapture.model_validate_json(plan.artifacts[0].content_utf8)
+    receipt = store.get(f"v1/publications/{plan_id}.json")
+    return WorkflowTraceResult(
+        source_job_id=source_job_id,
+        intake_digest=job.intake_digest,
+        proposal_id=proposal.proposal_id,
+        proposal_status=proposal.status,
+        approval_id=approval_id,
+        publication_plan_id=plan_id,
+        capture_id=plan.capture_id,
+        json_path=plan.artifacts[0].path,
+        markdown_path=plan.artifacts[1].path,
+        publication_status="published" if receipt else "planned",
+        blocker_code=None,
+        submitted_counts=submitted,
+        materialized_counts={
+            "concept_count": len(capture.concept_mentions),
+            "learner_evidence_count": len(capture.learner_evidence),
+            "misconception_count": len(capture.misconception_observations),
+            "unresolved_count": len(capture.open_questions),
+        },
+    )
+
+
 def _json_bytes(value: DomainModel) -> bytes:
-    return (
-        json.dumps(value.model_dump(mode="json"), ensure_ascii=False, indent=2) + "\n"
-    ).encode()
+    return (json.dumps(value.model_dump(mode="json"), ensure_ascii=False, indent=2) + "\n").encode()
 
 
 def _digest(value: bytes) -> str:
@@ -356,9 +505,9 @@ def _digest(value: bytes) -> str:
 def _canonical_json_bytes(value: DomainModel | dict[str, Any] | tuple[Any, ...]) -> bytes:
     if isinstance(value, DomainModel):
         value = value.model_dump(mode="json")
-    return json.dumps(
-        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-    ).encode("utf-8")
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
+        "utf-8"
+    )
 
 
 def _id(prefix: str, *parts: Any) -> str:
@@ -523,8 +672,7 @@ class ApprovalAttestor:
             )
             and (
                 expected_rejection_code is None
-                or re.fullmatch(r"^[A-Z][A-Z0-9_]{0,127}$", expected_rejection_code)
-                is not None
+                or re.fullmatch(r"^[A-Z][A-Z0-9_]{0,127}$", expected_rejection_code) is not None
             )
             and not (expected_decision == "approved" and expected_rejection_code is not None)
             and not (expected_decision == "rejected" and expected_rejection_code is None)
@@ -532,9 +680,7 @@ class ApprovalAttestor:
         if not valid_input:
             raise WorkflowError("INVALID_ATTESTATION_INPUT")
 
-        approval_stored = self._read(
-            f"v1/approvals/{approval_id}.json", "APPROVAL_NOT_FOUND"
-        )
+        approval_stored = self._read(f"v1/approvals/{approval_id}.json", "APPROVAL_NOT_FOUND")
         try:
             approval = ProposalApprovalRecord.model_validate_json(approval_stored.body)
         except (ValueError, TypeError) as exc:
@@ -563,9 +709,7 @@ class ApprovalAttestor:
         ):
             raise WorkflowError("APPROVAL_EXPECTATION_MISMATCH")
 
-        proposal_stored = self._read(
-            f"v1/proposals/{proposal_id}.json", "PROPOSAL_NOT_FOUND"
-        )
+        proposal_stored = self._read(f"v1/proposals/{proposal_id}.json", "PROPOSAL_NOT_FOUND")
         try:
             proposal = CaptureProposal.model_validate_json(proposal_stored.body)
         except (ValueError, TypeError) as exc:
@@ -597,9 +741,7 @@ class ApprovalAttestor:
         if job.proposal_id != proposal_id:
             raise WorkflowError("CONTROL_OUTPUT_MISMATCH")
 
-        execution_stored = self._read(
-            f"v1/executions/{source_job_id}.json", "EXECUTION_NOT_FOUND"
-        )
+        execution_stored = self._read(f"v1/executions/{source_job_id}.json", "EXECUTION_NOT_FOUND")
         try:
             execution = ProposalExecutionRecord.model_validate_json(execution_stored.body)
         except (ValueError, TypeError) as exc:
@@ -695,15 +837,11 @@ class PublicationPlanOrchestrator:
         if approval_stored is None:
             raise WorkflowError("APPROVAL_NOT_FOUND")
         try:
-            approval_pre = ProposalApprovalRecord.model_validate_json(
-                approval_stored.body
-            )
+            approval_pre = ProposalApprovalRecord.model_validate_json(approval_stored.body)
         except (ValueError, TypeError) as exc:
             raise WorkflowError("INVALID_APPROVAL") from exc
         decision: str = approval_pre.decision
-        rejection_code: str | None = (
-            approval_pre.rejection_code if decision == "rejected" else None
-        )
+        rejection_code: str | None = approval_pre.rejection_code if decision == "rejected" else None
 
         # Always attest — digest, identity, proposal and bundle binding are
         # verified before we route on the decision.
@@ -780,9 +918,7 @@ class ProposalOutputInspector:
     def __init__(self, store: ReadOnlyObjectStore) -> None:
         self.store = store
 
-    def run(
-        self, source_job_id: str, *, allow_blocked: bool = False
-    ) -> ProposalInspectionResult:
+    def run(self, source_job_id: str, *, allow_blocked: bool = False) -> ProposalInspectionResult:
         if re.fullmatch(JOB_ID_PATTERN, source_job_id) is None:
             raise WorkflowError("INVALID_ATTESTATION_INPUT")
 
@@ -801,9 +937,7 @@ class ProposalOutputInspector:
         ):
             raise WorkflowError("INVALID_JOB")
 
-        execution_stored = self._read(
-            f"v1/executions/{source_job_id}.json", "EXECUTION_NOT_FOUND"
-        )
+        execution_stored = self._read(f"v1/executions/{source_job_id}.json", "EXECUTION_NOT_FOUND")
         try:
             execution = ProposalExecutionRecord.model_validate_json(execution_stored.body)
         except (ValueError, TypeError) as exc:
@@ -824,9 +958,7 @@ class ProposalOutputInspector:
         ):
             raise WorkflowError("CONTROL_OUTPUT_MISMATCH")
 
-        proposal_stored = self._read(
-            f"v1/proposals/{job.proposal_id}.json", "PROPOSAL_NOT_FOUND"
-        )
+        proposal_stored = self._read(f"v1/proposals/{job.proposal_id}.json", "PROPOSAL_NOT_FOUND")
         try:
             proposal = CaptureProposal.model_validate_json(proposal_stored.body)
         except (ValueError, TypeError) as exc:
@@ -835,17 +967,14 @@ class ProposalOutputInspector:
         if (
             proposal.proposal_id != job.proposal_id
             or capture_proposal_digest(proposal) != proposal.proposal_digest
-            or proposal.status not in (
-                {"ready_for_review", "blocked"} if allow_blocked else {"ready_for_review"}
-            )
+            or proposal.status
+            not in ({"ready_for_review", "blocked"} if allow_blocked else {"ready_for_review"})
         ):
             raise WorkflowError("INVALID_PROPOSAL")
         if proposal_object_digest != execution.proposal_digest:
             raise WorkflowError("CONTROL_OUTPUT_MISMATCH")
 
-        review_stored = self._read(
-            f"v1/reviews/{job.proposal_id}.md", "REVIEW_NOT_FOUND"
-        )
+        review_stored = self._read(f"v1/reviews/{job.proposal_id}.md", "REVIEW_NOT_FOUND")
         review_digest = _digest(review_stored.body)
         if review_digest != execution.review_digest:
             raise WorkflowError("REVIEW_DIGEST_MISMATCH")
@@ -899,9 +1028,7 @@ class AutoPublicationOrchestrator:
         if job.job_id != source_job_id or job.proposal_id is None:
             raise WorkflowError("INVALID_JOB")
 
-        proposal_stored = self._read(
-            f"v1/proposals/{job.proposal_id}.json", "PROPOSAL_NOT_FOUND"
-        )
+        proposal_stored = self._read(f"v1/proposals/{job.proposal_id}.json", "PROPOSAL_NOT_FOUND")
         try:
             proposal = CaptureProposal.model_validate_json(proposal_stored.body)
         except (TypeError, ValueError) as exc:
@@ -1010,8 +1137,7 @@ class AutoPublicationOrchestrator:
         if proposal.new_concept_candidates:
             return "NEW_CONCEPT_CANDIDATE"
         if any(
-            item.status not in {"matched", "redirected"}
-            for item in proposal.concept_resolutions
+            item.status not in {"matched", "redirected"} for item in proposal.concept_resolutions
         ):
             return "UNRESOLVED_CONCEPT"
         if any(
@@ -1108,9 +1234,7 @@ class S3ObjectStore(S3ReadOnlyObjectStore):
     def create(self, key: str, body: bytes, *, content_type: str) -> bool:
         return self._put(key, body, content_type=content_type, if_none_match="*")
 
-    def compare_and_swap(
-        self, key: str, body: bytes, etag: str, *, content_type: str
-    ) -> bool:
+    def compare_and_swap(self, key: str, body: bytes, etag: str, *, content_type: str) -> bool:
         return self._put(key, body, content_type=content_type, if_match=etag)
 
     def _put(
@@ -1215,9 +1339,7 @@ class ProposalOrchestrator:
                 resolve_bundle_path(self.repository_root, bundle_path)
             )
         except WorkflowError as exc:
-            self._record_failure(
-                job_key, execution_key, workflow_run_id, exc.code, current_time
-            )
+            self._record_failure(job_key, execution_key, workflow_run_id, exc.code, current_time)
             raise
 
         execution_stored = self.store.get(execution_key)
@@ -1238,9 +1360,7 @@ class ProposalOrchestrator:
             review_bytes = render_capture_proposal_markdown(proposal, bundle=bundle).encode()
             if execution.status in {"succeeded", "blocked"}:
                 self._verify_terminal_outputs(execution, proposal, proposal_bytes, review_bytes)
-                self._reconcile_terminal_job(
-                    job_key, inputs, execution, current_time
-                )
+                self._reconcile_terminal_job(job_key, inputs, execution, current_time)
                 return OrchestrationResult(
                     status=execution.status, proposal_id=proposal.proposal_id, reused=True
                 )
@@ -1292,9 +1412,7 @@ class ProposalOrchestrator:
                 content_type="application/json",
             ):
                 raise WorkflowError("STALE_JOB_UPDATE")
-            return OrchestrationResult(
-                status=terminal_status, proposal_id=proposal.proposal_id
-            )
+            return OrchestrationResult(status=terminal_status, proposal_id=proposal.proposal_id)
         except WorkflowError as exc:
             self._record_failure(job_key, execution_key, workflow_run_id, exc.code, current_time)
             raise
@@ -1643,9 +1761,7 @@ class ReproposalOrchestrator:
             raise WorkflowError("INVALID_PROPOSAL")
         if blocked_proposal.status != "blocked":
             raise WorkflowError("PROPOSAL_NOT_BLOCKED")
-        if not any(
-            issue.code == "CATALOG_UPDATE_REQUIRED" for issue in blocked_proposal.issues
-        ):
+        if not any(issue.code == "CATALOG_UPDATE_REQUIRED" for issue in blocked_proposal.issues):
             raise WorkflowError("PROPOSAL_NOT_BLOCKED")
         if blocked_proposal.base_bundle_digest != previous_base_bundle_digest:
             raise WorkflowError("BASE_BUNDLE_DIGEST_MISMATCH")
@@ -1669,12 +1785,7 @@ class ReproposalOrchestrator:
         # 7. Load and cryptographically verify the catalog merge receipt.
         #    The receipt is the only proof that the catalog patch identified
         #    by catalog_update_id was actually merged into the repository.
-        receipt_path = (
-            self.repository_root
-            / "catalog_updates"
-            / catalog_update_id
-            / "receipt.json"
-        )
+        receipt_path = self.repository_root / "catalog_updates" / catalog_update_id / "receipt.json"
         try:
             receipt_bytes = receipt_path.read_bytes()
         except (OSError, ValueError) as exc:

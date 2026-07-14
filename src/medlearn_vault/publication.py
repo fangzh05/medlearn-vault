@@ -13,7 +13,7 @@ from pydantic import Field, model_validator
 from medlearn_vault.bundle import ContractBundle
 from medlearn_vault.capture import CaptureProposal, materialize_learning_capture
 from medlearn_vault.domain.base import DomainModel
-from medlearn_vault.domain.learner import LearningCapture
+from medlearn_vault.domain.learner import LearnerEvidence, LearningCapture
 from medlearn_vault.terminology import format_concept_label
 
 DIGEST_PATTERN = r"^sha256:[a-f0-9]{64}$"
@@ -158,9 +158,7 @@ class VaultPublicationPlan(DomainModel):
         try:
             capture = LearningCapture.model_validate_json(json_artifact.content_utf8)
         except Exception as exc:
-            raise ValueError(
-                "JSON artifact does not parse as LearningCapture"
-            ) from exc
+            raise ValueError("JSON artifact does not parse as LearningCapture") from exc
 
         recoded = canonical_learning_capture_json(capture)
         if json_bytes != recoded:
@@ -169,13 +167,10 @@ class VaultPublicationPlan(DomainModel):
         # --- Markdown artifact path from captured_at local timezone ---
         captured = capture.captured_at
         expected_md_path = (
-            f"MedLearn/Captures/{captured.year:04d}/{captured.month:02d}/"
-            f"{self.capture_id}.md"
+            f"MedLearn/Captures/{captured.year:04d}/{captured.month:02d}/{self.capture_id}.md"
         )
         if md_artifact.path != expected_md_path:
-            raise ValueError(
-                "Markdown artifact path does not match capture_id and captured_at"
-            )
+            raise ValueError("Markdown artifact path does not match capture_id and captured_at")
 
         # --- Paths must be unique ---
         if len({item.path for item in self.artifacts}) != 2:
@@ -255,9 +250,7 @@ def build_vault_publication_receipt(plan: VaultPublicationPlan) -> VaultPublicat
         publication_plan_id=plan.publication_plan_id,
         publication_plan_object_digest=publication_plan_object_digest(plan),
         capture_id=plan.capture_id,
-        artifacts=tuple(
-            _receipt_artifact_from_plan_artifact(a) for a in plan.artifacts
-        ),
+        artifacts=tuple(_receipt_artifact_from_plan_artifact(a) for a in plan.artifacts),
     )
 
 
@@ -282,12 +275,13 @@ def render_learning_capture_markdown(
     approval_id: str,
     proposal_id: str,
 ) -> str:
-    """Render only validated persistent observations and supported correction claims."""
+    """Render a deterministic mobile-first Chinese learning report (renderer v2)."""
     front = [
         "---",
         f"medlearn_type: {_yaml('learning_capture')}",
         f"capture_id: {_yaml(capture_id)}",
         f"schema_version: {_yaml(capture.schema_version)}",
+        f"renderer_version: {_yaml('2.0.0')}",
         f"approval_id: {_yaml(approval_id)}",
         f"proposal_id: {_yaml(proposal_id)}",
         f"captured_at: {_yaml(capture.captured_at.isoformat())}",
@@ -298,42 +292,118 @@ def render_learning_capture_markdown(
     if capture.chapter_id is not None:
         front.append(f"chapter_id: {_yaml(str(capture.chapter_id))}")
     front.append("---")
-    concepts = {item.concept_id: item for item in bundle.concepts if item.status == "active"}
+    concepts = {item.concept_id: item for item in bundle.concepts}
     claims = {item.claim_id: item for item in bundle.claims}
-    concept_lines = [
-        f"- {format_concept_label(concepts[item.resolved_concept_id])} ({item.resolved_concept_id})"
-        for item in capture.concept_mentions
-        if item.resolved_concept_id in concepts
-    ]
-    evidence_lines = [
-        f"- {item.concept_id}: {item.evidence_type} (confidence={item.confidence:g})"
-        for item in capture.learner_evidence
-    ]
+
+    def labels(concept_id: str) -> str:
+        if concept_id in concepts:
+            return format_concept_label(concepts[concept_id])
+        return "未收录概念"
+    evidence_labels = {
+        "correct_independent": "独立答对",
+        "correct_after_hint": "提示后答对",
+        "guessed_correct": "猜测答对",
+        "partial": "部分掌握",
+        "unknown": "尚未掌握",
+        "incorrect": "回答错误",
+        "high_confidence_incorrect": "高置信度错误",
+        "self_report_only": "仅自我报告",
+    }
+    known = {"correct_independent", "correct_after_hint"}
+    wrong = {"incorrect", "high_confidence_incorrect"}
+    grouped: dict[str, list[LearnerEvidence]] = {"已掌握": [], "部分掌握": [], "明确错误": []}
+    seen_evidence: set[tuple[str, str, str]] = set()
+    for item in capture.learner_evidence:
+        key = (str(item.concept_id), item.evidence_type, item.message_id)
+        if key in seen_evidence:
+            continue
+        seen_evidence.add(key)
+        target = (
+            "已掌握"
+            if item.evidence_type in known
+            else "明确错误"
+            if item.evidence_type in wrong
+            else "部分掌握"
+        )
+        grouped[target].append(item)
+
+    def evidence_lines(items: list[LearnerEvidence], include_excerpt: bool = False) -> list[str]:
+        lines: list[str] = []
+        for item in items:
+            evidence = item
+            lines.extend(
+                [
+                    f"- {labels(evidence.concept_id)}",
+                    f"  - 表现：{evidence_labels[evidence.evidence_type]}",
+                    f"  - 依据：{evidence.rationale}",
+                ]
+            )
+            if include_excerpt and evidence.user_excerpt:
+                lines.append(f"  - 我的原回答：{evidence.user_excerpt}")
+        return lines
+
     correction_lines: list[str] = []
-    for item in capture.misconception_observations:
-        correction_lines.append(f"- 观察到的错误逻辑：{item.observed_error_logic}")
-        valid = [claims[cid] for cid in item.correction_claim_ids if cid in claims]
+    for misconception in capture.misconception_observations:
+        names = (
+            "、".join(labels(concept_id) for concept_id in misconception.concept_ids)
+            or "相关概念"
+        )
+        correction_lines.append(f"- {names}")
+        if misconception.user_excerpt:
+            correction_lines.append(f"  - 我的原回答：{misconception.user_excerpt}")
+        correction_lines.append(f"  - 错误逻辑：{misconception.observed_error_logic}")
+        valid = [claims[cid] for cid in misconception.correction_claim_ids if cid in claims]
         if valid:
             for claim in valid:
-                correction_lines.append(f"  - 纠正（{claim.claim_id}）：{claim.statement}")
-        elif item.proposed_correction:
-            correction_lines.append(f"  - 待验证建议：{item.proposed_correction}")
+                correction_lines.append(f"  - 纠正：{claim.statement}")
+        elif misconception.proposed_correction:
+            correction_lines.append(f"  - 待验证建议：{misconception.proposed_correction}")
+        else:
+            correction_lines.append("  - 纠正：待验证")
     question_lines = [f"- {item.text}" for item in capture.open_questions]
+    concept_lines = [
+        f"- {labels(concept_id)}"
+        for concept_id in dict.fromkeys(
+            item.resolved_concept_id
+            for item in capture.concept_mentions
+            if item.resolved_concept_id in concepts
+        )
+    ]
 
     def section(title: str, lines: list[str]) -> list[str]:
         return [f"## {title}", *(lines or ["- 无"])]
+
+    independent = sum(
+        item.evidence_type == "correct_independent" for item in capture.learner_evidence
+    )
+    partial_count = len(grouped["部分掌握"])
+    wrong_count = len(grouped["明确错误"]) + len(capture.misconception_observations)
+    title = str(capture.chapter_id or capture.course_id or capture.discipline_id)
 
     return "\n".join(
         [
             *front,
             "",
-            *section("概念", concept_lines),
+            f"# 学习记录｜{title}",
             "",
-            *section("学习表现", evidence_lines),
+            "> 本次记录",
+            (
+                f"> 独立掌握 {independent} 项 · 部分掌握 {partial_count} 项 · "
+                f"明确错误 {wrong_count} 项 · 未解决 {len(capture.open_questions)} 项"
+            ),
             "",
-            *section("错误逻辑与纠正", correction_lines),
+            *section("已掌握", evidence_lines(grouped["已掌握"])),
             "",
-            *section("待解决问题", question_lines),
+            *section("部分掌握", evidence_lines(grouped["部分掌握"])),
+            "",
+            *section(
+                "明确错误",
+                evidence_lines(grouped["明确错误"], include_excerpt=True) + correction_lines,
+            ),
+            "",
+            *section("未解决问题", question_lines),
+            "",
+            *section("本次涉及概念", concept_lines),
             "",
         ]
     )

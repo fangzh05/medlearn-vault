@@ -43,7 +43,7 @@ from medlearn_vault.domain import (
     MedicalClaim,
     SourceDocument,
 )
-from medlearn_vault.handoff import MedLearnHandoff
+from medlearn_vault.handoff import LearningSegment, MedLearnHandoff
 from medlearn_vault.identifiers import normalize_text
 from medlearn_vault.preview import (
     PreviewBuildError,
@@ -51,7 +51,11 @@ from medlearn_vault.preview import (
     build_preview_plan,
     render_markdown,
 )
-from medlearn_vault.publication import VaultPublicationPlan, VaultPublicationReceipt
+from medlearn_vault.publication import (
+    VaultPublicationPlan,
+    VaultPublicationReceipt,
+    render_learning_capture_markdown,
+)
 from medlearn_vault.sync_client import (
     configure as sync_configure_service,
 )
@@ -92,6 +96,7 @@ from medlearn_vault.workflow import (
     S3ReadOnlyObjectStore,
     WorkflowError,
     WorkflowInputs,
+    trace_source_job,
 )
 
 app = typer.Typer(no_args_is_help=True, help="MedLearn Vault contract tools")
@@ -129,6 +134,7 @@ WORKFLOW_SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "capture_proposal": CaptureProposal,
     "intake_envelope": IntakeEnvelope,
     "medlearn_handoff": MedLearnHandoff,
+    "learning_segment": LearningSegment,
     "catalog_update_proposal": CatalogUpdateProposal,
 }
 CONTROL_SCHEMA_MODELS: dict[str, type[BaseModel]] = {
@@ -575,6 +581,32 @@ def workflow_inspect_proposal(source_job_id: str) -> None:
     )
 
 
+@workflow_app.command("trace-job")
+def workflow_trace_job(
+    source_job_id: str,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Read the exact Job → Intake → Proposal → publication chain."""
+    try:
+        store = S3ReadOnlyObjectStore(
+            os.environ.get("CONTROL_R2_ENDPOINT", ""),
+            os.environ.get("CONTROL_R2_ACCESS_KEY_ID", ""),
+            os.environ.get("CONTROL_R2_SECRET_ACCESS_KEY", ""),
+        )
+        result = trace_source_job(store, source_job_id)
+    except WorkflowError as exc:
+        if json_output:
+            typer.echo(json.dumps({"error_code": exc.code}, separators=(",", ":")))
+        else:
+            typer.echo(f"error_code={exc.code}", err=True)
+        raise typer.Exit(1) from exc
+    payload = result.model_dump()
+    if json_output:
+        typer.echo(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
+    else:
+        typer.echo(" ".join(f"{key}={value}" for key, value in payload.items()))
+
+
 @workflow_app.command("export-proposal")
 def workflow_export_proposal(
     source_job_id: str,
@@ -934,6 +966,41 @@ def catalog_update_capture(
         raise typer.Exit(1)
 
 
+@capture_app.command("render-view")
+def capture_render_view(
+    capture_path: Path,
+    output: Path,
+    bundle_path: Annotated[Path, typer.Option("--bundle")],
+) -> None:
+    """Create a versioned local presentation without changing immutable Capture JSON."""
+    try:
+        capture = LearningCapture.model_validate_json(capture_path.read_bytes())
+        bundle = ContractBundle.from_directory(bundle_path)
+        capture_id = capture_path.stem
+        if not capture_id.startswith("capture_"):
+            raise ValueError("INVALID_CAPTURE_ID")
+        markdown = render_learning_capture_markdown(
+            bundle,
+            capture,
+            capture_id=capture_id,
+            approval_id="derived_view",
+            proposal_id="derived_view",
+        )
+        markdown = markdown.replace(
+            'medlearn_type: "learning_capture"',
+            'medlearn_type: "learning_capture_view"\nview_kind: "derived"',
+        )
+    except (OSError, ValidationError, ValueError) as exc:
+        _safe_error("INVALID_CAPTURE_VIEW_INPUT", "capture", type(exc).__name__)
+        raise typer.Exit(1) from exc
+    if output.resolve() == capture_path.resolve():
+        _safe_error("INVALID_CAPTURE_VIEW_OUTPUT", "output", "cannot overwrite canonical JSON")
+        raise typer.Exit(1)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(markdown, encoding="utf-8", newline="\n")
+    typer.echo(output.as_posix())
+
+
 @catalog_app.command("prepare-patch")
 def prepare_catalog_patch_command(
     catalog_update_path: Path,
@@ -973,9 +1040,7 @@ def complete_catalog_metadata_command(
     preferred_english and aliases.  No metadata may be inferred.
     """
     try:
-        blocked_update = CatalogUpdateProposal.model_validate_json(
-            catalog_update_path.read_bytes()
-        )
+        blocked_update = CatalogUpdateProposal.model_validate_json(catalog_update_path.read_bytes())
         raw_metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
         if not isinstance(raw_metadata, list):
             raise ValueError("METADATA_MUST_BE_ARRAY")

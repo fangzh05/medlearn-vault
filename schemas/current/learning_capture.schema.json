@@ -115,6 +115,18 @@
           "title": "Message Id",
           "type": "string"
         },
+        "user_excerpt": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "User Excerpt"
+        },
         "observed_at": {
           "format": "date-time",
           "title": "Observed At",
@@ -196,6 +208,18 @@
           },
           "title": "Evidence Message Ids",
           "type": "array"
+        },
+        "user_excerpt": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "User Excerpt"
         },
         "observed_at": {
           "format": "date-time",
