@@ -20,14 +20,16 @@ would weaken the existing approval and exact-byte guarantees.
    remains blocked with `CATALOG_UPDATE_REQUIRED`.  Candidate identifiers are
    never persistent concept identifiers, and learner evidence remains limited
    to one resolved, active `ConceptEntity` ID.
-3. `medlearn capture catalog-update` produces a deterministic review document
-   and JSON repository-patch proposal bound to the exact Capture Proposal
-   bytes, object digest, and semantic digest.  It lists the source candidate, promotable concepts,
-   incomplete metadata, and the required manual action.
+3. `medlearn capture catalog-update --bundle <bundle>` produces a deterministic
+   review document and JSON repository-patch proposal bound to the exact Capture
+   Proposal bytes, object digest, semantic digest, base bundle digest, and target
+   bundle path. `medlearn catalog prepare-patch <proposal> --bundle <bundle>
+   --output <directory>` writes proposed `sources.json`, `concepts.json`, a
+   digest manifest, and review Markdown without touching the bundle.
 4. A reviewer completes missing metadata, reviews the proposed source and
-   concepts, and manually merges the repository patch.  This merge is the
-   catalog-update approval and is the only persistence mechanism for bootstrap
-   records; it does not access R2.
+   concepts, then manually copies the prepared files and any separately completed
+   concepts onto a review branch. This merge is the catalog-update approval and
+   is the only persistence mechanism for bootstrap records; it does not access R2.
 5. The semantically equivalent Handoff is run again against that updated
    repository bundle.  It now resolves only persistent source and concept IDs,
    produces a ready Capture Proposal, and follows the existing immutable

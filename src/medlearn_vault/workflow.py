@@ -22,7 +22,7 @@ from medlearn_vault.capture import (
     InvalidIntakeEnvelope,
     build_capture_proposal,
     capture_proposal_digest,
-    capture_proposal_storage_payload,
+    exact_capture_proposal_json,
     extract_capture_draft,
     render_capture_proposal_markdown,
 )
@@ -989,10 +989,7 @@ class ProposalOrchestrator:
         try:
             draft = CaptureDraft.model_validate_json(draft_bytes)
             proposal = build_capture_proposal(bundle, draft)
-            proposal_bytes = (
-                json.dumps(capture_proposal_storage_payload(proposal), ensure_ascii=False, indent=2)
-                + "\n"
-            ).encode()
+            proposal_bytes = exact_capture_proposal_json(proposal)
             review_bytes = render_capture_proposal_markdown(proposal, bundle=bundle).encode()
             if execution.status in {"succeeded", "blocked"}:
                 self._verify_terminal_outputs(execution, proposal, proposal_bytes, review_bytes)

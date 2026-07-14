@@ -5,7 +5,7 @@ import Ajv from "ajv/dist/2020.js";
 import addFormats from "ajv-formats";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import jobSchema from "../../schemas/control/current/job_record.schema.json";
-import { buildManifest, handle, transitionJob, type Env, type JobRecord, type Stored } from "../src/index";
+import { buildManifest, convertHandoff, handle, learningChatSourceId, transitionJob, type Env, type JobRecord, type Stored } from "../src/index";
 import intakeSchema from "../../schemas/workflow/current/intake_envelope.schema.json";
 import handoffSchema from "../../schemas/workflow/current/medlearn_handoff.schema.json";
 
@@ -486,6 +486,30 @@ describe("dispatch modes", () => {
 });
 
 describe("Chat Project Source MCP handoff", () => {
+  it("matches the shared Python source identity golden for the sanitized APL handoff", async () => {
+    const source = JSON.parse(readFileSync(resolve("../examples/intake/apl-bootstrap-sanitized.json"), "utf8"));
+    const golden = JSON.parse(readFileSync(resolve("../examples/intake/apl-bootstrap-identity.json"), "utf8"));
+    const converted = await convertHandoff(source);
+    const expectedBytes = readFileSync(resolve("../examples/intake/apl-bootstrap-worker-envelope.json"));
+    expect(new Uint8Array(converted.body)).toEqual(new Uint8Array(expectedBytes));
+    expect(`sha256:${await digestBytes(new Uint8Array(converted.body))}`).toBe(
+      golden.worker_intake_sha256,
+    );
+    const envelope = JSON.parse(new TextDecoder().decode(converted.body));
+    const ajv = new Ajv({ strict: false });
+    addFormats(ajv);
+    expect(ajv.compile(intakeSchema)(envelope)).toBe(true);
+    expect(envelope.draft.context).toMatchObject({
+      session_id: golden.session_id,
+      source_id: golden.source_id,
+      course_id: "hematology",
+      chapter_id: "acute_leukemia",
+      session_started_at: "2026-07-14T19:00:00+08:00",
+      captured_at: "2026-07-14T19:20:00+08:00",
+    });
+    expect(await learningChatSourceId(golden.nullable_context)).toBe(golden.nullable_source_id);
+  });
+
   it("supports unauthenticated lifecycle and rejects methods or batches safely", async () => {
     const initialize = await handle(mcp("initialize", {}, ""), env);
     expect(initialize.status).toBe(200);

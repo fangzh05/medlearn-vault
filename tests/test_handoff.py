@@ -4,9 +4,12 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from medlearn_vault.bundle import ContractBundle
 from medlearn_vault.capture import (
+    CaptureContext,
     CaptureDraft,
     IntakeEnvelope,
+    build_capture_proposal,
     extract_capture_draft,
     intake_envelope_digest,
     learning_chat_source_id,
@@ -211,6 +214,35 @@ def test_synthetic_nonempty_handoff_converts_to_a_valid_intake_envelope() -> Non
     assert len(envelope.draft.claim_candidates) == 4
     assert len(envelope.draft.learner_evidence_candidates) == 1
     assert len(envelope.draft.misconception_candidates) == 1
+
+
+def test_apl_worker_python_source_identity_golden_bootstraps_a_candidate() -> None:
+    handoff = MedLearnHandoff.model_validate_json(
+        Path("examples/intake/apl-bootstrap-sanitized.json").read_text(encoding="utf-8")
+    )
+    golden = json.loads(
+        Path("examples/intake/apl-bootstrap-identity.json").read_text(encoding="utf-8")
+    )
+    exact, _ = handoff_submission(handoff)
+    envelope = IntakeEnvelope.model_validate_json(exact)
+    assert envelope.draft.context.session_id == golden["session_id"]
+    assert envelope.draft.context.source_id == golden["source_id"]
+    assert intake_envelope_digest(exact) == golden["intake_sha256"]
+    nullable = CaptureContext(
+        source_id="source_00000000000000000000000000000000",
+        **golden["nullable_context"],
+    )
+    assert learning_chat_source_id(nullable) == golden["nullable_source_id"]
+    worker_exact = Path("examples/intake/apl-bootstrap-worker-envelope.json").read_bytes()
+    worker_envelope = IntakeEnvelope.model_validate_json(worker_exact)
+    assert intake_envelope_digest(worker_exact) == golden["worker_intake_sha256"]
+    assert extract_capture_draft(worker_exact, intake_envelope_digest(worker_exact))
+    assert worker_envelope.draft.context.source_id == golden["source_id"]
+    proposal = build_capture_proposal(
+        ContractBundle.from_directory(Path("examples/copd")), worker_envelope.draft
+    )
+    assert proposal.source_candidate is not None
+    assert "MISSING_SOURCE" not in {issue.code for issue in proposal.issues}
 
 
 def test_handoff_rejects_long_excerpt_and_accepts_misconception_without_correction() -> None:

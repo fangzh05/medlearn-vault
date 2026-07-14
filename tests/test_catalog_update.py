@@ -1,18 +1,28 @@
 import hashlib
 import json
+import shutil
 from datetime import datetime
 from pathlib import Path
+
+import pytest
+from typer.testing import CliRunner
 
 from medlearn_vault.bundle import ContractBundle
 from medlearn_vault.capture import (
     CaptureDraft,
-    CaptureProposal,
     build_capture_proposal,
+    exact_capture_proposal_json,
     extract_capture_draft,
     intake_envelope_digest,
     materialize_learning_capture,
 )
-from medlearn_vault.catalog_update import build_catalog_update_proposal
+from medlearn_vault.catalog_update import (
+    build_catalog_update_proposal,
+    canonical_catalog_update_json,
+    prepare_catalog_patch,
+    write_catalog_patch,
+)
+from medlearn_vault.cli import app
 from medlearn_vault.domain import ConceptEntity
 from medlearn_vault.handoff import MedLearnHandoff, handoff_submission, handoff_to_intake
 from medlearn_vault.publication import build_vault_publication_plan
@@ -29,19 +39,9 @@ def _digest(value: bytes) -> str:
     return "sha256:" + hashlib.sha256(value).hexdigest()
 
 
-def _proposal_bytes(proposal: CaptureProposal) -> bytes:
-    return (
-        json.dumps(
-            proposal.model_dump(mode="json"),
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-        + "\n"
-    ).encode("utf-8")
-
-
-def test_apl_bootstrap_requires_reviewed_catalog_then_publishes_persistent_ids_only() -> None:
+def test_apl_bootstrap_requires_reviewed_catalog_then_publishes_persistent_ids_only(
+    tmp_path: Path,
+) -> None:
     """Production-shaped regression: no R2 operations occur in this pure contract test."""
     handoff = MedLearnHandoff.model_validate_json(
         (ROOT / "examples/intake/apl-bootstrap-sanitized.json").read_text(encoding="utf-8")
@@ -54,20 +54,25 @@ def test_apl_bootstrap_requires_reviewed_catalog_then_publishes_persistent_ids_o
     first = build_capture_proposal(base, handoff_to_intake(handoff).draft)
     assert first.status == "blocked"
     assert first.source_candidate is not None
+    assert first.source_candidate.source.source_type == "learning_chat"
+    assert first.source_candidate.source.authority == 0
     assert {issue.code for issue in first.issues} >= {"CATALOG_UPDATE_REQUIRED"}
     assert not {"UNKNOWN_CONCEPT", "UNRESOLVED_CONCEPT_REFERENCE"} & {
         issue.code for issue in first.issues
     }
     assert first.learning_capture_candidate.capture.learner_evidence == ()
 
-    first_proposal_bytes = _proposal_bytes(first)
+    first_proposal_bytes = exact_capture_proposal_json(first)
     update = build_catalog_update_proposal(
         first,
         capture_proposal_object_digest=_digest(first_proposal_bytes),
+        target_bundle_path="examples/copd",
     )
     assert update.capture_proposal_id == first.proposal_id
     assert update.capture_proposal_digest == first.proposal_digest
     assert update.capture_proposal_object_digest == _digest(first_proposal_bytes)
+    assert update.base_bundle_digest == first.base_bundle_digest
+    assert update.target_bundle_path == "examples/copd"
     assert update.source_candidate == first.source_candidate
     assert len(update.concept_promotions) == 5
     assert {item.surface_text for item in update.incomplete_concept_metadata} == {
@@ -77,7 +82,69 @@ def test_apl_bootstrap_requires_reviewed_catalog_then_publishes_persistent_ids_o
     assert update.status == "blocked"
     assert "manually merge" in update.next_action
 
-    # Synthetic stand-in for a reviewer-completed, manually merged catalog patch.
+    duplicate_source = update.model_copy(
+        update={
+            "source_candidate": update.source_candidate.model_copy(
+                update={"source": base.sources[0]}
+            )
+        }
+    )
+    with pytest.raises(ValueError, match="CATALOG_PATCH_ID_COLLISION"):
+        prepare_catalog_patch(duplicate_source, Path("examples/copd"))
+    alias_collision = update.concept_promotions[0].model_copy(
+        update={
+            "concept": ConceptEntity(
+                concept_id="concept_cccccccccccccccccccccccccccccccc",
+                canonical_name="COPD",
+                concept_type="other",
+                scope_note="Deliberate alias-collision regression input.",
+            )
+        }
+    )
+    duplicate_alias = update.model_copy(
+        update={"concept_promotions": (alias_collision, *update.concept_promotions[1:])}
+    )
+    with pytest.raises(ValueError, match="CATALOG_PATCH_ALIAS_COLLISION"):
+        prepare_catalog_patch(duplicate_alias, Path("examples/copd"))
+
+    patch = prepare_catalog_patch(update, Path("examples/copd"))
+    output = tmp_path / "prepared"
+    write_catalog_patch(patch, output)
+    assert {path.name for path in output.iterdir()} == {
+        "sources.json",
+        "concepts.json",
+        "manifest.json",
+        "review.md",
+    }
+    manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["sources_old_digest"] != manifest["sources_new_digest"]
+    assert manifest["concepts_old_digest"] != manifest["concepts_new_digest"]
+    assert "Incomplete concept metadata" in (output / "review.md").read_text(encoding="utf-8")
+    update_path = tmp_path / "catalog-update.json"
+    update_path.write_bytes(canonical_catalog_update_json(update))
+    command_output = tmp_path / "prepared-command"
+    result = CliRunner().invoke(
+        app,
+        [
+            "catalog",
+            "prepare-patch",
+            str(update_path),
+            "--bundle",
+            "examples/copd",
+            "--output",
+            str(command_output),
+        ],
+    )
+    assert result.exit_code == 0
+    for name in ("sources.json", "concepts.json", "manifest.json", "review.md"):
+        assert (command_output / name).read_bytes() == (output / name).read_bytes()
+
+    # Synthetic stand-in for a reviewer manually applying the proposed files and
+    # separately supplying the metadata that the blocked proposal cannot promote.
+    copied_bundle = tmp_path / "bundle"
+    shutil.copytree(ROOT / "examples/copd", copied_bundle)
+    shutil.copyfile(output / "sources.json", copied_bundle / "sources.json")
+    shutil.copyfile(output / "concepts.json", copied_bundle / "concepts.json")
     reviewed_missing = (
         ConceptEntity(
             concept_id="concept_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -95,27 +162,32 @@ def test_apl_bootstrap_requires_reviewed_catalog_then_publishes_persistent_ids_o
             ),
         ),
     )
-    promoted = ContractBundle(
-        sources=(*base.sources, first.source_candidate.source),
-        concepts=(
-            *base.concepts,
-            *(item.concept for item in update.concept_promotions),
-            *reviewed_missing,
-        ),
-        claims=base.claims,
-        relations=base.relations,
-        discipline_lenses=base.discipline_lenses,
-        chapters=base.chapters,
-        learning_captures=base.learning_captures,
+    reviewed_concepts = json.loads((copied_bundle / "concepts.json").read_text(encoding="utf-8"))
+    reviewed_concepts.extend(
+        item.model_dump(mode="json", exclude_none=True) for item in reviewed_missing
     )
+    (copied_bundle / "concepts.json").write_text(
+        json.dumps(
+            sorted(reviewed_concepts, key=lambda item: item["concept_id"]),
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    promoted = ContractBundle.from_directory(copied_bundle)
     assert not promoted.validate_integrity()
     second = build_capture_proposal(promoted, handoff_to_intake(handoff).draft)
     assert second.status == "ready_for_review"
+    assert all(
+        item.proposed_verification_status == "unverified_chat" for item in second.claim_proposals
+    )
     capture = materialize_learning_capture(promoted, second)
     assert capture.learner_evidence
+    assert capture.source_id in {item.source_id for item in promoted.sources}
     assert all("candidate_" not in value for value in json.dumps(capture.model_dump(mode="json")))
 
-    proposal_bytes = _proposal_bytes(second)
+    proposal_bytes = exact_capture_proposal_json(second)
     proposal_object_digest = _digest(proposal_bytes)
     approval = ProposalApprovalRecord(
         approval_id=approval_identity(
@@ -133,6 +205,7 @@ def test_apl_bootstrap_requires_reviewed_catalog_then_publishes_persistent_ids_o
         canonical_approval_json(approval),
         "sha256:" + "0" * 64,
     )
+    assert len(plan.artifacts) == 2
     planned_capture = json.loads(plan.artifacts[0].content_utf8)
     assert all(
         value.startswith("concept_")

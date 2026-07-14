@@ -17,16 +17,19 @@ from medlearn_vault.capture import (
     IntakeEnvelope,
     build_capture_proposal,
     capture_proposal_digest,
-    capture_proposal_storage_payload,
     contract_bundle_digest,
+    exact_capture_proposal_json,
     extract_capture_draft,
     render_capture_proposal_markdown,
 )
 from medlearn_vault.catalog_update import (
     CatalogUpdateProposal,
     build_catalog_update_proposal,
+    bundle_path_identity,
     canonical_catalog_update_json,
+    prepare_catalog_patch,
     render_catalog_update_markdown,
+    write_catalog_patch,
 )
 from medlearn_vault.domain import (
     ChapterDossier,
@@ -92,6 +95,7 @@ concept_app = typer.Typer(help="Validate concept entities")
 bundle_app = typer.Typer(help="Validate contract bundles")
 preview_app = typer.Typer(help="Render deterministic previews")
 capture_app = typer.Typer(help="Validate and review capture proposals")
+catalog_app = typer.Typer(help="Prepare manually reviewed catalog patches")
 workflow_app = typer.Typer(help="Run cloud control-plane workflows")
 sync_app = typer.Typer(help="Synchronize published artifacts to a local Obsidian Vault")
 sync_schedule_app = typer.Typer(help="Manage the optional Windows Scheduled Task")
@@ -100,6 +104,7 @@ app.add_typer(concept_app, name="concept")
 app.add_typer(bundle_app, name="bundle")
 app.add_typer(preview_app, name="preview")
 app.add_typer(capture_app, name="capture")
+app.add_typer(catalog_app, name="catalog")
 app.add_typer(workflow_app, name="workflow")
 app.add_typer(sync_app, name="sync")
 sync_app.add_typer(sync_schedule_app, name="schedule")
@@ -599,14 +604,10 @@ def propose_capture(bundle_path: Path, draft_path: Path, output: Path) -> None:
         bundle = ContractBundle.from_directory(bundle_path)
         draft = CaptureDraft.model_validate_json(draft_path.read_text(encoding="utf-8"))
         proposal = build_capture_proposal(bundle, draft)
-        payload = (
-            json.dumps(capture_proposal_storage_payload(proposal), ensure_ascii=False, indent=2)
-            + "\n"
-        )
     except (OSError, ValidationError, ValueError) as exc:
         _safe_error("INVALID_CAPTURE_INPUT", "input", type(exc).__name__)
         raise typer.Exit(1) from exc
-    output.write_text(payload, encoding="utf-8")
+    output.write_bytes(exact_capture_proposal_json(proposal))
     typer.echo(f"proposal_id={proposal.proposal_id} status={proposal.status}")
     if proposal.status == "blocked":
         raise typer.Exit(1)
@@ -634,7 +635,12 @@ def review_capture(bundle_path: Path, proposal_path: Path, output: Path) -> None
 
 
 @capture_app.command("catalog-update")
-def catalog_update_capture(proposal_path: Path, json_output: Path, review_output: Path) -> None:
+def catalog_update_capture(
+    proposal_path: Path,
+    json_output: Path,
+    review_output: Path,
+    bundle_path: Annotated[Path, typer.Option("--bundle")],
+) -> None:
     """Create review-only repository-patch contents; this command never writes a bundle or R2."""
     try:
         exact_proposal_bytes = proposal_path.read_bytes()
@@ -642,11 +648,16 @@ def catalog_update_capture(proposal_path: Path, json_output: Path, review_output
         if capture_proposal_digest(proposal) != proposal.proposal_digest:
             _safe_error("PROPOSAL_DIGEST_MISMATCH", "proposal_digest", "proposal was modified")
             raise typer.Exit(1)
+        bundle = ContractBundle.from_directory(bundle_path)
+        if contract_bundle_digest(bundle) != proposal.base_bundle_digest:
+            _safe_error("STALE_BASE_BUNDLE", "base_bundle_digest", "bundle changed after proposal")
+            raise typer.Exit(1)
         update = build_catalog_update_proposal(
             proposal,
             capture_proposal_object_digest=(
                 "sha256:" + hashlib.sha256(exact_proposal_bytes).hexdigest()
             ),
+            target_bundle_path=bundle_path_identity(bundle_path),
         )
     except typer.Exit:
         raise
@@ -658,6 +669,23 @@ def catalog_update_capture(proposal_path: Path, json_output: Path, review_output
     typer.echo(f"catalog_update_id={update.catalog_update_id} status={update.status}")
     if update.status == "blocked":
         raise typer.Exit(1)
+
+
+@catalog_app.command("prepare-patch")
+def prepare_catalog_patch_command(
+    catalog_update_path: Path,
+    bundle_path: Annotated[Path, typer.Option("--bundle")],
+    output: Annotated[Path, typer.Option("--output")],
+) -> None:
+    """Create a new review directory without modifying the catalog bundle in place."""
+    try:
+        update = CatalogUpdateProposal.model_validate_json(catalog_update_path.read_bytes())
+        patch = prepare_catalog_patch(update, bundle_path)
+        write_catalog_patch(patch, output)
+    except (OSError, ValidationError, ValueError) as exc:
+        _safe_error(str(exc), "catalog", type(exc).__name__)
+        raise typer.Exit(1) from exc
+    typer.echo(output.as_posix())
 
 
 @concept_app.command("validate")

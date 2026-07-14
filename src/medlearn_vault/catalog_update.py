@@ -4,18 +4,22 @@ from __future__ import annotations
 
 import hashlib
 import json
+from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
 from pydantic import Field, model_validator
 
+from medlearn_vault.bundle import ContractBundle
 from medlearn_vault.capture import (
     CaptureProposal,
     LearningChatSourceCandidate,
     NewConceptCandidate,
+    contract_bundle_digest,
 )
 from medlearn_vault.domain.base import DomainModel
 from medlearn_vault.domain.concepts import ConceptEntity
 from medlearn_vault.domain.ids import ConceptId
+from medlearn_vault.identifiers import normalize_text
 
 
 def _bytes(value: Any) -> bytes:
@@ -35,6 +39,18 @@ def _bytes(value: Any) -> bytes:
 
 def _digest(value: Any) -> str:
     return "sha256:" + hashlib.sha256(_bytes(value)).hexdigest()
+
+
+def _byte_digest(value: bytes) -> str:
+    return "sha256:" + hashlib.sha256(value).hexdigest()
+
+
+def bundle_path_identity(path: Path) -> str:
+    value = path.as_posix()
+    normalized = PurePosixPath(value)
+    if path.is_absolute() or normalized.is_absolute() or ":" in value or ".." in normalized.parts:
+        raise ValueError("INVALID_CATALOG_BUNDLE_PATH")
+    return normalized.as_posix()
 
 
 def _id(prefix: str, *parts: Any) -> str:
@@ -59,6 +75,8 @@ class CatalogUpdateProposal(DomainModel):
     capture_proposal_id: str = Field(pattern=r"^proposal_[a-f0-9]{32}$")
     capture_proposal_digest: str = Field(pattern=r"^sha256:[a-f0-9]{64}$")
     capture_proposal_object_digest: str = Field(pattern=r"^sha256:[a-f0-9]{64}$")
+    base_bundle_digest: str = Field(pattern=r"^sha256:[a-f0-9]{64}$")
+    target_bundle_path: str = Field(min_length=1)
     source_candidate: LearningChatSourceCandidate | None = None
     concept_promotions: tuple[CatalogConceptPromotion, ...] = ()
     incomplete_concept_metadata: tuple[IncompleteConceptMetadata, ...] = ()
@@ -67,12 +85,16 @@ class CatalogUpdateProposal(DomainModel):
 
     @model_validator(mode="after")
     def validate_identity_and_manual_boundary(self) -> CatalogUpdateProposal:
+        if bundle_path_identity(Path(self.target_bundle_path)) != self.target_bundle_path:
+            raise ValueError("invalid catalog target bundle path")
         if self.catalog_update_id != _id(
             "catalog_update",
             self.catalog_update_version,
             self.capture_proposal_id,
             self.capture_proposal_digest,
             self.capture_proposal_object_digest,
+            self.base_bundle_digest,
+            self.target_bundle_path,
             self.source_candidate,
             self.concept_promotions,
             self.incomplete_concept_metadata,
@@ -106,7 +128,10 @@ def persistent_concept_from_candidate(candidate: NewConceptCandidate) -> Concept
 
 
 def build_catalog_update_proposal(
-    capture_proposal: CaptureProposal, *, capture_proposal_object_digest: str
+    capture_proposal: CaptureProposal,
+    *,
+    capture_proposal_object_digest: str,
+    target_bundle_path: str,
 ) -> CatalogUpdateProposal:
     """Produce review-only repository patch contents; it performs no persistence."""
     incomplete = tuple(
@@ -143,6 +168,8 @@ def build_catalog_update_proposal(
             capture_proposal.proposal_id,
             capture_proposal.proposal_digest,
             capture_proposal_object_digest,
+            capture_proposal.base_bundle_digest,
+            target_bundle_path,
             capture_proposal.source_candidate,
             promotions,
             incomplete,
@@ -150,6 +177,8 @@ def build_catalog_update_proposal(
         capture_proposal_id=capture_proposal.proposal_id,
         capture_proposal_digest=capture_proposal.proposal_digest,
         capture_proposal_object_digest=capture_proposal_object_digest,
+        base_bundle_digest=capture_proposal.base_bundle_digest,
+        target_bundle_path=target_bundle_path,
         source_candidate=capture_proposal.source_candidate,
         concept_promotions=promotions,
         incomplete_concept_metadata=incomplete,
@@ -162,6 +191,137 @@ def canonical_catalog_update_json(proposal: CatalogUpdateProposal) -> bytes:
     return _bytes(proposal) + b"\n"
 
 
+class CatalogPatchManifest(DomainModel):
+    manifest_version: Literal["0.1.0"] = "0.1.0"
+    catalog_update_id: str
+    base_bundle_digest: str
+    target_bundle_path: str
+    sources_old_digest: str
+    sources_new_digest: str
+    concepts_old_digest: str
+    concepts_new_digest: str
+
+
+class CatalogPatch(DomainModel):
+    sources_json: str
+    concepts_json: str
+    manifest: CatalogPatchManifest
+    review_markdown: str
+
+
+def _pretty_json(value: object) -> str:
+    return json.dumps(value, ensure_ascii=False, indent=2) + "\n"
+
+
+def _concept_terms(concept: ConceptEntity) -> set[str]:
+    values = (
+        concept.canonical_name,
+        concept.preferred_english,
+        *(item.text for item in concept.aliases),
+    )
+    return {
+        normalize_text(value)
+        for value in values
+        if value
+    }
+
+
+def prepare_catalog_patch(update: CatalogUpdateProposal, bundle_path: Path) -> CatalogPatch:
+    """Build, but never apply, a deterministic reviewed catalog patch."""
+    identity = bundle_path_identity(bundle_path)
+    if identity != update.target_bundle_path:
+        raise ValueError("CATALOG_PATCH_TARGET_MISMATCH")
+    bundle = ContractBundle.from_directory(bundle_path)
+    if contract_bundle_digest(bundle) != update.base_bundle_digest:
+        raise ValueError("STALE_BASE_BUNDLE")
+    sources_path = bundle_path / "sources.json"
+    concepts_path = bundle_path / "concepts.json"
+    sources_before = sources_path.read_bytes()
+    concepts_before = concepts_path.read_bytes()
+    raw_sources = json.loads(sources_before)
+    raw_concepts = json.loads(concepts_before)
+    if not isinstance(raw_sources, list) or not isinstance(raw_concepts, list):
+        raise ValueError("INVALID_CATALOG_BUNDLE")
+
+    extra_sources = () if update.source_candidate is None else (update.source_candidate.source,)
+    extra_concepts = tuple(item.concept for item in update.concept_promotions)
+    source_ids = {item.source_id for item in bundle.sources}
+    concept_ids = {item.concept_id for item in bundle.concepts}
+    if any(item.source_id in source_ids for item in extra_sources) or any(
+        item.concept_id in concept_ids for item in extra_concepts
+    ):
+        raise ValueError("CATALOG_PATCH_ID_COLLISION")
+    known_terms = {term for concept in bundle.concepts for term in _concept_terms(concept)}
+    promoted_terms: set[str] = set()
+    for concept in extra_concepts:
+        terms = _concept_terms(concept)
+        if terms & (known_terms | promoted_terms):
+            raise ValueError("CATALOG_PATCH_ALIAS_COLLISION")
+        promoted_terms |= terms
+
+    sources_after = (
+        sources_before
+        if not extra_sources
+        else _pretty_json(
+            sorted(
+                [
+                    *raw_sources,
+                    *(item.model_dump(mode="json", exclude_none=True) for item in extra_sources),
+                ],
+                key=lambda item: item["source_id"],
+            )
+        ).encode("utf-8")
+    )
+    concepts_after = (
+        concepts_before
+        if not extra_concepts
+        else _pretty_json(
+            sorted(
+                [
+                    *raw_concepts,
+                    *(item.model_dump(mode="json", exclude_none=True) for item in extra_concepts),
+                ],
+                key=lambda item: item["concept_id"],
+            )
+        ).encode("utf-8")
+    )
+    manifest = CatalogPatchManifest(
+        catalog_update_id=update.catalog_update_id,
+        base_bundle_digest=update.base_bundle_digest,
+        target_bundle_path=update.target_bundle_path,
+        sources_old_digest=_byte_digest(sources_before),
+        sources_new_digest=_byte_digest(sources_after),
+        concepts_old_digest=_byte_digest(concepts_before),
+        concepts_new_digest=_byte_digest(concepts_after),
+    )
+    review = render_catalog_update_markdown(update) + "\n## Patch files\n" + "\n".join(
+        (
+            f"- sources.json: `{manifest.sources_old_digest}` -> `{manifest.sources_new_digest}`",
+            "- concepts.json: "
+            f"`{manifest.concepts_old_digest}` -> `{manifest.concepts_new_digest}`",
+            "- Apply by manually copying these files into the target bundle on a review branch.",
+            "",
+        )
+    )
+    return CatalogPatch(
+        sources_json=sources_after.decode("utf-8"),
+        concepts_json=concepts_after.decode("utf-8"),
+        manifest=manifest,
+        review_markdown=review,
+    )
+
+
+def write_catalog_patch(patch: CatalogPatch, output: Path) -> None:
+    """Write only a new output directory; this never changes the source bundle."""
+    output.mkdir(parents=True, exist_ok=False)
+    (output / "sources.json").write_text(patch.sources_json, encoding="utf-8")
+    (output / "concepts.json").write_text(patch.concepts_json, encoding="utf-8")
+    (output / "manifest.json").write_text(
+        _pretty_json(patch.manifest.model_dump()), encoding="utf-8"
+    )
+    (output / "review.md").write_text(patch.review_markdown, encoding="utf-8")
+
+
 def render_catalog_update_markdown(proposal: CatalogUpdateProposal) -> str:
     lines = [
         "# Catalog bootstrap update",
@@ -170,6 +330,8 @@ def render_catalog_update_markdown(proposal: CatalogUpdateProposal) -> str:
         f"- capture_proposal_id: `{proposal.capture_proposal_id}`",
         f"- capture_proposal_digest: `{proposal.capture_proposal_digest}`",
         f"- capture_proposal_object_digest: `{proposal.capture_proposal_object_digest}`",
+        f"- base_bundle_digest: `{proposal.base_bundle_digest}`",
+        f"- target_bundle_path: `{proposal.target_bundle_path}`",
         f"- status: `{proposal.status}`",
         "",
         "## Source candidate",

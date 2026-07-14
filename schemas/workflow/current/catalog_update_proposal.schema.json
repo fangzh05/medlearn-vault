@@ -453,6 +453,16 @@
       "title": "Capture Proposal Object Digest",
       "type": "string"
     },
+    "base_bundle_digest": {
+      "pattern": "^sha256:[a-f0-9]{64}$",
+      "title": "Base Bundle Digest",
+      "type": "string"
+    },
+    "target_bundle_path": {
+      "minLength": 1,
+      "title": "Target Bundle Path",
+      "type": "string"
+    },
     "source_candidate": {
       "anyOf": [
         {
@@ -498,6 +508,8 @@
     "capture_proposal_id",
     "capture_proposal_digest",
     "capture_proposal_object_digest",
+    "base_bundle_digest",
+    "target_bundle_path",
     "status",
     "next_action"
   ],

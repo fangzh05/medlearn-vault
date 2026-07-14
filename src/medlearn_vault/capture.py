@@ -27,6 +27,7 @@ from medlearn_vault.registry import resolve_alias
 from medlearn_vault.terminology import english_abbreviations, format_concept_label
 
 WORKFLOW_VERSION: Literal["0.3.0"] = "0.3.0"
+LEARNING_CHAT_SOURCE_IDENTITY_VERSION = "medlearn.learning_chat_source.v1"
 MAX_EVIDENCE_MESSAGES = 200
 MAX_CANDIDATES_PER_KIND = 200
 MAX_EXCERPT_LENGTH = 1000
@@ -64,21 +65,32 @@ class CaptureContext(DomainModel):
         return self
 
 
+def learning_chat_source_identity_bytes(context: CaptureContext) -> bytes:
+    """Length-delimited v1 source identity payload; it deliberately excludes source_id."""
+
+    def field(value: str | None) -> bytes:
+        if value is None:
+            return b"N"
+        encoded = value.encode("utf-8")
+        return b"S" + str(len(encoded)).encode("ascii") + b":" + encoded
+
+    return b"\0".join(
+        (
+            LEARNING_CHAT_SOURCE_IDENTITY_VERSION.encode("ascii"),
+            field(str(context.session_id)),
+            field(context.discipline_id),
+            field(context.course_id),
+            field(context.chapter_id),
+            field(context.locale),
+            field(context.session_started_at.isoformat()),
+            field(context.captured_at.isoformat()),
+        )
+    )
+
+
 def learning_chat_source_id(context: CaptureContext) -> SourceId:
     """Derive the only missing source ID eligible for bootstrap promotion."""
-    identity = {
-        "session_id": context.session_id,
-        "discipline_id": context.discipline_id,
-        "course_id": context.course_id,
-        "chapter_id": context.chapter_id,
-        "locale": context.locale,
-        "session_started_at": context.session_started_at.isoformat(),
-        "captured_at": context.captured_at.isoformat(),
-    }
-    encoded = json.dumps(
-        identity, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-    ).encode("utf-8")
-    return "source_" + hashlib.sha256(encoded).hexdigest()[:32]
+    return "source_" + hashlib.sha256(learning_chat_source_identity_bytes(context)).hexdigest()[:32]
 
 
 class LearningChatSourceCandidate(DomainModel):
@@ -448,6 +460,13 @@ def capture_proposal_storage_payload(proposal: CaptureProposal) -> dict[str, Any
     if payload["source_candidate"] is None:
         del payload["source_candidate"]
     return payload
+
+
+def exact_capture_proposal_json(proposal: CaptureProposal) -> bytes:
+    """Exact pretty JSON stored by ProposalOrchestrator and emitted by the CLI."""
+    return (
+        json.dumps(capture_proposal_storage_payload(proposal), ensure_ascii=False, indent=2) + "\n"
+    ).encode("utf-8")
 
 
 def _id(prefix: str, *parts: Any) -> str:
