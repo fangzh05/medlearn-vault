@@ -57,20 +57,28 @@ would weaken the existing approval and exact-byte guarantees.
 The Handoff-to-Intake converter uses an explicit, immutable conversion version:
 
 ```
-HANDOFF_CONVERSION_VERSION = "medlearn.handoff_to_intake.v3"
+HANDOFF_CONVERSION_VERSION = "medlearn.handoff_to_intake.v4"
 ```
 
 The MCP idempotency key includes this version:
 
 ```
-medlearn-handoff-v3-${handoffDigest}
+medlearn-handoff-v4-${handoffDigest}
 ```
 
 This ensures that converter changes create a separate idempotency namespace.
-Old `v1` (`medlearn-handoff-${digest}`) and `v2`
-(`medlearn-handoff-v2-${digest}`) records remain untouched.  The same Handoff
+Old `v1` (`medlearn-handoff-${digest}`), `v2`
+(`medlearn-handoff-v2-${digest}`), and `v3`
+(`medlearn-handoff-v3-${digest}`) records remain untouched.  The same Handoff
 under the new converter creates one new Intake/Job; repeated submissions under
 the same converter remain idempotent.
+
+The v4 converter keeps the stable v2 learning-chat source identity and
+additionally splits multi-term learner evidence into separate single-term
+candidates before proposal production. This preserves the invariant that every
+persisted learner-evidence record points to exactly one persistent concept. It
+does not create concepts, select ambiguous concepts, or promote chat claims into
+authoritative medical facts.
 
 ## Reproposal identity algorithm
 
@@ -78,10 +86,11 @@ A reproposal Job ID is derived deterministically from:
 
 ```
 reproposal_ + sha256(
-  "0.1.0" +
+  "0.2.0" +
   source_job_id +
   blocked_proposal_id +
   catalog_update_id +
+  receipt_digest +
   current_base_bundle_digest +
   intake_digest
 )[:32]
@@ -110,8 +119,8 @@ read path.
 ## Lifecycle summary
 
 ```
-Handoff submission (v3 converter)
-  → new Job + Intake (v3 idempotency namespace)
+Handoff submission (v4 converter)
+  → new Job + Intake (versioned idempotency namespace)
   → bootstrap Proposal (blocked: CATALOG_UPDATE_REQUIRED)
   → catalog patch PR (manual review and merge)
   → explicit reproposal (medlearn-repropose.yml)

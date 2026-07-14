@@ -887,8 +887,7 @@ def build_capture_proposal(bundle: ContractBundle, draft: CaptureDraft) -> Captu
     }
     for learner_item in draft.learner_evidence_candidates:
         item_refs = refs(learner_item.concept_terms, "learner_evidence_candidates.concept_terms")
-        concept_ids = tuple(ref.concept_id for ref in item_refs if ref.concept_id)
-        if len(concept_ids) != 1 or len(item_refs) != 1:
+        if not item_refs or any(ref.concept_id is None for ref in item_refs):
             issues.append(
                 ProposalIssue(
                     code="INVALID_LEARNER_EVIDENCE_CONCEPT",
@@ -898,32 +897,43 @@ def build_capture_proposal(bundle: ContractBundle, draft: CaptureDraft) -> Captu
                 )
             )
             continue
-        evidence_id = _id(
-            "evidence",
-            draft.context.session_id,
-            learner_item.evidence_type,
-            learner_item.evidence_message_ids,
-        )
-        learner_evidence.append(
-            LearnerEvidence(
-                evidence_id=evidence_id,
-                concept_id=concept_ids[0],
-                evidence_type=learner_item.evidence_type,
-                confidence=learner_item.confidence,
-                rationale=learner_item.rationale,
-                message_id=learner_item.evidence_message_ids[-1],
-                observed_at=observed_at(learner_item.evidence_message_ids),
+        for ref in item_refs:
+            assert ref.concept_id is not None
+            evidence_id_parts = (
+                (
+                    draft.context.session_id,
+                    learner_item.evidence_type,
+                    learner_item.evidence_message_ids,
+                )
+                if len(item_refs) == 1
+                else (
+                    draft.context.session_id,
+                    learner_item.evidence_type,
+                    learner_item.evidence_message_ids,
+                    ref.concept_id,
+                )
             )
-        )
-        observations.append(
-            LearningObservationCandidate(
-                candidate_id=_id("candidate_observation", evidence_id),
-                observation_type=evidence_observation_type[learner_item.evidence_type],
-                concept_refs=item_refs,
-                evidence_message_ids=_ordered_unique(learner_item.evidence_message_ids),
-                observed_text=learner_item.rationale,
+            evidence_id = _id("evidence", *evidence_id_parts)
+            learner_evidence.append(
+                LearnerEvidence(
+                    evidence_id=evidence_id,
+                    concept_id=ref.concept_id,
+                    evidence_type=learner_item.evidence_type,
+                    confidence=learner_item.confidence,
+                    rationale=learner_item.rationale,
+                    message_id=learner_item.evidence_message_ids[-1],
+                    observed_at=observed_at(learner_item.evidence_message_ids),
+                )
             )
-        )
+            observations.append(
+                LearningObservationCandidate(
+                    candidate_id=_id("candidate_observation", evidence_id),
+                    observation_type=evidence_observation_type[learner_item.evidence_type],
+                    concept_refs=(ref,),
+                    evidence_message_ids=_ordered_unique(learner_item.evidence_message_ids),
+                    observed_text=learner_item.rationale,
+                )
+            )
 
     for misconception in draft.misconception_candidates:
         item_refs = refs(misconception.concept_terms, "misconception_candidates.concept_terms")
@@ -964,8 +974,7 @@ def build_capture_proposal(bundle: ContractBundle, draft: CaptureDraft) -> Captu
                 observation_type="misconception",
                 concept_refs=item_refs,
                 evidence_message_ids=_ordered_unique(
-                    misconception.observed_error_message_ids
-                    + misconception.correction_message_ids
+                    misconception.observed_error_message_ids + misconception.correction_message_ids
                 ),
                 observed_text=misconception.observed_error_logic,
                 proposed_correction=misconception.proposed_correction,
@@ -987,8 +996,7 @@ def build_capture_proposal(bundle: ContractBundle, draft: CaptureDraft) -> Captu
                 correction_claim_ids=corrections,
                 severity=misconception.severity,
                 evidence_message_ids=_ordered_unique(
-                    misconception.observed_error_message_ids
-                    + misconception.correction_message_ids
+                    misconception.observed_error_message_ids + misconception.correction_message_ids
                 ),
                 observed_at=observed_at(misconception.observed_error_message_ids),
             )

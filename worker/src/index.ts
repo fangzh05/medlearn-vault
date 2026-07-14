@@ -79,7 +79,7 @@ const MAX_HANDOFF_BODY = 256 * 1024;
 const LEASE_MS = 30_000;
 const CURRENT_INTAKE_VERSION = "0.1.0";
 const CURRENT_DRAFT_VERSION = "0.3.0";
-const HANDOFF_CONVERSION_VERSION = "medlearn.handoff_to_intake.v3";
+const HANDOFF_CONVERSION_VERSION = "medlearn.handoff_to_intake.v4";
 const ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 const PROPOSAL_ID = /^proposal_[a-f0-9]{32}$/;
 
@@ -549,10 +549,13 @@ export async function convertHandoff(handoff: Record<string, unknown>): Promise<
       suggested_concept_type: item.concept_type, suggested_scope_note: item.scope_note,
     })),
     claim_candidates: claims,
-    learner_evidence_candidates: (handoff.learner_evidence as Record<string, unknown>[]).map((item) => ({
-      concept_terms: item.concept_terms, evidence_type: item.evidence_type, confidence: item.confidence,
-      rationale: item.rationale, evidence_message_ids: refs(item.evidence_local_ids as string[]),
-    })),
+    learner_evidence_candidates: (handoff.learner_evidence as Record<string, unknown>[]).flatMap((item) => {
+      const groups = (item.concept_terms as string[]).map((term) => [term]);
+      return (groups.length > 0 ? groups : [[]]).map((conceptTerms) => ({
+        concept_terms: conceptTerms, evidence_type: item.evidence_type, confidence: item.confidence,
+        rationale: item.rationale, evidence_message_ids: refs(item.evidence_local_ids as string[]),
+      }));
+    }),
     misconception_candidates: (handoff.misconceptions as Record<string, unknown>[]).map((item) => ({
       observed_error_logic: item.observed_error_logic, concept_terms: item.concept_terms,
       observed_error_message_ids: refs(item.observed_error_local_ids as string[]),
@@ -563,7 +566,7 @@ export async function convertHandoff(handoff: Record<string, unknown>): Promise<
   const envelope = { intake_version: "0.1.0", client_kind: "chatgpt_work", draft };
   if (!validateEnvelope(envelope)) throw new Error("HANDOFF_CONVERSION_FAILURE");
   const encoded = new TextEncoder().encode(`${canonicalJson(envelope)}\n`);
-  const versionSuffix = HANDOFF_CONVERSION_VERSION.split(".").pop()!; // "v3"
+  const versionSuffix = HANDOFF_CONVERSION_VERSION.split(".").pop()!; // "v4"
   return { body: encoded.buffer.slice(encoded.byteOffset, encoded.byteOffset + encoded.byteLength), idempotencyKey: `medlearn-handoff-${versionSuffix}-${digest}` };
 }
 

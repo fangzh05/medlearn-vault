@@ -25,6 +25,6 @@ auto-creates medical concepts.
 Pre-v3 handoff intakes used `medlearn.learning_chat_source.v1`, which included
 `session_id`, `session_started_at`, and `captured_at`.  Those stored intakes,
 jobs, proposals, and source IDs remain immutable.  New ChatGPT Work submissions
-use the `medlearn.handoff_to_intake.v3` idempotency namespace and the v2 source
+use the `medlearn.handoff_to_intake.v4` idempotency namespace and the v2 source
 identity.  The shared sanitized golden is
 [apl-bootstrap-identity.json](../examples/intake/apl-bootstrap-identity.json).

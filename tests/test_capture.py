@@ -163,6 +163,40 @@ def test_explicit_learning_outcomes_materialize_to_persistent_taxonomy(
     )
 
 
+def test_multi_concept_learner_evidence_splits_to_single_concept_records() -> None:
+    payload = draft_payload()
+    payload["learner_evidence_candidates"] = [
+        {
+            "concept_terms": ["COPD", "吸烟"],
+            "evidence_message_ids": ["message:user-001"],
+            "evidence_type": "correct_independent",
+            "confidence": 0.8,
+            "rationale": "explicit observed outcome covering both concepts",
+        }
+    ]
+    proposal = build_capture_proposal(
+        ContractBundle.from_directory(Path("examples/copd")), CaptureDraft.model_validate(payload)
+    )
+
+    assert "INVALID_LEARNER_EVIDENCE_CONCEPT" not in {issue.code for issue in proposal.issues}
+    capture = materialize_learning_capture(
+        ContractBundle.from_directory(Path("examples/copd")), proposal
+    )
+    assert len(capture.learner_evidence) == 2
+    assert {item.concept_id for item in capture.learner_evidence} == {
+        "concept_11111111111111111111111111111111",
+        "concept_33333333333333333333333333333333",
+    }
+    assert len({item.evidence_id for item in capture.learner_evidence}) == 2
+    learner_observations = [
+        item
+        for item in proposal.learning_capture_candidate.observations
+        if item.observation_type == "correct_recall"
+    ]
+    assert len(learner_observations) == 2
+    assert all(len(item.concept_refs) == 1 for item in learner_observations)
+
+
 def test_correctness_is_not_inferred_from_matching_user_and_assistant_text() -> None:
     payload = draft_payload()
     payload["learner_evidence_candidates"] = []
