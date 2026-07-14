@@ -62,7 +62,7 @@ def test_apl_bootstrap_requires_reviewed_catalog_then_publishes_persistent_ids_o
     3. prepare_catalog_patch(blocked_update) fails with CATALOG_UPDATE_NOT_READY.
     4. Reviewer supplies metadata for both incomplete concepts.
     5. Completed update becomes ready_for_manual_merge.
-    6. Prepared concepts.json contains all seven promoted persistent concepts.
+    6. Prepared concepts.json contains all promoted persistent concepts.
     7. Receipt matches the exact final files.
     8. Second Proposal is ready_for_review (after patch application).
     9. Approval runs unconditionally.
@@ -104,7 +104,7 @@ def test_apl_bootstrap_requires_reviewed_catalog_then_publishes_persistent_ids_o
     assert update.base_bundle_digest == first.base_bundle_digest
     assert update.target_bundle_path == "examples/copd"
     assert update.source_candidate == first.source_candidate
-    assert len(update.concept_promotions) == 5
+    assert len(update.concept_promotions) == 4
     assert {item.surface_text for item in update.incomplete_concept_metadata} == {
         "白细胞淤滞",
         "凝血障碍分型",
@@ -164,8 +164,8 @@ def test_apl_bootstrap_requires_reviewed_catalog_then_publishes_persistent_ids_o
     assert completed.capture_proposal_object_digest == update.capture_proposal_object_digest
     assert completed.base_bundle_digest == update.base_bundle_digest
     assert completed.target_bundle_path == update.target_bundle_path
-    # All 7 promotions: 5 original + 2 completed
-    assert len(completed.concept_promotions) == 7
+    # All 6 promotions: 4 original + 2 completed
+    assert len(completed.concept_promotions) == 6
 
     # Test collision scenarios on the *completed* update
     duplicate_source = completed.model_copy(
@@ -194,7 +194,7 @@ def test_apl_bootstrap_requires_reviewed_catalog_then_publishes_persistent_ids_o
     with pytest.raises(ValueError, match="CATALOG_PATCH_ALIAS_COLLISION"):
         prepare_catalog_patch(duplicate_alias, Path("examples/copd"))
 
-    # ── 6. Prepared concepts.json contains all seven promoted concepts ───
+    # ── 6. Prepared concepts.json contains all promoted concepts ────────
     patch = prepare_catalog_patch(completed, Path("examples/copd"))
     output = tmp_path / "prepared"
     write_catalog_patch(patch, output)
@@ -229,12 +229,12 @@ def test_apl_bootstrap_requires_reviewed_catalog_then_publishes_persistent_ids_o
     assert receipt["sources_new_digest"] == manifest["sources_new_digest"]
     assert receipt["concepts_new_digest"] == manifest["concepts_new_digest"]
 
-    # Verify concepts.json contains the seven promoted concepts alongside existing ones
+    # Verify concepts.json contains the promoted concepts alongside existing ones
     concepts_data = json.loads(patch.concepts_json)
-    # 5 existing bundle concepts + 5 original promotions + 2 completed = 12
-    assert len(concepts_data) == 12
+    # 52 existing bundle concepts + 4 original promotions + 2 completed = 58
+    assert len(concepts_data) == 58
     concept_names = {c["canonical_name"] for c in concepts_data}
-    # All seven promoted concepts are present
+    # All promoted concepts are present
     assert "白细胞淤滞" in concept_names
     assert "凝血障碍分型" in concept_names
     for promo in update.concept_promotions:
@@ -453,6 +453,41 @@ def test_reject_duplicate_resolution_id_in_metadata() -> None:
     )
     with pytest.raises(ValueError, match="DUPLICATE_RESOLUTION_ID_IN_METADATA"):
         complete_catalog_update_metadata(update, duped, Path("examples/copd"))
+
+
+def test_duplicate_resolutions_can_share_identical_reviewed_concept() -> None:
+    """Reviewer may map duplicate surface terms to one reviewed concept."""
+    update, _, _ = _build_blocked_update_for_copd()
+    incomplete = list(update.incomplete_concept_metadata)
+    first, second = incomplete[0], incomplete[1]
+    reviewed = (
+        ReviewedMetadataEntry(
+            resolution_id=first.resolution_id,
+            canonical_name="共享审阅概念",
+            preferred_english="shared reviewed concept",
+            concept_type="other",
+            scope_note="Reviewed concept shared by duplicate surface terms.",
+        ),
+        ReviewedMetadataEntry(
+            resolution_id=second.resolution_id,
+            canonical_name="共享审阅概念",
+            preferred_english="shared reviewed concept",
+            concept_type="other",
+            scope_note="Reviewed concept shared by duplicate surface terms.",
+        ),
+    )
+    missing = tuple(
+        ReviewedMetadataEntry(
+            resolution_id=item.resolution_id,
+            canonical_name=item.surface_text,
+            concept_type="other",
+            scope_note=f"Reviewed metadata for {item.surface_text}.",
+        )
+        for item in incomplete[2:]
+    )
+    completed = complete_catalog_update_metadata(update, reviewed + missing, Path("examples/copd"))
+    names = [item.concept.canonical_name for item in completed.concept_promotions]
+    assert names.count("共享审阅概念") == 1
 
 
 def test_reject_alias_collision_in_completed_metadata() -> None:

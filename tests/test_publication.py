@@ -142,8 +142,8 @@ def test_exact_artifact_digests_and_byte_lengths() -> None:
     assert json_artifact.content_digest == _digest_from_utf8(json_artifact.content_utf8)
     assert json_artifact.byte_length == len(json_artifact.content_utf8.encode("utf-8"))
     assert md_artifact.content_digest == (
-        "sha256:d25973ef1417505ca830102ae46291ee"
-        "f27fe204c87dfa9634b4083236094460"
+        "sha256:32b92ed17ac890e6b38fc34198a30296"
+        "5bf9383c7a6d7d81c87cef82e5e9a416"
     )
     assert md_artifact.byte_length == 747
     assert md_artifact.content_digest == _digest_from_utf8(md_artifact.content_utf8)
@@ -154,7 +154,7 @@ def test_exact_publication_plan_id_and_object_digest() -> None:
     store = MemoryStore()
     plan, plan_body, _, _ = build_plan(store)
     assert plan.publication_plan_id == (
-        "publication_plan_4a4156ae087e947c6f2acb8352183fdc"
+        "publication_plan_e6c34a10790cdbe6cacf7e8618d368f8"
     )
     expected = publication_plan_identity(
         plan.approval_id,
@@ -166,8 +166,8 @@ def test_exact_publication_plan_id_and_object_digest() -> None:
     )
     assert plan.publication_plan_id == expected
     assert publication_plan_object_digest(plan) == (
-        "sha256:df3ac744315924713ab89a1aebed022a"
-        "45e6f0b17d9d0d7c673b3dd6f7136dcb"
+        "sha256:e4f1942e0e8e76d6a386f80f48a28a21"
+        "f41de1552446cff8281074d379fbbaaa"
     )
     assert publication_plan_object_digest(plan) == _sha256(
         canonical_publication_plan_json(plan)

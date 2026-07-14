@@ -171,37 +171,56 @@ def complete_catalog_update_metadata(
         if extra:
             raise ValueError(f"EXTRA_REVIEWED_METADATA: {sorted(extra)}")
 
-    # ── 4. No duplicate canonical names or aliases within reviewed metadata
-    names = [item.canonical_name for item in reviewed_metadata]
-    if len(set(names)) != len(names):
-        raise ValueError("DUPLICATE_CANONICAL_NAME_IN_METADATA")
+    # ── 4. Merge duplicate resolutions only when the reviewer supplied the
+    # exact same concept metadata.  This lets aliases like DIC and its Chinese
+    # expansion resolve to one concept without silently accepting conflicts.
+    metadata_by_concept: dict[
+        tuple[str, str | None, ConceptType, str, tuple[str, ...]], list[str]
+    ] = {}
+    names: dict[str, tuple[str, str | None, ConceptType, str, tuple[str, ...]]] = {}
+    for item in reviewed_metadata:
+        key = (
+            item.canonical_name,
+            item.preferred_english,
+            item.concept_type,
+            item.scope_note,
+            item.aliases,
+        )
+        existing = names.get(item.canonical_name)
+        if existing is not None and existing != key:
+            raise ValueError("DUPLICATE_CANONICAL_NAME_IN_METADATA")
+        names[item.canonical_name] = key
+        metadata_by_concept.setdefault(key, []).append(item.resolution_id)
 
     all_alias_texts: list[str] = []
-    for item in reviewed_metadata:
-        all_alias_texts.extend(item.aliases)
+    for concept_key in metadata_by_concept:
+        all_alias_texts.extend(concept_key[4])
     if len(set(all_alias_texts)) != len(all_alias_texts):
         raise ValueError("DUPLICATE_ALIAS_IN_METADATA")
 
     # ── 5. Build new concept entities from reviewed metadata ──────────────
     new_concepts: list[ConceptEntity] = []
-    for entry in reviewed_metadata:
-        alias_objects = _metadata_alias_objects(entry.aliases)
+    resolution_groups: list[tuple[tuple[str, ...], ConceptEntity]] = []
+    for concept_key, resolution_ids in metadata_by_concept.items():
+        canonical_name, preferred_english, concept_type, scope_note, aliases = concept_key
+        alias_objects = _metadata_alias_objects(aliases)
         concept = ConceptEntity(
             concept_id=_id(
                 "concept",
-                entry.canonical_name,
-                entry.preferred_english,
-                entry.concept_type,
-                entry.scope_note,
+                canonical_name,
+                preferred_english,
+                concept_type,
+                scope_note,
                 alias_objects,
             ),
-            canonical_name=entry.canonical_name,
-            preferred_english=entry.preferred_english,
-            concept_type=entry.concept_type,
-            scope_note=entry.scope_note,
+            canonical_name=canonical_name,
+            preferred_english=preferred_english,
+            concept_type=concept_type,
+            scope_note=scope_note,
             aliases=alias_objects,
         )
         new_concepts.append(concept)
+        resolution_groups.append((tuple(resolution_ids), concept))
 
     # ── 6. Verify no ID or alias collision with target base bundle ────────
     bundle = ContractBundle.from_directory(bundle_path)
@@ -229,10 +248,10 @@ def complete_catalog_update_metadata(
     # ── 7. Build new promotions and completed update ──────────────────────
     new_promotions = tuple(
         CatalogConceptPromotion(
-            candidate_id=_id("candidate_concept", concept.concept_id, entry.resolution_id),
+            candidate_id=_id("candidate_concept", concept.concept_id, resolution_ids),
             concept=concept,
         )
-        for entry, concept in zip(reviewed_metadata, new_concepts, strict=True)
+        for resolution_ids, concept in resolution_groups
     )
     all_promotions = blocked_update.concept_promotions + new_promotions
 
