@@ -21,6 +21,7 @@ from medlearn_vault.domain.learner import (
     MisconceptionObservation,
     OpenQuestion,
 )
+from medlearn_vault.domain.sources import SourceDocument
 from medlearn_vault.identifiers import normalize_text
 from medlearn_vault.registry import resolve_alias
 from medlearn_vault.terminology import english_abbreviations, format_concept_label
@@ -60,6 +61,37 @@ class CaptureContext(DomainModel):
     def validate_interval(self) -> CaptureContext:
         if self.session_started_at > self.captured_at:
             raise ValueError("session_started_at must not be after captured_at")
+        return self
+
+
+def learning_chat_source_id(context: CaptureContext) -> SourceId:
+    """Derive the only missing source ID eligible for bootstrap promotion."""
+    identity = {
+        "session_id": context.session_id,
+        "discipline_id": context.discipline_id,
+        "course_id": context.course_id,
+        "chapter_id": context.chapter_id,
+        "locale": context.locale,
+        "session_started_at": context.session_started_at.isoformat(),
+        "captured_at": context.captured_at.isoformat(),
+    }
+    encoded = json.dumps(
+        identity, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return "source_" + hashlib.sha256(encoded).hexdigest()[:32]
+
+
+class LearningChatSourceCandidate(DomainModel):
+    """Non-authoritative source provenance awaiting a reviewed catalog patch."""
+
+    candidate_id: str = Field(pattern=r"^candidate_source_[a-f0-9]{32}$")
+    context_digest: str = Field(pattern=r"^sha256:[a-f0-9]{64}$")
+    source: SourceDocument
+
+    @model_validator(mode="after")
+    def validate_learning_chat_provenance(self) -> LearningChatSourceCandidate:
+        if self.source.source_type != "learning_chat" or self.source.authority != 0:
+            raise ValueError("learning chat source candidates must be non-authoritative")
         return self
 
 
@@ -284,6 +316,7 @@ class CaptureProposal(DomainModel):
     base_bundle_digest: str = Field(pattern=r"^sha256:[a-f0-9]{64}$")
     proposal_digest: str = Field(pattern=r"^sha256:[a-f0-9]{64}$")
     context: CaptureContext
+    source_candidate: LearningChatSourceCandidate | None = None
     concept_resolutions: tuple[ConceptResolutionProposal, ...]
     new_concept_candidates: tuple[NewConceptCandidate, ...]
     claim_proposals: tuple[ClaimProposal, ...]
@@ -292,6 +325,11 @@ class CaptureProposal(DomainModel):
 
     @model_validator(mode="after")
     def validate_references_and_status(self) -> CaptureProposal:
+        if self.source_candidate is not None:
+            if self.source_candidate.source.source_id != self.context.source_id:
+                raise ValueError("source candidate must match capture context source_id")
+            if self.source_candidate.context_digest != _digest(self.context):
+                raise ValueError("source candidate must match capture context")
         existing = {
             item.matched_concept_id
             for item in self.concept_resolutions
@@ -343,6 +381,7 @@ def _canonical(
             key: _canonical(item, exclude_proposal_digest=exclude_proposal_digest, field_name=key)
             for key, item in sorted(value.items())
             if not (exclude_proposal_digest and key == "proposal_digest")
+            and not (key == "source_candidate" and item is None)
         }
     if isinstance(value, (list, tuple)):
         items = [
@@ -403,8 +442,34 @@ def capture_proposal_digest(proposal: CaptureProposal) -> str:
     return _digest(proposal, exclude_proposal_digest=True)
 
 
+def capture_proposal_storage_payload(proposal: CaptureProposal) -> dict[str, Any]:
+    """Keep pre-bootstrap Proposal bytes stable when no source candidate is needed."""
+    payload = proposal.model_dump(mode="json")
+    if payload["source_candidate"] is None:
+        del payload["source_candidate"]
+    return payload
+
+
 def _id(prefix: str, *parts: Any) -> str:
     return f"{prefix}_{hashlib.sha256(_bytes(parts)).hexdigest()[:32]}"
+
+
+def learning_chat_source_candidate(context: CaptureContext) -> LearningChatSourceCandidate:
+    """Return deterministic, non-authoritative provenance for a session source."""
+    source_id = learning_chat_source_id(context)
+    if context.source_id != source_id:
+        raise ValueError("capture context source_id is not a derived learning chat source")
+    context_digest = _digest(context)
+    return LearningChatSourceCandidate(
+        candidate_id=_id("candidate_source", context_digest),
+        context_digest=context_digest,
+        source=SourceDocument(
+            source_id=source_id,
+            source_type="learning_chat",
+            title=f"Learning chat session {context.session_id}",
+            authority=0,
+        ),
+    )
 
 
 def _statement(value: str) -> str:
@@ -420,18 +485,36 @@ def _ordered_unique(values: tuple[str, ...]) -> tuple[str, ...]:
 def build_capture_proposal(bundle: ContractBundle, draft: CaptureDraft) -> CaptureProposal:
     """Build a proposal without I/O, mutation, environment access, or probabilistic behavior."""
     issues: list[ProposalIssue] = []
+    source_candidate: LearningChatSourceCandidate | None = None
     source = next(
         (item for item in bundle.sources if item.source_id == draft.context.source_id), None
     )
     if source is None:
-        issues.append(
-            ProposalIssue(
-                code="MISSING_SOURCE",
-                severity="error",
-                field="context.source_id",
-                message="capture source does not exist",
+        try:
+            source_candidate = learning_chat_source_candidate(draft.context)
+        except ValueError:
+            issues.append(
+                ProposalIssue(
+                    code="MISSING_SOURCE",
+                    severity="error",
+                    field="context.source_id",
+                    message="capture source does not exist",
+                )
             )
-        )
+        else:
+            issues.append(
+                ProposalIssue(
+                    code="CATALOG_UPDATE_REQUIRED",
+                    severity="review",
+                    field="context.source_id",
+                    message=(
+                        "review and manually merge the learning_chat source candidate before "
+                        "rerunning this handoff"
+                    ),
+                    candidate_id=source_candidate.candidate_id,
+                    target_ids=(source_candidate.source.source_id,),
+                )
+            )
     elif source.source_type != "learning_chat":
         issues.append(
             ProposalIssue(
@@ -595,6 +678,18 @@ def build_capture_proposal(bundle: ContractBundle, draft: CaptureDraft) -> Captu
                 )
             )
             by_term[normalize_text(term)] = ProposalConceptRef(candidate_id=cid)
+            issues.append(
+                ProposalIssue(
+                    code="CATALOG_UPDATE_REQUIRED",
+                    severity="review",
+                    field="concept_resolutions",
+                    message=(
+                        "review and manually merge this complete concept candidate before "
+                        "rerunning the handoff"
+                    ),
+                    candidate_id=cid,
+                )
+            )
         else:
             resolutions.append(
                 ConceptResolutionProposal(
@@ -606,10 +701,13 @@ def build_capture_proposal(bundle: ContractBundle, draft: CaptureDraft) -> Captu
             )
             issues.append(
                 ProposalIssue(
-                    code="UNKNOWN_CONCEPT",
+                    code="CATALOG_UPDATE_REQUIRED",
                     severity="review",
                     field="concept_resolutions",
-                    message="unknown concept lacks complete candidate metadata",
+                    message=(
+                        "supply complete concept metadata in the catalog update, manually merge "
+                        "it, then rerun the handoff"
+                    ),
                     candidate_id=rid,
                 )
             )
@@ -620,10 +718,13 @@ def build_capture_proposal(bundle: ContractBundle, draft: CaptureDraft) -> Captu
         if any(item is None for item in values):
             issues.append(
                 ProposalIssue(
-                    code="UNRESOLVED_CONCEPT_REFERENCE",
+                    code="CATALOG_UPDATE_REQUIRED",
                     severity="review",
                     field=field,
-                    message="candidate references an unresolved concept",
+                    message=(
+                        "referenced terms need catalog metadata and a manual catalog merge before "
+                        "this capture can be reviewed"
+                    ),
                 )
             )
         return tuple(
@@ -897,6 +998,7 @@ def build_capture_proposal(bundle: ContractBundle, draft: CaptureDraft) -> Captu
         base_bundle_digest=bundle_hash,
         proposal_digest="sha256:" + "0" * 64,
         context=draft.context,
+        source_candidate=source_candidate,
         concept_resolutions=tuple(sorted(resolutions, key=lambda item: item.resolution_id)),
         new_concept_candidates=tuple(sorted(new_candidates, key=lambda item: item.candidate_id)),
         claim_proposals=tuple(sorted(claim_proposals, key=lambda item: item.candidate_id)),
@@ -1003,6 +1105,22 @@ def render_capture_proposal_markdown(proposal: CaptureProposal, *, bundle: Contr
         f"- [{item.severity.upper()}] {item.code} · {item.field}: {item.message}"
         for item in proposal.issues
     ]
+    source_candidate_lines = (
+        [
+            f"- candidate_id: `{proposal.source_candidate.candidate_id}`",
+            f"- source_id: `{proposal.source_candidate.source.source_id}`",
+            "- source_type: `learning_chat` (non-authoritative learner provenance)",
+            "- next action: review and manually merge the catalog-update patch, then rerun",
+        ]
+        if proposal.source_candidate is not None
+        else ["- 无"]
+    )
+    incomplete_metadata = [
+        f"- {item.surface_text} (`{item.resolution_id}`): canonical_name, concept_type, scope_note"
+        for item in proposal.concept_resolutions
+        if item.status == "review_required" and not item.candidate_concept_ids
+    ]
+    needs_catalog_update = any(item.code == "CATALOG_UPDATE_REQUIRED" for item in proposal.issues)
     blocked = (
         "⛔ BLOCKED（必须消歧或修正后才能继续）"
         if proposal.status == "blocked"
@@ -1037,4 +1155,14 @@ def render_capture_proposal_markdown(proposal: CaptureProposal, *, bundle: Contr
         ),
         "## 阻断项与警告\n" + "\n".join(issue_lines or ["- 无"]),
     ]
+    if needs_catalog_update:
+        sections.extend(
+            [
+                "## 学习会话来源候选\n" + "\n".join(source_candidate_lines),
+                "## 不完整概念元数据\n" + "\n".join(incomplete_metadata or ["- 无"]),
+                "## 下一步\n运行 `medlearn capture catalog-update`，"
+                "人工审阅并合并来源/概念目录补丁后，"
+                "使用相同 Handoff 重新生成 Proposal。",
+            ]
+        )
     return "\n\n".join(sections) + "\n"

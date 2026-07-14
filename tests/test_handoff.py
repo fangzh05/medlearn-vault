@@ -9,6 +9,7 @@ from medlearn_vault.capture import (
     IntakeEnvelope,
     extract_capture_draft,
     intake_envelope_digest,
+    learning_chat_source_id,
 )
 from medlearn_vault.handoff import (
     MAX_EXCERPT,
@@ -110,7 +111,7 @@ def test_handoff_is_utf8_deterministic_and_revalidates_draft() -> None:
     assert handoff_digest(handoff).startswith("sha256:")
     draft = handoff_to_intake(handoff).draft
     assert CaptureDraft.model_validate_json(draft.model_dump_json()) == draft
-    assert draft.context.source_id == f"source_{handoff_digest(handoff)[7:39]}"
+    assert draft.context.source_id == learning_chat_source_id(draft.context)
     assert draft.evidence_messages[0].observed_at == draft.context.captured_at
     assert (
         handoff_to_intake(handoff).draft.evidence_messages[0].message_id

@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import platform
@@ -16,9 +17,16 @@ from medlearn_vault.capture import (
     IntakeEnvelope,
     build_capture_proposal,
     capture_proposal_digest,
+    capture_proposal_storage_payload,
     contract_bundle_digest,
     extract_capture_draft,
     render_capture_proposal_markdown,
+)
+from medlearn_vault.catalog_update import (
+    CatalogUpdateProposal,
+    build_catalog_update_proposal,
+    canonical_catalog_update_json,
+    render_catalog_update_markdown,
 )
 from medlearn_vault.domain import (
     ChapterDossier,
@@ -111,6 +119,7 @@ WORKFLOW_SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "capture_proposal": CaptureProposal,
     "intake_envelope": IntakeEnvelope,
     "medlearn_handoff": MedLearnHandoff,
+    "catalog_update_proposal": CatalogUpdateProposal,
 }
 CONTROL_SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "proposal_approval": ProposalApprovalRecord,
@@ -590,7 +599,10 @@ def propose_capture(bundle_path: Path, draft_path: Path, output: Path) -> None:
         bundle = ContractBundle.from_directory(bundle_path)
         draft = CaptureDraft.model_validate_json(draft_path.read_text(encoding="utf-8"))
         proposal = build_capture_proposal(bundle, draft)
-        payload = json.dumps(proposal.model_dump(mode="json"), ensure_ascii=False, indent=2) + "\n"
+        payload = (
+            json.dumps(capture_proposal_storage_payload(proposal), ensure_ascii=False, indent=2)
+            + "\n"
+        )
     except (OSError, ValidationError, ValueError) as exc:
         _safe_error("INVALID_CAPTURE_INPUT", "input", type(exc).__name__)
         raise typer.Exit(1) from exc
@@ -619,6 +631,33 @@ def review_capture(bundle_path: Path, proposal_path: Path, output: Path) -> None
         raise typer.Exit(1) from exc
     output.write_text(markdown, encoding="utf-8")
     typer.echo(output.as_posix())
+
+
+@capture_app.command("catalog-update")
+def catalog_update_capture(proposal_path: Path, json_output: Path, review_output: Path) -> None:
+    """Create review-only repository-patch contents; this command never writes a bundle or R2."""
+    try:
+        exact_proposal_bytes = proposal_path.read_bytes()
+        proposal = CaptureProposal.model_validate_json(exact_proposal_bytes)
+        if capture_proposal_digest(proposal) != proposal.proposal_digest:
+            _safe_error("PROPOSAL_DIGEST_MISMATCH", "proposal_digest", "proposal was modified")
+            raise typer.Exit(1)
+        update = build_catalog_update_proposal(
+            proposal,
+            capture_proposal_object_digest=(
+                "sha256:" + hashlib.sha256(exact_proposal_bytes).hexdigest()
+            ),
+        )
+    except typer.Exit:
+        raise
+    except (OSError, ValidationError, ValueError) as exc:
+        _safe_error("INVALID_CAPTURE_PROPOSAL", "proposal", type(exc).__name__)
+        raise typer.Exit(1) from exc
+    json_output.write_bytes(canonical_catalog_update_json(update))
+    review_output.write_text(render_catalog_update_markdown(update), encoding="utf-8")
+    typer.echo(f"catalog_update_id={update.catalog_update_id} status={update.status}")
+    if update.status == "blocked":
+        raise typer.Exit(1)
 
 
 @concept_app.command("validate")

@@ -17,6 +17,7 @@ from medlearn_vault.capture import (
     ExtractedLearnerEvidenceCandidate,
     ExtractedMisconceptionCandidate,
     IntakeEnvelope,
+    learning_chat_source_id,
 )
 from medlearn_vault.domain.base import AwareDatetime, DomainModel
 from medlearn_vault.domain.concepts import ConceptType
@@ -234,16 +235,18 @@ def handoff_to_intake(handoff: MedLearnHandoff) -> IntakeEnvelope:
         )
         for item in handoff.unresolved_questions
     )
-    draft = CaptureDraft(
-        context=CaptureContext(
-            source_id=f"source_{digest[:32]}",
+    context = CaptureContext(
+            source_id="source_00000000000000000000000000000000",
             session_id=f"session_{digest[:32]}",
             discipline_id=handoff.session.discipline_id,
             course_id=handoff.session.course_id,
             chapter_id=handoff.session.chapter_id,
             session_started_at=handoff.session.session_started_at,
             captured_at=handoff.session.captured_at,
-        ),
+        )
+    context = context.model_copy(update={"source_id": learning_chat_source_id(context)})
+    draft = CaptureDraft(
+        context=context,
         evidence_messages=evidence,
         concept_mentions=tuple(
             ExtractedConceptMention(

@@ -221,7 +221,7 @@ def test_materialization_refuses_blocked_ambiguous_stale_tampered_and_unresolved
     with pytest.raises(ValueError, match="PROPOSAL_DIGEST_MISMATCH"):
         materialize_learning_capture(copd, tampered)
     unresolved = build_capture_proposal(copd, draft("new-concept"))
-    with pytest.raises(ValueError, match="UNRESOLVED_CONCEPT"):
+    with pytest.raises(ValueError, match="BLOCKED_PROPOSAL"):
         materialize_learning_capture(copd, unresolved)
 
 
@@ -335,8 +335,9 @@ def test_complete_unknown_term_gets_only_a_stable_candidate_id() -> None:
     value = draft("new-concept")
     proposal = build_capture_proposal(bundle, value)
     candidate = proposal.new_concept_candidates[0]
-    assert proposal.status == "ready_for_review"
+    assert proposal.status == "blocked"
     assert candidate.candidate_id.startswith("candidate_concept_")
     assert "concept_id" not in type(candidate).model_fields
     assert proposal.claim_proposals[0].concept_refs[0].candidate_id == candidate.candidate_id
+    assert any(item.code == "CATALOG_UPDATE_REQUIRED" for item in proposal.issues)
     assert build_capture_proposal(bundle, value) == proposal

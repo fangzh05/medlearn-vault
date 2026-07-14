@@ -1,0 +1,36 @@
+{
+  "handoff_version": "0.1.0",
+  "session": {
+    "title": "Sanitized APL-style review",
+    "discipline_id": "medicine",
+    "course_id": "hematology",
+    "chapter_id": "acute_leukemia",
+    "session_started_at": "2026-07-14T19:00:00+08:00",
+    "captured_at": "2026-07-14T19:20:00+08:00"
+  },
+  "learning_goals": [],
+  "evidence_messages": [
+    {"local_id": "u001", "role": "user", "observed_at": "2026-07-14T19:05:00+08:00", "excerpt": "我把 APL 和 PML-RARA 的关系复述了一遍。", "purpose": "learner_recall"},
+    {"local_id": "a001", "role": "assistant", "observed_at": "2026-07-14T19:12:00+08:00", "excerpt": "这只是学习对话的非权威教学回应。", "purpose": "teaching_response"}
+  ],
+  "concepts": [
+    {"name": "急性早幼粒细胞白血病", "preferred_english": "acute promyelocytic leukemia", "concept_type": "disease", "scope_note": "A distinct acute myeloid leukemia subtype discussed in this learning session.", "evidence_local_ids": ["u001"]},
+    {"name": "PML-RARA 融合基因", "preferred_english": "PML-RARA fusion", "concept_type": "gene", "scope_note": "The named fusion-gene concept used for this session's learner observation.", "evidence_local_ids": ["u001"]},
+    {"name": "t(15;17)", "preferred_english": "t(15;17) translocation", "concept_type": "gene", "scope_note": "The named translocation term used in this session.", "evidence_local_ids": ["u001"]},
+    {"name": "弥散性血管内凝血", "preferred_english": "disseminated intravascular coagulation", "concept_type": "complication", "scope_note": "The coagulation complication concept mentioned in this learning session.", "evidence_local_ids": ["u001"]},
+    {"name": "全反式维甲酸", "preferred_english": "all-trans retinoic acid", "concept_type": "drug", "scope_note": "The drug concept named by the learner in this session.", "evidence_local_ids": ["a001"]}
+  ],
+  "claims": [
+    {"statement": "APL 学习中提到了 PML-RARA 融合基因。", "claim_type": "mechanism", "concept_terms": ["急性早幼粒细胞白血病", "PML-RARA 融合基因"], "evidence_local_ids": ["u001"], "question_priority": null}
+  ],
+  "learner_evidence": [
+    {"concept_terms": ["急性早幼粒细胞白血病"], "evidence_type": "correct_independent", "confidence": 0.8, "rationale": "用户独立复述了所学内容。", "evidence_local_ids": ["u001"]}
+  ],
+  "misconceptions": [
+    {"observed_error_logic": "把凝血相关概念和另一个未定义术语混为一谈。", "concept_terms": ["弥散性血管内凝血"], "observed_error_local_ids": ["u001"], "correction_local_ids": ["a001"], "proposed_correction": "需要在权威来源中单独核对。", "correction_terms": ["全反式维甲酸"], "severity": "medium"}
+  ],
+  "unresolved_questions": [
+    {"statement": "白细胞淤滞与凝血障碍分型应如何区分？", "concept_terms": ["白细胞淤滞", "凝血障碍分型"], "evidence_local_ids": ["u001"], "question_priority": "medium"}
+  ],
+  "unfinished_topics": []
+}
