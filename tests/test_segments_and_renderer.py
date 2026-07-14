@@ -92,5 +92,5 @@ def test_renderer_v2_has_chinese_labels_and_no_internal_ids() -> None:
         proposal_id="proposal_test",
     )
     body = markdown.split("---\n", 2)[2]
-    assert "高置信度错误" in body and "部分掌握" in body and "错误逻辑" in body
+    assert "## 明确错误" in body and "部分掌握" in body and "错误逻辑" in body
     assert "concept_" not in body and "claim_" not in body and "proposal_" not in body
