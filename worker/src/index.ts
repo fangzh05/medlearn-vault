@@ -19,21 +19,23 @@ export interface Env {
   MEDLEARN_WORK_ALLOWED_ORIGINS?: string;
   MEDLEARN_SYNC_TOKEN?: string;
   GITHUB_ACTIONS_DISPATCH_TOKEN?: string;
+  MEDLEARN_WORK_DISPATCH_MODE?: string;
 }
 
-interface IntakeConfig {
+type DispatchMode = "github" | "persist_only";
+
+interface WorkConfig {
   CONTROL_BUCKET: R2Bucket;
-  GITHUB_ACTIONS_DISPATCH_TOKEN: string;
+  dispatchMode: DispatchMode;
+  githubToken?: string;
 }
 
-interface Config extends IntakeConfig { MEDLEARN_INGEST_TOKEN: string }
+interface Config extends WorkConfig { MEDLEARN_INGEST_TOKEN: string }
 
 interface VaultConfig {
   VAULT_BUCKET: R2Bucket;
   MEDLEARN_SYNC_TOKEN: string;
 }
-
-type WorkConfig = IntakeConfig;
 
 interface OAuthConfig {
   issuer: string;
@@ -97,11 +99,9 @@ function secureMcp(response: Response): Response {
 
 function config(env: Env): Config | null {
   const token = env.MEDLEARN_INGEST_TOKEN;
-  const github = env.GITHUB_ACTIONS_DISPATCH_TOKEN;
-  if (!env.CONTROL_BUCKET || typeof env.CONTROL_BUCKET.get !== "function") return null;
   if (typeof token !== "string" || token.length < 32) return null;
-  if (typeof github !== "string" || github.trim().length === 0) return null;
-  return { CONTROL_BUCKET: env.CONTROL_BUCKET, MEDLEARN_INGEST_TOKEN: token, GITHUB_ACTIONS_DISPATCH_TOKEN: github };
+  const work = workConfig(env);
+  return work ? { ...work, MEDLEARN_INGEST_TOKEN: token } : null;
 }
 
 function vaultConfig(env: Env): VaultConfig | null {
@@ -112,10 +112,13 @@ function vaultConfig(env: Env): VaultConfig | null {
 }
 
 function workConfig(env: Env): WorkConfig | null {
-  const github = env.GITHUB_ACTIONS_DISPATCH_TOKEN;
   if (!env.CONTROL_BUCKET || typeof env.CONTROL_BUCKET.get !== "function") return null;
-  if (typeof github !== "string" || github.trim().length === 0) return null;
-  return { CONTROL_BUCKET: env.CONTROL_BUCKET, GITHUB_ACTIONS_DISPATCH_TOKEN: github };
+  const dispatchMode = env.MEDLEARN_WORK_DISPATCH_MODE;
+  if (dispatchMode !== "github" && dispatchMode !== "persist_only") return null;
+  if (dispatchMode === "persist_only") return { CONTROL_BUCKET: env.CONTROL_BUCKET, dispatchMode };
+  const githubToken = env.GITHUB_ACTIONS_DISPATCH_TOKEN;
+  if (typeof githubToken !== "string" || githubToken.trim().length === 0) return null;
+  return { CONTROL_BUCKET: env.CONTROL_BUCKET, dispatchMode, githubToken };
 }
 
 function canonicalIssuer(value: string): string | null {
@@ -224,14 +227,15 @@ function sanitizeJob(job: JobRecord): JobRecord {
   return clean;
 }
 
-async function dispatch(env: IntakeConfig, job: JobRecord): Promise<boolean> {
+async function dispatch(env: WorkConfig, job: JobRecord): Promise<boolean> {
+  if (env.dispatchMode !== "github" || !env.githubToken) return false;
   try {
     const response = await fetch(
       "https://api.github.com/repos/fangzh05/medlearn-vault/actions/workflows/medlearn-propose.yml/dispatches",
       {
         method: "POST",
         headers: {
-          authorization: `Bearer ${env.GITHUB_ACTIONS_DISPATCH_TOKEN}`,
+          authorization: `Bearer ${env.githubToken}`,
           accept: "application/vnd.github+json",
           "content-type": "application/json",
           "user-agent": "medlearn-cloud",
@@ -282,7 +286,7 @@ async function ensureArtifacts(
   return job;
 }
 
-async function dispatchRecoverably(env: IntakeConfig, stored: Stored<JobRecord>, nowMs: number): Promise<Response> {
+async function dispatchRecoverably(env: WorkConfig, stored: Stored<JobRecord>, nowMs: number): Promise<Response> {
   const jobKey = `v1/jobs/${stored.value.job_id}.json`;
   const job = stored.value;
   if (["dispatched", "running", "succeeded", "blocked", "expired"].includes(job.status))
@@ -328,7 +332,7 @@ async function dispatchRecoverably(env: IntakeConfig, stored: Stored<JobRecord>,
 }
 
 async function submitIntake(
-  env: IntakeConfig, body: ArrayBuffer, idempotencyKey: string, nowMs: number,
+  env: WorkConfig, body: ArrayBuffer, idempotencyKey: string, nowMs: number,
 ): Promise<Response> {
   let parsed: unknown;
   try { parsed = JSON.parse(new TextDecoder().decode(body)); }
@@ -348,6 +352,7 @@ async function submitIntake(
   const claim = await claimIdempotency(env.CONTROL_BUCKET, idemKey, intakeDigest, new Date(nowMs).toISOString());
   if (claim.intake_digest !== intakeDigest) return reply(409, { error: "IDEMPOTENCY_CONFLICT" });
   const job = await ensureArtifacts(env.CONTROL_BUCKET, claim, intakeKey, body, new Date(nowMs).toISOString());
+  if (env.dispatchMode === "persist_only") return reply(202, sanitizeJob(job.value));
   return dispatchRecoverably(env, job, nowMs);
 }
 

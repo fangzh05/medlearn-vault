@@ -2,6 +2,9 @@ name = "medlearn-cloud"
 main = "src/index.ts"
 compatibility_date = "2026-07-11"
 
+[vars]
+MEDLEARN_WORK_DISPATCH_MODE = "github"
+
 [[r2_buckets]]
 binding = "CONTROL_BUCKET"
 bucket_name = "medlearn-control"
@@ -12,3 +15,10 @@ bucket_name = "medlearn-vault"
 
 [env.oauth-staging]
 name = "medlearn-cloud-oauth-staging"
+
+[env.oauth-staging.vars]
+MEDLEARN_WORK_DISPATCH_MODE = "persist_only"
+
+[[env.oauth-staging.r2_buckets]]
+binding = "CONTROL_BUCKET"
+bucket_name = "medlearn-control-oauth-staging"

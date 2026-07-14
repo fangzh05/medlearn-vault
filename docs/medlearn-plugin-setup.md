@@ -3,8 +3,9 @@
 ## Phase A: code complete
 
 The repository contains the MCP lifecycle, OAuth Resource Server boundary, the
-explicit-source Skill, and plugin manifest. No `.app.json` is generated and no
-OAuth provider is configured, so this phase cannot submit to production.
+explicit-source Skill, and plugin manifest. No production `.app.json` is
+generated or OAuth provider is configured, so this phase cannot submit to
+production.
 
 ## Phase B: real deployment
 
@@ -69,6 +70,7 @@ what separates the two environments.
 | `MEDLEARN_WORK_OAUTH_AUDIENCE` | `https://medlearn-cloud.fzh050531.workers.dev` | `https://medlearn-cloud-oauth-staging.fzh050531.workers.dev` |
 | `MEDLEARN_WORK_OAUTH_RESOURCE` | `https://medlearn-cloud.fzh050531.workers.dev` | `https://medlearn-cloud-oauth-staging.fzh050531.workers.dev` |
 | `MEDLEARN_WORK_OAUTH_ALLOWED_SUBJECT` | (Cloudflare Secret) | (Cloudflare Secret) |
+| `MEDLEARN_WORK_DISPATCH_MODE` | `github` | `persist_only` |
 
 ### Important notes
 
@@ -78,7 +80,21 @@ what separates the two environments.
 - The Client Secret must never enter a Worker or environment variable.
 - `MEDLEARN_WORK_OAUTH_ALLOWED_SUBJECT` must be set as a Cloudflare Secret
   (`npx wrangler secret put`), never in `wrangler.toml` or source code.
-- The staging Worker has no R2 buckets or GitHub Actions token; `tools/call`
-  returns `SERVICE_MISCONFIGURED` on staging, which is expected.
+- The staging Worker binds only `medlearn-control-oauth-staging`; it has no
+  `VAULT_BUCKET`, ingest/sync token, or GitHub Actions token. In `persist_only`,
+  `submitted` means persisted, not dispatched.
 - After staging acceptance, the staging Worker and staging Auth0 API may be
   deleted.
+
+## OAuth staging acceptance
+
+```text
+OAuth staging acceptance: PASS
+Date: 2026-07-14
+Resource: https://medlearn-cloud-oauth-staging.fzh050531.workers.dev
+Authorization server: https://medlearn-fzh.jp.auth0.com/
+Client registration: CIMD
+Authentication mode: Mixed Authentication
+Expected terminal result: SERVICE_MISCONFIGURED
+Observed result: SERVICE_MISCONFIGURED
+```

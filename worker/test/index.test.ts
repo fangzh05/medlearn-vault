@@ -161,6 +161,7 @@ beforeEach(() => {
     MEDLEARN_WORK_OAUTH_AUDIENCE: audience,
     MEDLEARN_WORK_OAUTH_RESOURCE: productionResource,
     MEDLEARN_WORK_OAUTH_ALLOWED_SUBJECT: "user-123",
+    MEDLEARN_WORK_DISPATCH_MODE: "github",
     GITHUB_ACTIONS_DISPATCH_TOKEN: "github-secret",
   };
   dispatch = vi.fn(async (input: RequestInfo | URL) => {
@@ -368,6 +369,76 @@ describe("security boundary", () => {
     expect(text).not.toContain("github-secret");
     expect(log).not.toHaveBeenCalled();
     expect(error).toHaveBeenCalledWith(JSON.stringify({ stage: "v1_route", error_code: "CONTROL_STORAGE_FAILURE" }));
+  });
+});
+
+describe("dispatch modes", () => {
+  it("fails closed when dispatch mode is unset", async () => {
+    const unconfigured = { ...env };
+    delete unconfigured.MEDLEARN_WORK_DISPATCH_MODE;
+    const response = await handle(capture(), unconfigured);
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: "SERVICE_MISCONFIGURED" });
+  });
+
+  it.each([
+    [{ MEDLEARN_WORK_DISPATCH_MODE: "GITHUB" }],
+    [{ MEDLEARN_WORK_DISPATCH_MODE: "other" }],
+    [{ MEDLEARN_WORK_DISPATCH_MODE: "github", GITHUB_ACTIONS_DISPATCH_TOKEN: undefined }],
+    [{ MEDLEARN_WORK_DISPATCH_MODE: "persist_only", CONTROL_BUCKET: undefined }],
+  ])("fails closed for dispatch configuration case %#", async (override) => {
+    const response = await handle(capture(), { ...env, ...override } as Env);
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: "SERVICE_MISCONFIGURED" });
+  });
+
+  it("persists without fetch, dispatch leases, or a GitHub token", async () => {
+    const noFetch = vi.fn(() => { throw new Error("persist_only must not fetch"); });
+    vi.stubGlobal("fetch", noFetch);
+    const persist = { ...env, MEDLEARN_WORK_DISPATCH_MODE: "persist_only" };
+    Object.defineProperty(persist, "GITHUB_ACTIONS_DISPATCH_TOKEN", { get: () => { throw new Error("persist_only must not read GitHub token"); } });
+    const response = await handle(capture(), persist);
+    const job = await response.json<JobRecord>();
+    expect(response.status).toBe(202);
+    expect(job).toMatchObject({ status: "received", dispatch_attempt: 0 });
+    expect(job.dispatch_lease_id).toBeUndefined();
+    expect(job.dispatch_lease_expires_at).toBeUndefined();
+    expect(noFetch).not.toHaveBeenCalled();
+  });
+
+  it("keeps persist_only submissions idempotent and content-addressed", async () => {
+    const persist = { ...env, MEDLEARN_WORK_DISPATCH_MODE: "persist_only", GITHUB_ACTIONS_DISPATCH_TOKEN: undefined };
+    const [oneResponse, twoResponse] = await Promise.all([handle(capture(), persist), handle(capture(), persist)]);
+    const [one, two] = await Promise.all([oneResponse.json<JobRecord>(), twoResponse.json<JobRecord>()]);
+    expect(one).toMatchObject({ status: "received", dispatch_attempt: 0 });
+    expect(two).toMatchObject({ job_id: one.job_id, intake_digest: one.intake_digest, intake_object_key: one.intake_object_key, dispatch_attempt: 0 });
+    expect([...bucket.objects.keys()].filter((key) => key.startsWith("v1/intakes/")).length).toBe(1);
+    expect([...bucket.objects.keys()].filter((key) => key.startsWith("v1/jobs/")).length).toBe(1);
+
+    const changed = JSON.parse(fixtureText);
+    changed.client_kind = "ios_shortcut";
+    const different = await (await handle(capture(JSON.stringify(changed), "key-2"), persist)).json<JobRecord>();
+    expect(different.job_id).not.toBe(one.job_id);
+    expect(different.intake_digest).not.toBe(one.intake_digest);
+    const conflict = await handle(capture(JSON.stringify(changed), "key-1"), persist);
+    expect(conflict.status).toBe(409);
+    expect(await conflict.json()).toEqual({ error: "IDEMPOTENCY_CONFLICT" });
+  });
+
+  it("reports persisted handoffs as submitted without a GitHub request", async () => {
+    const fetchSpy = vi.fn(async (input: RequestInfo | URL) => {
+      const url = input instanceof URL ? input.href : String(input);
+      if (url === `${issuer}.well-known/openid-configuration`) return new Response(JSON.stringify({ jwks_uri: `${issuer}jwks` }));
+      if (url === `${issuer}jwks`) return new Response(JSON.stringify({ keys: [publicJwk] }));
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+    const persist = { ...env, MEDLEARN_WORK_DISPATCH_MODE: "persist_only", GITHUB_ACTIONS_DISPATCH_TOKEN: "ignored-token" };
+    const response = await handle(mcp("tools/call", { name: "submit_learning_handoff", arguments: { handoff: handoff() } }), persist);
+    const body = await response.json<{ result: { structuredContent: { status: string; job_id: string } } }>();
+    expect(body.result.structuredContent.status).toBe("submitted");
+    expect(body.result.structuredContent.job_id).toMatch(/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/);
+    expect(fetchSpy.mock.calls.every(([input]) => !String(input).startsWith("https://api.github.com/"))).toBe(true);
   });
 });
 
@@ -616,6 +687,7 @@ describe("OAuth resource isolation and staging", () => {
     MEDLEARN_WORK_OAUTH_AUDIENCE: stagingResource,
     MEDLEARN_WORK_OAUTH_RESOURCE: stagingResource,
     MEDLEARN_WORK_OAUTH_ALLOWED_SUBJECT: "user-123",
+    MEDLEARN_WORK_DISPATCH_MODE: "persist_only",
   };
 
   it("uses production resource in protected-resource metadata", async () => {
@@ -732,14 +804,15 @@ describe("OAuth resource isolation and staging", () => {
     expect(body.result?.isError).toBe(true);
   });
 
-  it("staging environment has no R2 or GitHub bindings", async () => {
-    const stagingEnv = { ...stagingEnvBase };
-    expect(stagingEnv.CONTROL_BUCKET).toBeUndefined();
-    expect(stagingEnv.VAULT_BUCKET).toBeUndefined();
-    expect(stagingEnv.GITHUB_ACTIONS_DISPATCH_TOKEN).toBeUndefined();
-    // Health still works without any bindings
-    const response = await handle(request("/health"), stagingEnv);
-    expect(response.status).toBe(200);
+  it("configures staging with only its isolated control bucket", () => {
+    const wrangler = readFileSync(resolve("wrangler.toml"), "utf8");
+    const staging = wrangler.slice(wrangler.indexOf("[env.oauth-staging]"));
+    expect(wrangler).toContain('MEDLEARN_WORK_DISPATCH_MODE = "github"');
+    expect(staging).toContain('MEDLEARN_WORK_DISPATCH_MODE = "persist_only"');
+    expect(staging).toContain('bucket_name = "medlearn-control-oauth-staging"');
+    expect(staging).not.toContain('bucket_name = "medlearn-control"\n');
+    expect(staging).not.toContain("VAULT_BUCKET");
+    expect(staging).not.toContain("GITHUB_ACTIONS_DISPATCH_TOKEN");
   });
 
   it("staging authenticated tools/call produces zero writes", async () => {
@@ -871,6 +944,7 @@ describe("vault read API", () => {
     // ensure control config is valid
     vaultEnv.MEDLEARN_INGEST_TOKEN = token;
     vaultEnv.CONTROL_BUCKET = vaultBucket as unknown as R2Bucket;
+    vaultEnv.MEDLEARN_WORK_DISPATCH_MODE = "github";
     const response = await handle(
       request("/v1/captures", {
         method: "POST",
@@ -907,6 +981,7 @@ describe("vault read API", () => {
     const envNoVault: Env = {
       CONTROL_BUCKET: bucket as unknown as R2Bucket,
       MEDLEARN_INGEST_TOKEN: token,
+      MEDLEARN_WORK_DISPATCH_MODE: "github",
       GITHUB_ACTIONS_DISPATCH_TOKEN: "github-secret",
     };
     const response = await handle(request("/health"), envNoVault);
@@ -918,6 +993,7 @@ describe("vault read API", () => {
     const envNoVault: Env = {
       CONTROL_BUCKET: bucket as unknown as R2Bucket,
       MEDLEARN_INGEST_TOKEN: token,
+      MEDLEARN_WORK_DISPATCH_MODE: "github",
       GITHUB_ACTIONS_DISPATCH_TOKEN: "github-secret",
     };
     const response = await handle(capture(), envNoVault);
