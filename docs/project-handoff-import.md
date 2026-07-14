@@ -27,11 +27,15 @@ only `tools/call` requires an OAuth access token with
 `medlearn:handoff:submit`. It exposes exactly one tool,
 `submit_learning_handoff`, with input `{"handoff": {…}}`.
 
-The Work Skill must receive one explicitly selected Project Source. It must not
-scan Sources or chats, use project memory, add evidence, make medical
-inferences, save a token, or submit directly over HTTP. OAuth validation and
-schema validation are the MCP App boundary; deterministic conversion and the
-existing intake business function stay in-process in the Worker.
+The MedLearn Plugin/App instructions permit submission of exactly one
+explicitly selected or provided MedLearnHandoff. The remote Worker independently
+enforces OAuth, schema, evidence-reference, conversion, and idempotency boundaries.
+
+### Architectural separation
+
+- **Plugin instructions**: Define invocation behavior and user interaction rules. They are not a security boundary.
+- **MCP Tool**: The public capability interface, declaring the input/output schema and required OAuth scope.
+- **Worker**: The enforceable security and validation boundary. It performs OAuth validation, Handoff Schema validation, evidence-reference checks, enforces conversion rejection rules, ensures idempotency, and protects the R2 / GitHub workflow business boundary.
 
 The tool validates the strict UTF-8 schema, creates canonical JSON, derives
 source/session/message IDs and its idempotency key from the handoff SHA-256,
