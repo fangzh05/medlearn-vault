@@ -1791,7 +1791,11 @@ class ReproposalOrchestrator:
         except (ValueError, TypeError) as exc:
             raise WorkflowError("INVALID_INTAKE_ENVELOPE") from exc
 
-        proposal = build_capture_proposal(bundle, draft)
+        proposal = build_capture_proposal(
+            bundle,
+            draft,
+            proposal_identity_extra=f"reproposal:{REPROPOSAL_IDENTITY_VERSION}",
+        )
         proposal_bytes = exact_capture_proposal_json(proposal)
         review_bytes = render_capture_proposal_markdown(proposal, bundle=bundle).encode()
         proposal_digest = _digest(proposal_bytes)

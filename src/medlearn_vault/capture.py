@@ -546,7 +546,12 @@ def _ordered_unique(values: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(values))
 
 
-def build_capture_proposal(bundle: ContractBundle, draft: CaptureDraft) -> CaptureProposal:
+def build_capture_proposal(
+    bundle: ContractBundle,
+    draft: CaptureDraft,
+    *,
+    proposal_identity_extra: str | None = None,
+) -> CaptureProposal:
     """Build a proposal without I/O, mutation, environment access, or probabilistic behavior."""
     issues: list[ProposalIssue] = []
     source_candidate: LearningChatSourceCandidate | None = None
@@ -1012,7 +1017,12 @@ def build_capture_proposal(bundle: ContractBundle, draft: CaptureDraft) -> Captu
     )
     draft_hash = capture_draft_digest(draft)
     bundle_hash = contract_bundle_digest(bundle)
-    proposal_id = _id("proposal", WORKFLOW_VERSION, draft_hash, bundle_hash)
+    proposal_id_parts = (
+        (WORKFLOW_VERSION, draft_hash, bundle_hash)
+        if proposal_identity_extra is None
+        else (WORKFLOW_VERSION, draft_hash, bundle_hash, proposal_identity_extra)
+    )
+    proposal_id = _id("proposal", *proposal_id_parts)
     resolution_by_term = {normalize_text(item.surface_text): item for item in resolutions}
     capture_mentions: list[ConceptMention] = []
     for mention in draft.concept_mentions:
