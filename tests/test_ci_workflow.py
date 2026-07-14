@@ -128,3 +128,37 @@ def test_auto_publish_workflow_is_reusable_and_propose_calls_it() -> None:
     assert "MEDLEARN_AUTO_PUBLISH_DISABLED != 'true'" in propose
     assert "./.github/workflows/medlearn-auto-publish.yml" in propose
     assert "secrets: inherit" in propose
+
+
+def test_export_proposal_workflow_is_main_only_and_artifact_scoped() -> None:
+    text = Path(".github/workflows/medlearn-export-proposal.yml").read_text(encoding="utf-8")
+    data = yaml.load(text, Loader=yaml.BaseLoader)
+    inputs = data["on"]["workflow_dispatch"]["inputs"]
+    assert set(inputs) == {"source_job_id", "proposal_id", "confirmation"}
+    assert all(item["required"] == "true" for item in inputs.values())
+    assert data["permissions"] == {"contents": "read"}
+    assert data["concurrency"] == {
+        "group": "medlearn-export-proposal-${{ inputs.source_job_id }}-${{ inputs.proposal_id }}",
+        "cancel-in-progress": "false",
+    }
+    job = data["jobs"]["export"]
+    assert job["if"] == "github.ref == 'refs/heads/main'"
+    assert job["timeout-minutes"] == "10"
+    assert "env" not in job
+    for step in job["steps"]:
+        if "uses" in step:
+            assert re.fullmatch(r"[^@]+@[0-9a-f]{40}", step["uses"])
+    assert job["steps"][1]["with"] == {"persist-credentials": "false", "ref": "main"}
+    preflight = job["steps"][0]
+    assert "CONTROL_R2_" not in str(preflight)
+    assert "PROPOSAL_EXPORT_CONFIRMATION_MISMATCH" in preflight["run"]
+    export = next(step for step in job["steps"] if step.get("name", "").startswith("Export exact"))
+    assert "medlearn workflow export-proposal" in export["run"]
+    assert "medlearn capture catalog-update" in export["run"]
+    assert set(key for key in export["env"] if key.startswith("CONTROL_R2_")) == {
+        "CONTROL_R2_ENDPOINT", "CONTROL_R2_ACCESS_KEY_ID", "CONTROL_R2_SECRET_ACCESS_KEY",
+    }
+    assert "MEDLEARN_PROPOSE_BUNDLE_PATH" in export["env"]
+    upload = job["steps"][-1]
+    assert upload["uses"] == "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
+    assert upload["with"]["if-no-files-found"] == "error"

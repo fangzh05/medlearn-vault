@@ -1691,6 +1691,49 @@ def test_inspect_proposal_cli_is_sanitized(monkeypatch: pytest.MonkeyPatch) -> N
     assert "COPD" not in result.stdout + result.stderr
 
 
+def test_export_proposal_cli_writes_exact_blocked_outputs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    store = MemoryStore()
+    proposal_id, proposal_digest, base_digest, body = seed_proposal(store, blocked=True)
+    read_only = ReadOnlyRecordingStore(store.objects)
+    monkeypatch.setattr("medlearn_vault.cli.S3ReadOnlyObjectStore", lambda *args: read_only)
+    result = CliRunner().invoke(
+        app,
+        [
+            "workflow",
+            "export-proposal",
+            "job-approval-source",
+            proposal_id,
+            "--output",
+            str(tmp_path),
+        ],
+        env={
+            "CONTROL_R2_ENDPOINT": "configured",
+            "CONTROL_R2_ACCESS_KEY_ID": "configured",
+            "CONTROL_R2_SECRET_ACCESS_KEY": "configured",
+        },
+    )
+    assert result.exit_code == 0
+    assert (tmp_path / "proposal.json").read_bytes() == body
+    assert (tmp_path / "review.md").read_bytes()
+    details = json.loads((tmp_path / "inspect.json").read_text(encoding="utf-8"))
+    assert details["proposal_id"] == proposal_id
+    assert details["proposal_object_digest"] == proposal_digest
+    assert details["previous_base_bundle_digest"] == base_digest
+    assert details["source_candidate_present"] is False
+    assert details["source_candidate"] is None
+    assert details["new_concept_candidate_count"] == 0
+    assert details["non_matched_or_redirected_concept_resolutions"]
+    assert json.loads(result.stdout)["proposal_id"] == proposal_id
+    assert read_only.reads == [
+        "v1/jobs/job-approval-source.json",
+        "v1/executions/job-approval-source.json",
+        f"v1/proposals/{proposal_id}.json",
+        f"v1/reviews/{proposal_id}.md",
+    ]
+
+
 def test_verify_approval_workflow_yaml_is_read_only_and_argument_safe() -> None:
     path = Path(".github/workflows/medlearn-verify-approval.yml")
     text = path.read_text(encoding="utf-8")

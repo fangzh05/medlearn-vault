@@ -574,6 +574,115 @@ def workflow_inspect_proposal(source_job_id: str) -> None:
     )
 
 
+@workflow_app.command("export-proposal")
+def workflow_export_proposal(
+    source_job_id: str,
+    expected_proposal_id: str,
+    output: Annotated[Path, typer.Option("--output")],
+) -> None:
+    """Read-only export of one terminal Proposal and Review for catalog bootstrap."""
+    try:
+        store = S3ReadOnlyObjectStore(
+            os.environ.get("CONTROL_R2_ENDPOINT", ""),
+            os.environ.get("CONTROL_R2_ACCESS_KEY_ID", ""),
+            os.environ.get("CONTROL_R2_SECRET_ACCESS_KEY", ""),
+        )
+        job_key = f"v1/jobs/{source_job_id}.json"
+        job_stored = store.get(job_key)
+        if job_stored is None:
+            raise WorkflowError("JOB_NOT_FOUND")
+        job = JobRecord.model_validate_json(job_stored.body)
+        if (
+            job.job_id != source_job_id
+            or job.status not in {"succeeded", "blocked"}
+            or job.proposal_id != expected_proposal_id
+            or job.workflow_run_id is None
+        ):
+            raise WorkflowError("INVALID_JOB")
+
+        execution_key = f"v1/executions/{source_job_id}.json"
+        execution_stored = store.get(execution_key)
+        if execution_stored is None:
+            raise WorkflowError("EXECUTION_NOT_FOUND")
+        execution = ProposalExecutionRecord.model_validate_json(execution_stored.body)
+        if (
+            execution.job_id != source_job_id
+            or execution.status != job.status
+            or execution.proposal_id != expected_proposal_id
+            or execution.workflow_run_id != job.workflow_run_id
+            or execution.proposal_digest is None
+            or execution.review_digest is None
+        ):
+            raise WorkflowError("INVALID_EXECUTION")
+
+        proposal_key = f"v1/proposals/{expected_proposal_id}.json"
+        proposal_stored = store.get(proposal_key)
+        if proposal_stored is None:
+            raise WorkflowError("PROPOSAL_NOT_FOUND")
+        proposal = CaptureProposal.model_validate_json(proposal_stored.body)
+        proposal_object_digest = "sha256:" + hashlib.sha256(proposal_stored.body).hexdigest()
+        if (
+            proposal.proposal_id != expected_proposal_id
+            or capture_proposal_digest(proposal) != proposal.proposal_digest
+            or proposal_object_digest != execution.proposal_digest
+        ):
+            raise WorkflowError("INVALID_PROPOSAL")
+
+        review_key = f"v1/reviews/{expected_proposal_id}.md"
+        review_stored = store.get(review_key)
+        if review_stored is None:
+            raise WorkflowError("REVIEW_NOT_FOUND")
+        review_digest = "sha256:" + hashlib.sha256(review_stored.body).hexdigest()
+        if review_digest != execution.review_digest:
+            raise WorkflowError("REVIEW_DIGEST_MISMATCH")
+
+        output.mkdir(parents=True, exist_ok=True)
+        proposal_path = output / "proposal.json"
+        review_path = output / "review.md"
+        details_path = output / "inspect.json"
+        proposal_path.write_bytes(proposal_stored.body)
+        review_path.write_bytes(review_stored.body)
+        non_resolved = [
+            item.model_dump(mode="json")
+            for item in proposal.concept_resolutions
+            if item.status not in {"matched", "redirected"}
+        ]
+        details = {
+            "source_job_id": source_job_id,
+            "proposal_id": expected_proposal_id,
+            "job_status": job.status,
+            "proposal_status": proposal.status,
+            "source_candidate_present": proposal.source_candidate is not None,
+            "source_candidate": (
+                proposal.source_candidate.model_dump(mode="json")
+                if proposal.source_candidate is not None
+                else None
+            ),
+            "new_concept_candidate_count": len(proposal.new_concept_candidates),
+            "new_concept_candidates": [
+                item.model_dump(mode="json") for item in proposal.new_concept_candidates
+            ],
+            "non_matched_or_redirected_concept_resolutions": non_resolved,
+            "previous_base_bundle_digest": proposal.base_bundle_digest,
+            "proposal_object_digest": proposal_object_digest,
+            "proposal_semantic_digest": proposal.proposal_digest,
+            "review_digest": review_digest,
+            "issues": [item.model_dump(mode="json") for item in proposal.issues],
+            "proposal_path": proposal_path.as_posix(),
+            "review_path": review_path.as_posix(),
+        }
+        details_path.write_text(
+            json.dumps(details, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+    except WorkflowError as exc:
+        typer.echo(f"error_code={exc.code}", err=True)
+        raise typer.Exit(1) from exc
+    except ValidationError as exc:
+        typer.echo("error_code=INVALID_PROPOSAL_EXPORT_INPUT", err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(json.dumps(details, ensure_ascii=False, separators=(",", ":")))
+
+
 @workflow_app.command("auto-publish")
 def workflow_auto_publish(
     source_job_id: str,
