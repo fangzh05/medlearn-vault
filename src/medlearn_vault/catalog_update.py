@@ -202,10 +202,75 @@ class CatalogPatchManifest(DomainModel):
     concepts_new_digest: str
 
 
+class CatalogMergeReceipt(DomainModel):
+    """Immutable, repository-tracked proof that a catalog patch was merged.
+
+    The receipt is committed at catalog_updates/<catalog_update_id>/receipt.json
+    alongside the manual catalog PR.  It is the only cryptographic link between
+    the blocked bootstrap Proposal and the merged catalog files.
+
+    ReproposalOrchestrator loads and verifies the receipt from the repository
+    checkout.  The receipt object digest (sha256 of exact canonical JSON bytes,
+    LF-terminated) binds the reproposal Job identity.
+    """
+
+    receipt_version: Literal["0.1.0"] = "0.1.0"
+    receipt_id: str = Field(pattern=r"^receipt_[a-f0-9]{32}$")
+    catalog_update_id: str = Field(pattern=r"^catalog_update_[a-f0-9]{32}$")
+    capture_proposal_id: str = Field(pattern=r"^proposal_[a-f0-9]{32}$")
+    capture_proposal_digest: str = Field(pattern=r"^sha256:[a-f0-9]{64}$")
+    capture_proposal_object_digest: str = Field(pattern=r"^sha256:[a-f0-9]{64}$")
+    previous_base_bundle_digest: str = Field(pattern=r"^sha256:[a-f0-9]{64}$")
+    target_bundle_path: str = Field(min_length=1)
+    sources_old_digest: str = Field(pattern=r"^sha256:[a-f0-9]{64}$")
+    sources_new_digest: str = Field(pattern=r"^sha256:[a-f0-9]{64}$")
+    concepts_old_digest: str = Field(pattern=r"^sha256:[a-f0-9]{64}$")
+    concepts_new_digest: str = Field(pattern=r"^sha256:[a-f0-9]{64}$")
+
+    @model_validator(mode="after")
+    def validate_receipt_identity(self) -> CatalogMergeReceipt:
+        if (
+            self.sources_old_digest == self.sources_new_digest
+            and self.concepts_old_digest == self.concepts_new_digest
+        ):
+            raise ValueError("receipt must represent an actual catalog change")
+        expected = _id(
+            "receipt",
+            "0.1.0",
+            self.catalog_update_id,
+            self.capture_proposal_id,
+            self.capture_proposal_digest,
+            self.capture_proposal_object_digest,
+            self.previous_base_bundle_digest,
+            self.target_bundle_path,
+            self.sources_old_digest,
+            self.sources_new_digest,
+            self.concepts_old_digest,
+            self.concepts_new_digest,
+        )
+        if self.receipt_id != expected:
+            raise ValueError("receipt_id does not match receipt contents")
+        return self
+
+
+def canonical_receipt_json(receipt: CatalogMergeReceipt) -> bytes:
+    """Canonical, deterministic, LF-terminated receipt bytes."""
+    return _bytes(receipt) + b"\n"
+
+
+def receipt_object_digest(receipt: CatalogMergeReceipt) -> str:
+    """Content-addressed identity of the exact canonical receipt bytes."""
+    return _byte_digest(canonical_receipt_json(receipt))
+
+
+RECEIPT_DIR_TEMPLATE = "catalog_updates/{catalog_update_id}"
+
+
 class CatalogPatch(DomainModel):
     sources_json: str
     concepts_json: str
     manifest: CatalogPatchManifest
+    receipt: CatalogMergeReceipt
     review_markdown: str
 
 
@@ -303,6 +368,32 @@ def prepare_catalog_patch(update: CatalogUpdateProposal, bundle_path: Path) -> C
         concepts_old_digest=_byte_digest(concepts_before),
         concepts_new_digest=_byte_digest(concepts_after),
     )
+    receipt = CatalogMergeReceipt(
+        receipt_id=_id(
+            "receipt",
+            "0.1.0",
+            update.catalog_update_id,
+            update.capture_proposal_id,
+            update.capture_proposal_digest,
+            update.capture_proposal_object_digest,
+            update.base_bundle_digest,
+            update.target_bundle_path,
+            manifest.sources_old_digest,
+            manifest.sources_new_digest,
+            manifest.concepts_old_digest,
+            manifest.concepts_new_digest,
+        ),
+        catalog_update_id=update.catalog_update_id,
+        capture_proposal_id=update.capture_proposal_id,
+        capture_proposal_digest=update.capture_proposal_digest,
+        capture_proposal_object_digest=update.capture_proposal_object_digest,
+        previous_base_bundle_digest=update.base_bundle_digest,
+        target_bundle_path=update.target_bundle_path,
+        sources_old_digest=manifest.sources_old_digest,
+        sources_new_digest=manifest.sources_new_digest,
+        concepts_old_digest=manifest.concepts_old_digest,
+        concepts_new_digest=manifest.concepts_new_digest,
+    )
     review = render_catalog_update_markdown(update) + "\n## Patch files\n" + "\n".join(
         (
             f"- sources.json: `{manifest.sources_old_digest}` -> `{manifest.sources_new_digest}`",
@@ -316,21 +407,33 @@ def prepare_catalog_patch(update: CatalogUpdateProposal, bundle_path: Path) -> C
         sources_json=sources_after.decode("utf-8"),
         concepts_json=concepts_after.decode("utf-8"),
         manifest=manifest,
+        receipt=receipt,
         review_markdown=review,
     )
 
 
 def write_catalog_patch(patch: CatalogPatch, output: Path) -> None:
-    """Write only a new output directory; this never changes the source bundle."""
+    """Write only a new output directory; this never changes the source bundle.
+
+    Also writes the immutable receipt to a separate catalog_updates/ directory
+    that must be committed alongside the patched catalog files.
+    """
     sources_json = _deterministic_utf8_bytes(patch.sources_json)
     concepts_json = _deterministic_utf8_bytes(patch.concepts_json)
     manifest_json = _deterministic_utf8_bytes(_pretty_json(patch.manifest.model_dump()))
     review_markdown = _deterministic_utf8_bytes(patch.review_markdown)
+    receipt_json = canonical_receipt_json(patch.receipt)
     output.mkdir(parents=True, exist_ok=False)
     (output / "sources.json").write_bytes(sources_json)
     (output / "concepts.json").write_bytes(concepts_json)
     (output / "manifest.json").write_bytes(manifest_json)
     (output / "review.md").write_bytes(review_markdown)
+    # Also write the receipt to the repository-tracked path
+    receipt_dir = output.parent / RECEIPT_DIR_TEMPLATE.format(
+        catalog_update_id=patch.receipt.catalog_update_id
+    )
+    receipt_dir.mkdir(parents=True, exist_ok=True)
+    (receipt_dir / "receipt.json").write_bytes(receipt_json)
 
 
 def render_catalog_update_markdown(proposal: CatalogUpdateProposal) -> str:

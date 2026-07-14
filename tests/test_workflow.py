@@ -29,6 +29,8 @@ from medlearn_vault.workflow import (
     ProposalExecutionRecord,
     ProposalOrchestrator,
     ProposalOutputInspector,
+    PublicationPlanOrchestrator,
+    ReproposalOrchestrator,
     S3ObjectStore,
     StoredObject,
     WorkflowError,
@@ -1936,21 +1938,16 @@ def test_cli_treats_blocked_proposal_as_success(monkeypatch: pytest.MonkeyPatch)
 # ── Production-shaped reproposal regression ─────────────────────────────
 
 
-def _copy_bundle_with_catalog_patch(
-    source_bundle: Path, target_dir: Path, patch_dir: Path
-) -> Path:
-    """Copy a bundle directory and apply catalog patch files on top."""
+def _write_receipt_to_repo(
+    patch_dir: Path, catalog_update_id: str, repo_root: Path
+) -> None:
+    """Copy the receipt from the patch output to the repository-tracked path."""
     import shutil
 
-    if target_dir.exists():
-        shutil.rmtree(target_dir)
-    shutil.copytree(source_bundle, target_dir)
-    # Apply patch: copy sources.json and concepts.json from the patch directory
-    for name in ("sources.json", "concepts.json"):
-        patch_file = patch_dir / name
-        if patch_file.exists():
-            shutil.copy2(patch_file, target_dir / name)
-    return target_dir
+    receipt_src = patch_dir.parent / "catalog_updates" / catalog_update_id / "receipt.json"
+    receipt_dst = repo_root / "catalog_updates" / catalog_update_id / "receipt.json"
+    receipt_dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(receipt_src, receipt_dst)
 
 
 def test_reproposal_full_lifecycle_from_v2_handoff_through_publication() -> None:
@@ -1977,11 +1974,6 @@ def test_reproposal_full_lifecycle_from_v2_handoff_through_publication() -> None
         MedLearnHandoff,
         handoff_digest,
         handoff_submission,
-    )
-    from medlearn_vault.workflow import (
-        ApprovalOrchestrator,
-        PublicationPlanOrchestrator,
-        ReproposalOrchestrator,
     )
 
     store = MemoryStore()
@@ -2067,28 +2059,48 @@ def test_reproposal_full_lifecycle_from_v2_handoff_through_publication() -> None
     assert blocked_job.status == "blocked"
     assert blocked_job.proposal_id == blocked_proposal_id
 
-    # ── 4. Build catalog update proposal and patch ──────────────────────
-    catalog_update = build_catalog_update_proposal(
-        blocked_proposal,
-        capture_proposal_object_digest="sha256:"
-        + hashlib.sha256(
-            store.objects[f"v1/proposals/{blocked_proposal_id}.json"].body
-        ).hexdigest(),
-        target_bundle_path=source_bundle.as_posix(),
-    )
-    assert catalog_update.status == "blocked"  # incomplete metadata
-
-    # Prepare the patch
+    # ── 4. Build catalog update proposal and patch, referencing
+    #    the patched bundle path so the receipt matches the reproposal path.
     patched_bundle = ROOT / ".build" / "test-patched-bundle"
+    catalog_update_id: str = ""  # initialised before try for finally-safety
     try:
+        # Copy the source bundle to the patched location first so that
+        # prepare_catalog_patch can read the "before" state from it
+        import shutil as _shutil
+
+        if patched_bundle.exists():
+            _shutil.rmtree(patched_bundle)
+        _shutil.copytree(source_bundle, patched_bundle)
+        patched_bundle_rel = patched_bundle.relative_to(ROOT).as_posix()
+
+        # Build catalog update against the patched bundle (same content as source)
+        catalog_update = build_catalog_update_proposal(
+            blocked_proposal,
+            capture_proposal_object_digest="sha256:"
+            + hashlib.sha256(
+                store.objects[f"v1/proposals/{blocked_proposal_id}.json"].body
+            ).hexdigest(),
+            target_bundle_path=patched_bundle_rel,
+        )
+        assert catalog_update.status == "blocked"  # incomplete metadata
+
+        # Prepare the patch against the patched bundle (same content as source)
         patch_output = ROOT / ".build" / "test-patch"
-        patch = prepare_catalog_patch(catalog_update, source_bundle)
+        patch = prepare_catalog_patch(catalog_update, Path(patched_bundle_rel))
         from medlearn_vault.catalog_update import write_catalog_patch
 
         write_catalog_patch(patch, patch_output)
 
-        # Copy bundle and apply patch
-        _copy_bundle_with_catalog_patch(source_bundle, patched_bundle, patch_output)
+        # Apply the patch files to the patched bundle in-place
+        for name in ("sources.json", "concepts.json"):
+            patch_file = patch_output / name
+            if patch_file.exists():
+                _shutil.copy2(patch_file, patched_bundle / name)
+
+        # Write the receipt to the repository-tracked path so
+        # ReproposalOrchestrator can find and verify it
+        catalog_update_id = catalog_update.catalog_update_id
+        _write_receipt_to_repo(patch_output, catalog_update_id, ROOT)
 
         # Verify bundle digest changed
         patched = ContractBundle.from_directory(patched_bundle)
@@ -2114,14 +2126,13 @@ def test_reproposal_full_lifecycle_from_v2_handoff_through_publication() -> None
         assert repeat_job.status == "blocked"
 
         # ── 6. Explicit reproposal → new Job ────────────────────────────
-        catalog_update_id = catalog_update.catalog_update_id
         reproposal = ReproposalOrchestrator(store, ROOT).run(
             inputs.job_id,
             blocked_proposal_id,
             catalog_update_id,
             blocked_base_bundle_digest,
             confirmation=blocked_proposal_id,
-            bundle_path=patched_bundle.relative_to(ROOT).as_posix(),
+            bundle_path=patched_bundle_rel,
             now=NOW + timedelta(minutes=2),
         )
 
@@ -2150,7 +2161,7 @@ def test_reproposal_full_lifecycle_from_v2_handoff_through_publication() -> None
             catalog_update_id,
             blocked_base_bundle_digest,
             confirmation=blocked_proposal_id,
-            bundle_path=patched_bundle.relative_to(ROOT).as_posix(),
+            bundle_path=patched_bundle_rel,
             now=NOW + timedelta(minutes=3),
         )
         assert repeat_reproposal.reused is True
@@ -2168,7 +2179,7 @@ def test_reproposal_full_lifecycle_from_v2_handoff_through_publication() -> None
                 catalog_update_id,
                 blocked_base_bundle_digest,
                 confirmation="wrong",
-                bundle_path=patched_bundle.relative_to(ROOT).as_posix(),
+                bundle_path=patched_bundle_rel,
                 now=NOW + timedelta(minutes=5),
             )
 
@@ -2209,7 +2220,7 @@ def test_reproposal_full_lifecycle_from_v2_handoff_through_publication() -> None
                 reproposal.proposal_id,
                 new_proposal_digest,
                 new_proposal.base_bundle_digest,
-                bundle_path=patched_bundle.relative_to(ROOT).as_posix(),
+                bundle_path=patched_bundle_rel,
             )
             assert plan.publication_plan_id.startswith("publication_plan_")
             assert plan.capture_id.startswith("capture_")
@@ -2243,6 +2254,316 @@ def test_reproposal_full_lifecycle_from_v2_handoff_through_publication() -> None
         patch_out = ROOT / ".build" / "test-patch"
         if patch_out.exists():
             shutil.rmtree(patch_out)
+        receipt_dir = ROOT / "catalog_updates" / catalog_update_id
+        if receipt_dir.exists():
+            shutil.rmtree(receipt_dir)
+
+
+# ── Receipt rejection tests ────────────────────────────────────────────
+
+
+def _seed_reproposal_setup() -> tuple[
+    MemoryStore, WorkflowInputs, str, str, str, str, Path, Path,
+]:
+    """Set up a blocked Job with intake, proposal, and receipt for reproposal.
+
+    Returns (store, inputs, blocked_proposal_id, catalog_update_id,
+    blocked_base_bundle_digest, patched_bundle_rel, patched_bundle, patch_output).
+    """
+    import shutil
+
+    from medlearn_vault.catalog_update import (
+        build_catalog_update_proposal,
+        prepare_catalog_patch,
+        write_catalog_patch,
+    )
+    from medlearn_vault.handoff import (
+        MedLearnHandoff,
+        handoff_submission,
+    )
+
+    store = MemoryStore()
+    source = json.loads(
+        Path("examples/intake/apl-bootstrap-sanitized.json").read_text(encoding="utf-8")
+    )
+    handoff = MedLearnHandoff.model_validate(source)
+    exact_intake, _ = handoff_submission(handoff)
+    intake_digest = "sha256:" + hashlib.sha256(exact_intake).hexdigest()
+    intake_key = f"v1/intakes/sha256/{intake_digest[7:]}.json"
+    store.seed(intake_key, exact_intake)
+
+    source_bundle = Path("examples/capture/ambiguous-ms/bundle")
+    inputs = WorkflowInputs(
+        job_id="job-reject-setup",
+        intake_object_key=intake_key,
+        intake_digest=intake_digest,
+    )
+    store.seed(
+        f"v1/jobs/{inputs.job_id}.json",
+        json_bytes(
+            JobRecord(
+                job_id=inputs.job_id,
+                status="dispatched",
+                intake_digest=intake_digest,
+                intake_object_key=intake_key,
+                dispatch_attempt=1,
+                created_at=NOW,
+                updated_at=NOW,
+            )
+        ),
+    )
+
+    result = ProposalOrchestrator(store, ROOT).run(
+        inputs,
+        bundle_path=source_bundle.as_posix(),
+        workflow_run_id="run-reject-setup",
+        now=NOW,
+    )
+    assert result.status == "blocked"
+    blocked_pid = result.proposal_id
+    assert blocked_pid is not None
+    blocked_proposal = CaptureProposal.model_validate_json(
+        store.objects[f"v1/proposals/{blocked_pid}.json"].body
+    )
+    blocked_base = blocked_proposal.base_bundle_digest
+
+    # Copy and patch
+    patched_bundle = ROOT / ".build" / "test-reject-bundle"
+    if patched_bundle.exists():
+        shutil.rmtree(patched_bundle)
+    shutil.copytree(source_bundle, patched_bundle)
+    patched_rel = patched_bundle.relative_to(ROOT).as_posix()
+
+    catalog_update = build_catalog_update_proposal(
+        blocked_proposal,
+        capture_proposal_object_digest="sha256:"
+        + hashlib.sha256(
+            store.objects[f"v1/proposals/{blocked_pid}.json"].body
+        ).hexdigest(),
+        target_bundle_path=patched_rel,
+    )
+    cat_id = catalog_update.catalog_update_id
+
+    patch_output = ROOT / ".build" / "test-reject-patch"
+    if patch_output.exists():
+        shutil.rmtree(patch_output)
+    # Also remove the catalog_updates receipt that write_catalog_patch may
+    # create alongside patch_output
+    receipt_parent = patch_output.parent / "catalog_updates"
+    if receipt_parent.exists():
+        shutil.rmtree(receipt_parent)
+    patch = prepare_catalog_patch(catalog_update, Path(patched_rel))
+    write_catalog_patch(patch, patch_output)
+
+    # Apply patch
+    for name in ("sources.json", "concepts.json"):
+        pf = patch_output / name
+        if pf.exists():
+            shutil.copy2(pf, patched_bundle / name)
+
+    # Write receipt
+    receipt_src = (
+        patch_output.parent
+        / "catalog_updates"
+        / cat_id
+        / "receipt.json"
+    )
+    receipt_dst = ROOT / "catalog_updates" / cat_id / "receipt.json"
+    receipt_dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(receipt_src, receipt_dst)
+
+    return (
+        store, inputs, blocked_pid, cat_id, blocked_base,
+        patched_rel, patched_bundle, patch_output,
+    )
+
+
+def test_receipt_rejects_random_but_syntactically_valid_catalog_update_id() -> None:
+    """A catalog_update_id that follows the regex but has no receipt."""
+    store, inputs, blocked_pid, cat_id, blocked_base, patched_rel, _, _ = (
+        _seed_reproposal_setup()
+    )
+    try:
+        random_cat_id = "catalog_update_" + "d" * 32
+        # The random id has no receipt at catalog_updates/<id>/receipt.json
+        receipt_dir = ROOT / "catalog_updates" / random_cat_id
+        if receipt_dir.exists():
+            import shutil
+            shutil.rmtree(receipt_dir)
+        with pytest.raises(WorkflowError, match="RECEIPT_NOT_FOUND"):
+            ReproposalOrchestrator(store, ROOT).run(
+                inputs.job_id, blocked_pid, random_cat_id,
+                blocked_base, confirmation=blocked_pid,
+                bundle_path=patched_rel, now=NOW + timedelta(minutes=1),
+            )
+    finally:
+        import shutil
+        _cleanup_reproposal(ROOT, cat_id)
+
+
+def test_receipt_rejects_belonging_to_another_proposal() -> None:
+    """Receipt bound to proposal A cannot authorize reproposal of proposal B.
+
+    Tamper a correct receipt to change its capture_proposal_id, then prove
+    the reproposal rejects the mismatched binding.
+    """
+    store, inputs, blocked_pid, cat_id, blocked_base, patched_rel, _, _ = (
+        _seed_reproposal_setup()
+    )
+    try:
+        # Read receipt, change capture_proposal_id to a different valid id
+        receipt_path = ROOT / "catalog_updates" / cat_id / "receipt.json"
+        original = receipt_path.read_bytes()
+        another_pid = "proposal_" + "b" * 32
+        altered = original.replace(
+            blocked_pid.encode(),
+            another_pid.encode(),
+        )
+        receipt_path.write_bytes(altered)
+        # The receipt_id no longer matches receipt contents → INVALID_RECEIPT
+        with pytest.raises(WorkflowError, match="INVALID_RECEIPT"):
+            ReproposalOrchestrator(store, ROOT).run(
+                inputs.job_id, blocked_pid, cat_id,
+                blocked_base, confirmation=blocked_pid,
+                bundle_path=patched_rel, now=NOW + timedelta(minutes=1),
+            )
+    finally:
+        _cleanup_reproposal(ROOT, cat_id)
+
+
+def test_receipt_rejects_unchanged_bundle() -> None:
+    """STALE_BASE_BUNDLE is raised before receipt validation."""
+    store, inputs, blocked_pid, cat_id, blocked_base, patched_rel, _, _ = (
+        _seed_reproposal_setup()
+    )
+    try:
+        # Use the source bundle (same digest as blocked) — receipt exists but
+        # STALE_BASE_BUNDLE is checked first
+        with pytest.raises(WorkflowError, match="STALE_BASE_BUNDLE"):
+            ReproposalOrchestrator(store, ROOT).run(
+                inputs.job_id, blocked_pid, cat_id,
+                blocked_base, confirmation=blocked_pid,
+                bundle_path="examples/capture/ambiguous-ms/bundle",
+                now=NOW + timedelta(minutes=1),
+            )
+    finally:
+        _cleanup_reproposal(ROOT, cat_id)
+
+
+def test_receipt_rejects_partially_applied_patch() -> None:
+    """If concepts.json is not updated, RECEIPT_CONCEPTS_MISMATCH."""
+    store, inputs, blocked_pid, cat_id, blocked_base, patched_rel, patched_bundle, _ = (
+        _seed_reproposal_setup()
+    )
+    try:
+        # Restore concepts.json to the original (pre-patch) state
+        source_concepts = Path(
+            "examples/capture/ambiguous-ms/bundle/concepts.json"
+        ).read_bytes()
+        (patched_bundle / "concepts.json").write_bytes(source_concepts)
+        with pytest.raises(WorkflowError, match="RECEIPT_CONCEPTS_MISMATCH"):
+            ReproposalOrchestrator(store, ROOT).run(
+                inputs.job_id, blocked_pid, cat_id,
+                blocked_base, confirmation=blocked_pid,
+                bundle_path=patched_rel, now=NOW + timedelta(minutes=1),
+            )
+    finally:
+        _cleanup_reproposal(ROOT, cat_id)
+
+
+def test_receipt_rejects_sources_changed_after_receipt() -> None:
+    """If sources.json is modified after receipt creation, RECEIPT_SOURCES_MISMATCH."""
+    store, inputs, blocked_pid, cat_id, blocked_base, patched_rel, patched_bundle, _ = (
+        _seed_reproposal_setup()
+    )
+    try:
+        # Add extra whitespace in the JSON — valid JSON, different hash,
+        # bundle still parses correctly
+        sources_path = patched_bundle / "sources.json"
+        original = sources_path.read_bytes()
+        # Append an extra newline — valid JSON (whitespace at end is fine),
+        # different sha256
+        sources_path.write_bytes(original + b"\n")
+        with pytest.raises(WorkflowError, match="RECEIPT_SOURCES_MISMATCH"):
+            ReproposalOrchestrator(store, ROOT).run(
+                inputs.job_id, blocked_pid, cat_id,
+                blocked_base, confirmation=blocked_pid,
+                bundle_path=patched_rel, now=NOW + timedelta(minutes=1),
+            )
+    finally:
+        _cleanup_reproposal(ROOT, cat_id)
+
+
+def test_receipt_rejects_concepts_changed_after_receipt() -> None:
+    """If concepts.json is modified after receipt creation, RECEIPT_CONCEPTS_MISMATCH."""
+    store, inputs, blocked_pid, cat_id, blocked_base, patched_rel, patched_bundle, _ = (
+        _seed_reproposal_setup()
+    )
+    try:
+        # Add extra whitespace in the JSON — valid JSON, different hash
+        concepts_path = patched_bundle / "concepts.json"
+        original = concepts_path.read_bytes()
+        concepts_path.write_bytes(original + b"\n")
+        with pytest.raises(WorkflowError, match="RECEIPT_CONCEPTS_MISMATCH"):
+            ReproposalOrchestrator(store, ROOT).run(
+                inputs.job_id, blocked_pid, cat_id,
+                blocked_base, confirmation=blocked_pid,
+                bundle_path=patched_rel, now=NOW + timedelta(minutes=1),
+            )
+    finally:
+        _cleanup_reproposal(ROOT, cat_id)
+
+
+def test_receipt_rejects_modified_receipt_with_correct_files() -> None:
+    """A tampered receipt that references correct files still fails validation.
+
+    Modifies the receipt's sources_new_digest so the receipt_id no longer
+    matches, but keeps the capture_proposal_id and other fields intact.
+    """
+    store, inputs, blocked_pid, cat_id, blocked_base, patched_rel, _, _ = (
+        _seed_reproposal_setup()
+    )
+    try:
+        receipt_path = ROOT / "catalog_updates" / cat_id / "receipt.json"
+        original = receipt_path.read_bytes()
+        # Replace the sources_new_digest sha256 value — the receipt_id no
+        # longer matches the contents, breaking self-validation
+        import re as _re
+
+        altered = _re.sub(
+            rb'"sources_new_digest":\s*"sha256:[a-f0-9]{64}"',
+            b'"sources_new_digest": "sha256:' + b"e" * 64 + b'"',
+            original,
+        )
+        receipt_path.write_bytes(altered)
+        with pytest.raises(WorkflowError, match="INVALID_RECEIPT"):
+            ReproposalOrchestrator(store, ROOT).run(
+                inputs.job_id, blocked_pid, cat_id,
+                blocked_base, confirmation=blocked_pid,
+                bundle_path=patched_rel, now=NOW + timedelta(minutes=1),
+            )
+    finally:
+        _cleanup_reproposal(ROOT, cat_id)
+
+
+def _cleanup_reproposal(root: Path, cat_id: str) -> None:
+    """Remove test artefacts created by _seed_reproposal_setup."""
+    import shutil
+
+    for name in ("test-reject-bundle", "test-reject-patch"):
+        path = root / ".build" / name
+        if path.exists():
+            shutil.rmtree(path)
+    receipt_dir = root / "catalog_updates" / cat_id
+    if receipt_dir.exists():
+        shutil.rmtree(receipt_dir)
+    # Remove parent if empty
+    cat_parent = root / "catalog_updates"
+    if cat_parent.exists():
+        try:
+            cat_parent.rmdir()
+        except OSError:
+            pass
 
 
 def test_converter_v2_idempotency_key_stable_across_platforms() -> None:

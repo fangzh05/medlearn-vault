@@ -1342,6 +1342,10 @@ class ReproposalOrchestrator:
 
     This is the only path from a blocked bootstrap Proposal to a ready
     Proposal after catalog merge.  It never mutates the terminal blocked Job.
+
+    It cryptographically verifies a repository-tracked CatalogMergeReceipt
+    committed at catalog_updates/<catalog_update_id>/receipt.json — the
+    only proof that the catalog patch was actually merged.
     """
 
     def __init__(self, store: ObjectStore, repository_root: Path) -> None:
@@ -1359,6 +1363,12 @@ class ReproposalOrchestrator:
         bundle_path: str,
         now: datetime | None = None,
     ) -> ReproposalResult:
+        from medlearn_vault.catalog_update import (
+            CatalogMergeReceipt,
+            canonical_receipt_json,
+            receipt_object_digest,
+        )
+
         current_time = now or datetime.now(UTC)
         if current_time.tzinfo is None:
             raise WorkflowError("INVALID_REPROPOSAL_INPUT")
@@ -1438,28 +1448,105 @@ class ReproposalOrchestrator:
             raise WorkflowError("REVIEW_DIGEST_MISMATCH")
 
         # 6. Load the current bundle and verify it differs from the blocked bundle
+        resolved_bundle_path = resolve_bundle_path(self.repository_root, bundle_path)
         try:
-            bundle = ContractBundle.from_directory(
-                resolve_bundle_path(self.repository_root, bundle_path)
-            )
+            bundle = ContractBundle.from_directory(resolved_bundle_path)
         except WorkflowError as exc:
             raise WorkflowError("INVALID_BUNDLE") from exc
         current_bundle_digest = contract_bundle_digest(bundle)
         if current_bundle_digest == previous_base_bundle_digest:
             raise WorkflowError("STALE_BASE_BUNDLE")
 
-        # 7. Derive the reproposal Job identity
+        # 7. Load and cryptographically verify the catalog merge receipt.
+        #    The receipt is the only proof that the catalog patch identified
+        #    by catalog_update_id was actually merged into the repository.
+        receipt_path = (
+            self.repository_root
+            / "catalog_updates"
+            / catalog_update_id
+            / "receipt.json"
+        )
+        try:
+            receipt_bytes = receipt_path.read_bytes()
+        except (OSError, ValueError) as exc:
+            raise WorkflowError("RECEIPT_NOT_FOUND") from exc
+
+        # Verify receipt is valid UTF-8, LF-only, LF-terminated
+        try:
+            receipt_text = receipt_bytes.decode("utf-8")
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise WorkflowError("INVALID_RECEIPT") from exc
+        if "\r" in receipt_text or not receipt_text.endswith("\n"):
+            raise WorkflowError("INVALID_RECEIPT")
+
+        # Parse and validate receipt
+        try:
+            receipt = CatalogMergeReceipt.model_validate_json(receipt_bytes)
+        except (ValueError, TypeError) as exc:
+            raise WorkflowError("INVALID_RECEIPT") from exc
+
+        # Verify canonical byte-for-byte consistency
+        expected_canonical = canonical_receipt_json(receipt)
+        if expected_canonical != receipt_bytes:
+            raise WorkflowError("INVALID_RECEIPT")
+
+        receipt_digest = receipt_object_digest(receipt)
+
+        # Verify receipt identity
+        if receipt.catalog_update_id != catalog_update_id:
+            raise WorkflowError("RECEIPT_CATALOG_MISMATCH")
+
+        # Verify receipt is bound to the blocked Proposal
+        if receipt.capture_proposal_id != blocked_proposal_id:
+            raise WorkflowError("RECEIPT_PROPOSAL_MISMATCH")
+        if receipt.capture_proposal_digest != blocked_proposal.proposal_digest:
+            raise WorkflowError("RECEIPT_PROPOSAL_MISMATCH")
+        proposal_object_digest = _digest(proposal_stored.body)
+        if receipt.capture_proposal_object_digest != proposal_object_digest:
+            raise WorkflowError("RECEIPT_PROPOSAL_MISMATCH")
+
+        # Verify base bundle digest matches the blocked Proposal
+        if receipt.previous_base_bundle_digest != previous_base_bundle_digest:
+            raise WorkflowError("RECEIPT_BUNDLE_MISMATCH")
+
+        # Verify target bundle path
+        if receipt.target_bundle_path != bundle_path:
+            raise WorkflowError("RECEIPT_BUNDLE_PATH_MISMATCH")
+
+        # Hash the current exact sources.json and concepts.json from the bundle
+        # and require them to equal the receipt's sources_new_digest and
+        # concepts_new_digest.  This proves the catalog patch was actually
+        # applied.
+        sources_path = resolved_bundle_path / "sources.json"
+        concepts_path = resolved_bundle_path / "concepts.json"
+        try:
+            current_sources = sources_path.read_bytes()
+            current_concepts = concepts_path.read_bytes()
+        except (OSError, ValueError) as exc:
+            raise WorkflowError("INVALID_BUNDLE") from exc
+
+        current_sources_digest = _digest(current_sources)
+        current_concepts_digest = _digest(current_concepts)
+        if current_sources_digest != receipt.sources_new_digest:
+            raise WorkflowError("RECEIPT_SOURCES_MISMATCH")
+        if current_concepts_digest != receipt.concepts_new_digest:
+            raise WorkflowError("RECEIPT_CONCEPTS_MISMATCH")
+
+        # 8. Derive the reproposal Job identity, bound to the receipt digest.
+        #    This cryptographically links the reproposal to the exact merged
+        #    catalog patch, not just the user-supplied catalog_update_id.
         reproposal_job_id = _id(
             "reproposal",
             "0.1.0",
             source_job_id,
             blocked_proposal_id,
             catalog_update_id,
+            receipt_digest,
             current_bundle_digest,
             intake_digest,
         )
 
-        # 8. Check idempotency: if the reproposal Job already exists, verify and return
+        # 9. Check idempotency: if the reproposal Job already exists, verify and return
         reproposal_job_key = f"v1/jobs/{reproposal_job_id}.json"
         existing_job = self.store.get(reproposal_job_key)
         if existing_job is not None:
@@ -1485,7 +1572,7 @@ class ReproposalOrchestrator:
                 )
             raise WorkflowError("REPROPOSAL_CONFLICT")
 
-        # 9. Extract draft from exact Intake bytes and rebuild Proposal
+        # 10. Extract draft from exact Intake bytes and rebuild Proposal
         try:
             draft_bytes, _ = extract_capture_draft(intake_stored.body, intake_digest)
         except (IntakeDigestMismatch, InvalidIntakeEnvelope) as exc:
@@ -1500,7 +1587,7 @@ class ReproposalOrchestrator:
         review_bytes = render_capture_proposal_markdown(proposal, bundle=bundle).encode()
         proposal_digest = _digest(proposal_bytes)
 
-        # 10. Create-only write the new reproposal Job
+        # 11. Create-only write the new reproposal Job
         reproposal_now = current_time
         reproposal_job = JobRecord(
             job_id=reproposal_job_id,
@@ -1542,7 +1629,7 @@ class ReproposalOrchestrator:
                 reused=True,
             )
 
-        # 11. Create-only write Execution
+        # 12. Create-only write Execution
         execution_status: Literal["succeeded", "blocked"] = (
             "blocked" if proposal.status == "blocked" else "succeeded"
         )
@@ -1563,7 +1650,7 @@ class ReproposalOrchestrator:
         ):
             raise WorkflowError("CONTROL_STORE_FAILURE")
 
-        # 12. Create-only write Proposal and Review
+        # 13. Create-only write Proposal and Review
         self._create_or_verify(
             f"v1/proposals/{proposal.proposal_id}.json",
             proposal_bytes,
