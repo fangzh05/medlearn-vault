@@ -39,6 +39,14 @@ def _digest(value: bytes) -> str:
     return "sha256:" + hashlib.sha256(value).hexdigest()
 
 
+def _assert_deterministic_patch_bytes(value: bytes) -> None:
+    assert b"\r" not in value
+    assert not value.startswith(b"\xef\xbb\xbf")
+    assert b"\x00" not in value
+    assert value.endswith(b"\n")
+    assert not value.endswith(b"\n\n")
+
+
 def test_apl_bootstrap_requires_reviewed_catalog_then_publishes_persistent_ids_only(
     tmp_path: Path,
 ) -> None:
@@ -119,6 +127,14 @@ def test_apl_bootstrap_requires_reviewed_catalog_then_publishes_persistent_ids_o
     manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["sources_old_digest"] != manifest["sources_new_digest"]
     assert manifest["concepts_old_digest"] != manifest["concepts_new_digest"]
+    source_bytes = (output / "sources.json").read_bytes()
+    concept_bytes = (output / "concepts.json").read_bytes()
+    assert source_bytes == patch.sources_json.encode("utf-8")
+    assert concept_bytes == patch.concepts_json.encode("utf-8")
+    assert _digest(source_bytes) == manifest["sources_new_digest"]
+    assert _digest(concept_bytes) == manifest["concepts_new_digest"]
+    for name in ("sources.json", "concepts.json", "manifest.json", "review.md"):
+        _assert_deterministic_patch_bytes((output / name).read_bytes())
     assert "Incomplete concept metadata" in (output / "review.md").read_text(encoding="utf-8")
     update_path = tmp_path / "catalog-update.json"
     update_path.write_bytes(canonical_catalog_update_json(update))
@@ -138,6 +154,7 @@ def test_apl_bootstrap_requires_reviewed_catalog_then_publishes_persistent_ids_o
     assert result.exit_code == 0
     for name in ("sources.json", "concepts.json", "manifest.json", "review.md"):
         assert (command_output / name).read_bytes() == (output / name).read_bytes()
+        _assert_deterministic_patch_bytes((command_output / name).read_bytes())
 
     # Synthetic stand-in for a reviewer manually applying the proposed files and
     # separately supplying the metadata that the blocked proposal cannot promote.

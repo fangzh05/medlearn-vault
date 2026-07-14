@@ -213,6 +213,15 @@ def _pretty_json(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, indent=2) + "\n"
 
 
+def _deterministic_utf8_bytes(value: str) -> bytes:
+    """Encode a patch artifact without allowing platform newline conversion."""
+    if value.startswith("\ufeff") or "\x00" in value or "\r" in value:
+        raise ValueError("INVALID_DETERMINISTIC_PATCH_TEXT")
+    if not value.endswith("\n") or value.endswith("\n\n"):
+        raise ValueError("INVALID_DETERMINISTIC_PATCH_TERMINATOR")
+    return value.encode("utf-8")
+
+
 def _concept_terms(concept: ConceptEntity) -> set[str]:
     values = (
         concept.canonical_name,
@@ -313,13 +322,15 @@ def prepare_catalog_patch(update: CatalogUpdateProposal, bundle_path: Path) -> C
 
 def write_catalog_patch(patch: CatalogPatch, output: Path) -> None:
     """Write only a new output directory; this never changes the source bundle."""
+    sources_json = _deterministic_utf8_bytes(patch.sources_json)
+    concepts_json = _deterministic_utf8_bytes(patch.concepts_json)
+    manifest_json = _deterministic_utf8_bytes(_pretty_json(patch.manifest.model_dump()))
+    review_markdown = _deterministic_utf8_bytes(patch.review_markdown)
     output.mkdir(parents=True, exist_ok=False)
-    (output / "sources.json").write_text(patch.sources_json, encoding="utf-8")
-    (output / "concepts.json").write_text(patch.concepts_json, encoding="utf-8")
-    (output / "manifest.json").write_text(
-        _pretty_json(patch.manifest.model_dump()), encoding="utf-8"
-    )
-    (output / "review.md").write_text(patch.review_markdown, encoding="utf-8")
+    (output / "sources.json").write_bytes(sources_json)
+    (output / "concepts.json").write_bytes(concepts_json)
+    (output / "manifest.json").write_bytes(manifest_json)
+    (output / "review.md").write_bytes(review_markdown)
 
 
 def render_catalog_update_markdown(proposal: CatalogUpdateProposal) -> str:
