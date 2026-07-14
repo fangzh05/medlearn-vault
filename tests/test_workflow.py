@@ -2485,7 +2485,12 @@ def _seed_reproposal_setup() -> tuple[
 
 
 def test_reproposal_v2_identity_does_not_reuse_existing_v1_reproposal_job() -> None:
-    from medlearn_vault.capture import contract_bundle_digest
+    from medlearn_vault.capture import (
+        CaptureDraft,
+        build_capture_proposal,
+        contract_bundle_digest,
+        extract_capture_draft,
+    )
     from medlearn_vault.catalog_update import (
         CatalogMergeReceipt,
         canonical_receipt_json,
@@ -2525,6 +2530,18 @@ def test_reproposal_v2_identity_does_not_reuse_existing_v1_reproposal_job() -> N
             catalog_update_id=cat_id,
         )
         store.seed(f"v1/jobs/{old_reproposal_id}.json", json_bytes(old_job))
+        draft_bytes, _ = extract_capture_draft(
+            store.objects[inputs.intake_object_key].body,
+            inputs.intake_digest,
+        )
+        unsalted_old_proposal = build_capture_proposal(
+            ContractBundle.from_directory(Path(patched_rel)),
+            CaptureDraft.model_validate_json(draft_bytes),
+        )
+        store.seed(
+            f"v1/proposals/{unsalted_old_proposal.proposal_id}.json",
+            b'{"proposal_id":"proposal_collision_placeholder"}\n',
+        )
 
         result = ReproposalOrchestrator(store, ROOT).run(
             inputs.job_id,
@@ -2537,6 +2554,7 @@ def test_reproposal_v2_identity_does_not_reuse_existing_v1_reproposal_job() -> N
         )
 
         assert result.source_job_id != old_reproposal_id
+        assert result.proposal_id != unsalted_old_proposal.proposal_id
         assert result.reused is False
         assert store.objects[f"v1/jobs/{old_reproposal_id}.json"].body == json_bytes(old_job)
     finally:

@@ -197,6 +197,19 @@ def test_multi_concept_learner_evidence_splits_to_single_concept_records() -> No
     assert all(len(item.concept_refs) == 1 for item in learner_observations)
 
 
+def test_proposal_identity_extra_preserves_default_and_salts_when_requested() -> None:
+    bundle = ContractBundle.from_directory(Path("examples/copd"))
+    value = draft()
+
+    default = build_capture_proposal(bundle, value)
+    explicit_default = build_capture_proposal(bundle, value, proposal_identity_extra=None)
+    salted = build_capture_proposal(bundle, value, proposal_identity_extra="reproposal:0.2.0")
+
+    assert explicit_default.proposal_id == default.proposal_id
+    assert salted.proposal_id != default.proposal_id
+    assert salted.proposal_digest != default.proposal_digest
+
+
 def test_correctness_is_not_inferred_from_matching_user_and_assistant_text() -> None:
     payload = draft_payload()
     payload["learner_evidence_candidates"] = []
