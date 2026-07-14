@@ -8,6 +8,7 @@ const read = (path) => JSON.parse(readFileSync(new URL(path, import.meta.url), "
 const ajv = new Ajv({ strict: false, allErrors: true });
 addFormats(ajv);
 const envelopeSchema = read("../../schemas/workflow/current/intake_envelope.schema.json");
+const handoffSchema = read("../../schemas/workflow/current/medlearn_handoff.schema.json");
 const jobSchema = read("../../schemas/control/current/job_record.schema.json");
 const fixture = read("../../examples/intake/manual-copd.json");
 const generatedUrl = new URL("../src/generated/intake-validator.js", import.meta.url);
@@ -16,6 +17,7 @@ const before = normalizeEol(readFileSync(generatedUrl, "utf8"));
 
 if (!ajv.compile(envelopeSchema)(fixture)) throw new Error("shared intake fixture/schema mismatch");
 ajv.compile(jobSchema);
+ajv.compile(handoffSchema);
 execFileSync(process.execPath, [fileURLToPath(new URL("generate-intake-validator.mjs", import.meta.url))]);
 if (normalizeEol(readFileSync(generatedUrl, "utf8")) !== before) throw new Error("generated intake validator drift");
-process.stdout.write("contracts: ok (IntakeEnvelope 0.1.0, JobRecord 0.2.0)\n");
+process.stdout.write("contracts: ok (IntakeEnvelope 0.1.0, MedLearnHandoff 0.1.0, JobRecord 0.2.0)\n");

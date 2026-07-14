@@ -27,6 +27,7 @@ beforeAll(() => {
     bindings: {
       MEDLEARN_INGEST_TOKEN: token,
       MEDLEARN_SYNC_TOKEN: runtimeSyncToken,
+      MEDLEARN_WORK_DISPATCH_MODE: "github",
       GITHUB_ACTIONS_DISPATCH_TOKEN: "runtime-github-token",
     },
     fetchMock: dispatchMock,

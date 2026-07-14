@@ -1,22 +1,47 @@
 import validateEnvelope from "./generated/intake-validator.js";
+import validateHandoff from "./generated/handoff-validator.js";
+import handoffSchema from "../../schemas/workflow/current/medlearn_handoff.schema.json";
+import { createRemoteJWKSet, jwtVerify, type JWTPayload, type JWTVerifyGetKey } from "jose";
+
+const toolHandoffSchema = {
+  ...handoffSchema,
+  $id: "https://medlearn.invalid/schemas/medlearn_handoff.schema.json",
+};
 
 export interface Env {
   CONTROL_BUCKET?: R2Bucket;
   VAULT_BUCKET?: R2Bucket;
   MEDLEARN_INGEST_TOKEN?: string;
+  MEDLEARN_WORK_OAUTH_ISSUER?: string;
+  MEDLEARN_WORK_OAUTH_AUDIENCE?: string;
+  MEDLEARN_WORK_OAUTH_ALLOWED_SUBJECT?: string;
+  MEDLEARN_WORK_OAUTH_RESOURCE?: string;
+  MEDLEARN_WORK_ALLOWED_ORIGINS?: string;
   MEDLEARN_SYNC_TOKEN?: string;
   GITHUB_ACTIONS_DISPATCH_TOKEN?: string;
+  MEDLEARN_WORK_DISPATCH_MODE?: string;
 }
 
-interface Config {
+type DispatchMode = "github" | "persist_only";
+
+interface WorkConfig {
   CONTROL_BUCKET: R2Bucket;
-  MEDLEARN_INGEST_TOKEN: string;
-  GITHUB_ACTIONS_DISPATCH_TOKEN: string;
+  dispatchMode: DispatchMode;
+  githubToken?: string;
 }
+
+interface Config extends WorkConfig { MEDLEARN_INGEST_TOKEN: string }
 
 interface VaultConfig {
   VAULT_BUCKET: R2Bucket;
   MEDLEARN_SYNC_TOKEN: string;
+}
+
+interface OAuthConfig {
+  issuer: string;
+  audience: string;
+  subject: string;
+  resource: string;
 }
 
 type Status = "received" | "dispatched" | "running" | "succeeded" | "blocked" | "failed" | "expired";
@@ -47,6 +72,7 @@ interface IdempotencyRecord {
 export interface Stored<T> { value: T; etag: string }
 
 const MAX_BODY = 1024 * 1024;
+const MAX_HANDOFF_BODY = 256 * 1024;
 const LEASE_MS = 30_000;
 const CURRENT_INTAKE_VERSION = "0.1.0";
 const CURRENT_DRAFT_VERSION = "0.3.0";
@@ -66,13 +92,16 @@ function secure(response: Response): Response {
   return response;
 }
 
+function secureMcp(response: Response): Response {
+  secure(response).headers.set("vary", "Authorization, Origin");
+  return response;
+}
+
 function config(env: Env): Config | null {
   const token = env.MEDLEARN_INGEST_TOKEN;
-  const github = env.GITHUB_ACTIONS_DISPATCH_TOKEN;
-  if (!env.CONTROL_BUCKET || typeof env.CONTROL_BUCKET.get !== "function") return null;
   if (typeof token !== "string" || token.length < 32) return null;
-  if (typeof github !== "string" || github.trim().length === 0) return null;
-  return { CONTROL_BUCKET: env.CONTROL_BUCKET, MEDLEARN_INGEST_TOKEN: token, GITHUB_ACTIONS_DISPATCH_TOKEN: github };
+  const work = workConfig(env);
+  return work ? { ...work, MEDLEARN_INGEST_TOKEN: token } : null;
 }
 
 function vaultConfig(env: Env): VaultConfig | null {
@@ -80,6 +109,58 @@ function vaultConfig(env: Env): VaultConfig | null {
   if (!env.VAULT_BUCKET || typeof env.VAULT_BUCKET.get !== "function") return null;
   if (typeof token !== "string" || token.length < 32) return null;
   return { VAULT_BUCKET: env.VAULT_BUCKET, MEDLEARN_SYNC_TOKEN: token };
+}
+
+function workConfig(env: Env): WorkConfig | null {
+  if (!env.CONTROL_BUCKET || typeof env.CONTROL_BUCKET.get !== "function") return null;
+  const dispatchMode = env.MEDLEARN_WORK_DISPATCH_MODE;
+  if (dispatchMode !== "github" && dispatchMode !== "persist_only") return null;
+  if (dispatchMode === "persist_only") return { CONTROL_BUCKET: env.CONTROL_BUCKET, dispatchMode };
+  const githubToken = env.GITHUB_ACTIONS_DISPATCH_TOKEN;
+  if (typeof githubToken !== "string" || githubToken.trim().length === 0) return null;
+  return { CONTROL_BUCKET: env.CONTROL_BUCKET, dispatchMode, githubToken };
+}
+
+function canonicalIssuer(value: string): string | null {
+  if (!/^https:\/\//i.test(value)) return null;
+  let url: URL;
+  try { url = new URL(value); } catch { return null; }
+  if (url.protocol !== "https:") return null;
+  if (url.username || url.password) return null;
+  if (url.search) return null;
+  if (url.hash) return null;
+  let pathname = url.pathname;
+  if (!pathname.endsWith("/")) pathname = pathname + "/";
+  return `${url.protocol}//${url.host}${pathname}`;
+}
+
+function canonicalResource(value: string): string | null {
+  if (!/^https:\/\//i.test(value)) return null;
+  let url: URL;
+  try { url = new URL(value); } catch { return null; }
+  if (url.protocol !== "https:") return null;
+  if (url.username || url.password) return null;
+  if (url.search) return null;
+  if (url.hash) return null;
+  const pathname = url.pathname;
+  if (pathname !== "/" && pathname !== "") return null;
+  if (url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]") return null;
+  return `${url.protocol}//${url.host}`;
+}
+
+function oauthConfig(env: Env): OAuthConfig | null {
+  const issuer = env.MEDLEARN_WORK_OAUTH_ISSUER?.trim();
+  const audience = env.MEDLEARN_WORK_OAUTH_AUDIENCE?.trim();
+  const subject = env.MEDLEARN_WORK_OAUTH_ALLOWED_SUBJECT?.trim();
+  const rawResource = env.MEDLEARN_WORK_OAUTH_RESOURCE?.trim();
+  if (!issuer || !audience || !subject) return null;
+  const canonical = canonicalIssuer(issuer);
+  if (!canonical) return null;
+  const resourceRaw = rawResource || audience;
+  const resource = canonicalResource(resourceRaw);
+  if (!resource) return null;
+  if (audience !== resource) return null;
+  return { issuer: canonical, audience, subject, resource };
 }
 
 async function sha256(value: ArrayBuffer | Uint8Array | string): Promise<string> {
@@ -146,14 +227,15 @@ function sanitizeJob(job: JobRecord): JobRecord {
   return clean;
 }
 
-async function dispatch(env: Config, job: JobRecord): Promise<boolean> {
+async function dispatch(env: WorkConfig, job: JobRecord): Promise<boolean> {
+  if (env.dispatchMode !== "github" || !env.githubToken) return false;
   try {
     const response = await fetch(
       "https://api.github.com/repos/fangzh05/medlearn-vault/actions/workflows/medlearn-propose.yml/dispatches",
       {
         method: "POST",
         headers: {
-          authorization: `Bearer ${env.GITHUB_ACTIONS_DISPATCH_TOKEN}`,
+          authorization: `Bearer ${env.githubToken}`,
           accept: "application/vnd.github+json",
           "content-type": "application/json",
           "user-agent": "medlearn-cloud",
@@ -204,7 +286,7 @@ async function ensureArtifacts(
   return job;
 }
 
-async function dispatchRecoverably(env: Config, stored: Stored<JobRecord>, nowMs: number): Promise<Response> {
+async function dispatchRecoverably(env: WorkConfig, stored: Stored<JobRecord>, nowMs: number): Promise<Response> {
   const jobKey = `v1/jobs/${stored.value.job_id}.json`;
   const job = stored.value;
   if (["dispatched", "running", "succeeded", "blocked", "expired"].includes(job.status))
@@ -249,15 +331,9 @@ async function dispatchRecoverably(env: Config, stored: Stored<JobRecord>, nowMs
   return reply(502, sanitizeJob(final?.value ?? failed));
 }
 
-async function createCapture(request: Request, env: Config): Promise<Response> {
-  if (request.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase() !== "application/json")
-    return reply(415, { error: "INVALID_CONTENT_TYPE" });
-  const idempotencyKey = request.headers.get("idempotency-key");
-  if (!idempotencyKey || idempotencyKey.length > 512) return reply(400, { error: "INVALID_IDEMPOTENCY_KEY" });
-  const declared = Number(request.headers.get("content-length") ?? 0);
-  if (declared > MAX_BODY) return reply(413, { error: "BODY_TOO_LARGE" });
-  const body = await request.arrayBuffer();
-  if (body.byteLength > MAX_BODY) return reply(413, { error: "BODY_TOO_LARGE" });
+async function submitIntake(
+  env: WorkConfig, body: ArrayBuffer, idempotencyKey: string, nowMs: number,
+): Promise<Response> {
   let parsed: unknown;
   try { parsed = JSON.parse(new TextDecoder().decode(body)); }
   catch { return reply(400, { error: "INVALID_JSON" }); }
@@ -273,11 +349,229 @@ async function createCapture(request: Request, env: Config): Promise<Response> {
   const intakeDigest = `sha256:${hex}`;
   const intakeKey = `v1/intakes/sha256/${hex}.json`;
   const idemKey = `v1/idempotency/${await sha256(idempotencyKey)}.json`;
-  const nowMs = Date.now();
   const claim = await claimIdempotency(env.CONTROL_BUCKET, idemKey, intakeDigest, new Date(nowMs).toISOString());
   if (claim.intake_digest !== intakeDigest) return reply(409, { error: "IDEMPOTENCY_CONFLICT" });
   const job = await ensureArtifacts(env.CONTROL_BUCKET, claim, intakeKey, body, new Date(nowMs).toISOString());
+  if (env.dispatchMode === "persist_only") return reply(202, sanitizeJob(job.value));
   return dispatchRecoverably(env, job, nowMs);
+}
+
+async function createCapture(request: Request, env: Config): Promise<Response> {
+  if (request.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase() !== "application/json")
+    return reply(415, { error: "INVALID_CONTENT_TYPE" });
+  const idempotencyKey = request.headers.get("idempotency-key");
+  if (!idempotencyKey || idempotencyKey.length > 512) return reply(400, { error: "INVALID_IDEMPOTENCY_KEY" });
+  const declared = Number(request.headers.get("content-length") ?? 0);
+  if (declared > MAX_BODY) return reply(413, { error: "BODY_TOO_LARGE" });
+  const body = await request.arrayBuffer();
+  if (body.byteLength > MAX_BODY) return reply(413, { error: "BODY_TOO_LARGE" });
+  return submitIntake(env, body, idempotencyKey, Date.now());
+}
+
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(value, function replacer(_key, item) {
+    if (item && typeof item === "object" && !Array.isArray(item)) {
+      const sorted: Record<string, unknown> = {};
+      for (const key of Object.keys(item as Record<string, unknown>).sort()) sorted[key] = (item as Record<string, unknown>)[key];
+      return sorted;
+    }
+    return item;
+  });
+}
+
+function handoffSemanticError(handoff: Record<string, unknown>): string | null {
+  const messages = handoff.evidence_messages as { local_id: string }[];
+  const ids = messages.map((item) => item.local_id);
+  if (new Set(ids).size !== ids.length) return "HANDOFF_DUPLICATE_LOCAL_ID";
+  const known = new Set(ids);
+  const groups: string[][] = [];
+  for (const key of ["concepts", "claims", "learner_evidence", "unresolved_questions", "unfinished_topics"] as const) {
+    for (const item of handoff[key] as { evidence_local_ids: string[] }[]) groups.push(item.evidence_local_ids);
+  }
+  for (const item of handoff.misconceptions as { observed_error_local_ids: string[]; correction_local_ids: string[] }[]) {
+    groups.push(item.observed_error_local_ids, item.correction_local_ids);
+  }
+  return groups.some((group) => group.some((id) => !known.has(id))) ? "HANDOFF_DANGLING_EVIDENCE_REFERENCE" : null;
+}
+
+async function convertHandoff(handoff: Record<string, unknown>): Promise<{ body: ArrayBuffer; idempotencyKey: string }> {
+  if ((handoff.learning_goals as unknown[]).length || (handoff.unfinished_topics as unknown[]).length)
+    throw new Error("HANDOFF_CONVERSION_FAILURE");
+  const canonical = canonicalJson(handoff);
+  const digest = await sha256(canonical);
+  const session = handoff.session as Record<string, string | null>;
+  const messages = handoff.evidence_messages as Record<string, unknown>[];
+  const messageIds = new Map<string, string>();
+  await Promise.all(messages.map(async (message) => {
+    messageIds.set(message.local_id as string, `message_${(await sha256(`${digest}:${message.local_id as string}`)).slice(0, 32)}`);
+  }));
+  const refs = (ids: string[]) => ids.map((id) => messageIds.get(id)!);
+  const claims = (handoff.claims as Record<string, unknown>[]).map((item) => ({
+    statement: item.statement, claim_type: item.claim_type, concept_terms: item.concept_terms,
+    evidence_message_ids: refs(item.evidence_local_ids as string[]),
+    ...(item.claim_type === "question" && item.question_priority !== null && item.question_priority !== undefined
+      ? { question_priority: item.question_priority } : {}),
+  }));
+  for (const item of handoff.unresolved_questions as Record<string, unknown>[]) {
+    claims.push({ statement: item.statement, claim_type: "question", concept_terms: item.concept_terms,
+      evidence_message_ids: refs(item.evidence_local_ids as string[]), question_priority: item.question_priority as string });
+  }
+  const draft = {
+    draft_version: "0.3.0",
+    context: {
+      source_id: `source_${digest.slice(0, 32)}`, session_id: `session_${digest.slice(0, 32)}`,
+      discipline_id: session.discipline_id, course_id: session.course_id, chapter_id: session.chapter_id,
+      locale: "zh-CN", session_started_at: session.session_started_at, captured_at: session.captured_at,
+    },
+    evidence_messages: messages.map((item) => ({
+      message_id: messageIds.get(item.local_id as string), role: item.role,
+      observed_at: item.observed_at ?? session.captured_at, excerpt: item.excerpt,
+    })),
+    concept_mentions: (handoff.concepts as Record<string, unknown>[]).map((item) => ({
+      surface_text: item.name, evidence_message_ids: refs(item.evidence_local_ids as string[]),
+      suggested_canonical_name: item.name, suggested_preferred_english: item.preferred_english,
+      suggested_concept_type: item.concept_type, suggested_scope_note: item.scope_note,
+    })),
+    claim_candidates: claims,
+    learner_evidence_candidates: (handoff.learner_evidence as Record<string, unknown>[]).map((item) => ({
+      concept_terms: item.concept_terms, evidence_type: item.evidence_type, confidence: item.confidence,
+      rationale: item.rationale, evidence_message_ids: refs(item.evidence_local_ids as string[]),
+    })),
+    misconception_candidates: (handoff.misconceptions as Record<string, unknown>[]).map((item) => ({
+      observed_error_logic: item.observed_error_logic, concept_terms: item.concept_terms,
+      observed_error_message_ids: refs(item.observed_error_local_ids as string[]),
+      correction_message_ids: refs(item.correction_local_ids as string[]),
+      proposed_correction: item.proposed_correction, correction_terms: item.correction_terms, severity: item.severity,
+    })),
+  };
+  const envelope = { intake_version: "0.1.0", client_kind: "chatgpt_work", draft };
+  if (!validateEnvelope(envelope)) throw new Error("HANDOFF_CONVERSION_FAILURE");
+  const encoded = new TextEncoder().encode(canonicalJson(envelope));
+  return { body: encoded.buffer.slice(encoded.byteOffset, encoded.byteOffset + encoded.byteLength), idempotencyKey: `medlearn-handoff-${digest}` };
+}
+
+const MCP_SCOPE = "medlearn:handoff:submit";
+const MCP_INSTRUCTIONS = "This server submits only an explicit MedLearnHandoff selected by the user. Do not infer, supplement, scan chats, auto-approve, or auto-publish.";
+const jwks = new Map<string, JWTVerifyGetKey>();
+
+function mcpError(id: unknown, code: string, rpcCode = -32602): Response {
+  return reply(200, { jsonrpc: "2.0", id: id ?? null, error: { code: rpcCode, message: code } });
+}
+
+function mcpTool(): Record<string, unknown> {
+  return {
+    name: "submit_learning_handoff", title: "Submit MedLearn learning handoff",
+    description: "Use this only when the user has explicitly selected or provided a MedLearnHandoff 0.1.0. Validates and idempotently submits the handoff to the bounded MedLearn intake workflow. Do not use project memory or infer missing evidence.",
+    annotations: { readOnlyHint: false, openWorldHint: false, destructiveHint: false },
+    securitySchemes: [{ type: "oauth2", scopes: [MCP_SCOPE] }],
+    inputSchema: { type: "object", additionalProperties: false, required: ["handoff"], properties: { handoff: toolHandoffSchema } },
+    outputSchema: { type: "object", additionalProperties: false, required: ["status", "job_id", "intake_digest", "concept_count", "claim_count", "learner_evidence_count", "misconception_count", "unresolved_count", "unfinished_count"], properties: {
+      status: { const: "submitted", type: "string" }, job_id: { type: "string" }, intake_digest: { pattern: "^sha256:[a-f0-9]{64}$", type: "string" },
+      concept_count: { type: "integer", minimum: 0 }, claim_count: { type: "integer", minimum: 0 }, learner_evidence_count: { type: "integer", minimum: 0 }, misconception_count: { type: "integer", minimum: 0 }, unresolved_count: { type: "integer", minimum: 0 }, unfinished_count: { type: "integer", minimum: 0 },
+    } },
+  };
+}
+
+function authChallenge(metadataUrl: string): string {
+  return `Bearer resource_metadata="${metadataUrl}", error="insufficient_scope", error_description="${MCP_SCOPE} is required"`;
+}
+
+function mcpAuthError(id: unknown, metadataUrl: string): Response {
+  const response = reply(200, { jsonrpc: "2.0", id: id ?? null, result: { content: [{ type: "text", text: "Authentication required." }], _meta: { "mcp/www_authenticate": [authChallenge(metadataUrl)] }, isError: true } });
+  response.headers.set("www-authenticate", authChallenge(metadataUrl));
+  return response;
+}
+
+function allowedOrigin(request: Request, env: Env): boolean {
+  const origin = request.headers.get("origin");
+  if (!origin) return true;
+  const origins = (env.MEDLEARN_WORK_ALLOWED_ORIGINS ?? "https://chatgpt.com,https://chat.openai.com").split(",").map((value) => value.trim());
+  return origins.includes(origin);
+}
+
+async function accessTokenPayload(request: Request, env: Env): Promise<JWTPayload | null> {
+  const oauth = oauthConfig(env);
+  const token = request.headers.get("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1];
+  if (!oauth || !token) return null;
+  try {
+    let key = jwks.get(oauth.issuer);
+    if (!key) {
+      const discoveryUrl = new URL(".well-known/openid-configuration", oauth.issuer);
+      const metadata = await (await fetch(discoveryUrl)).json() as { jwks_uri?: string };
+      if (!metadata.jwks_uri) return null;
+      const jwksUrl = new URL(metadata.jwks_uri);
+      if (jwksUrl.protocol !== "https:") return null;
+      key = createRemoteJWKSet(jwksUrl);
+      jwks.set(oauth.issuer, key);
+    }
+    const { payload } = await jwtVerify(token, key, { issuer: oauth.issuer });
+    const audiences = Array.isArray(payload.aud) ? payload.aud : [payload.aud];
+    if (!audiences.includes(oauth.audience) && payload.resource !== oauth.audience) return null;
+    const scopes = typeof payload.scope === "string" ? payload.scope.split(/\s+/) : [];
+    if (payload.sub !== oauth.subject || !scopes.includes(MCP_SCOPE)) return null;
+    return payload;
+  } catch { return null; }
+}
+
+async function routeMcp(request: Request, env: Env): Promise<Response> {
+  if (request.method !== "POST") return new Response(null, { status: 405, headers: { allow: "POST" } });
+  if (!allowedOrigin(request, env)) return reply(403, { error: "MCP_ORIGIN_FORBIDDEN" });
+  const accept = request.headers.get("accept");
+  if (accept && !accept.includes("application/json") && !accept.includes("text/event-stream") && !accept.includes("*/*")) return reply(406, { error: "MCP_NOT_ACCEPTABLE" });
+  if (request.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase() !== "application/json")
+    return reply(415, { error: "HANDOFF_INVALID_JSON" });
+  const declared = Number(request.headers.get("content-length") ?? 0);
+  if (declared > MAX_HANDOFF_BODY) return reply(413, { error: "HANDOFF_SCHEMA_INVALID" });
+  const body = await request.arrayBuffer();
+  if (body.byteLength > MAX_HANDOFF_BODY) return reply(413, { error: "HANDOFF_SCHEMA_INVALID" });
+  let call: Record<string, unknown>;
+  try { call = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(body)) as Record<string, unknown>; }
+  catch { return reply(400, { error: "HANDOFF_INVALID_JSON" }); }
+  if (Array.isArray(call)) return mcpError(null, "BATCH_NOT_SUPPORTED", -32600);
+  const id = call.id ?? null;
+  if (call.jsonrpc !== "2.0" || typeof call.method !== "string") return mcpError(id, "HANDOFF_INVALID_JSON");
+  const notification = !("id" in call);
+  const notify = (): Response => new Response(null, { status: 202 });
+  if (call.method === "initialize") return notification ? notify() : reply(200, { jsonrpc: "2.0", id, result: { protocolVersion: "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: "medlearn-work", version: "0.14.0" }, instructions: MCP_INSTRUCTIONS } });
+  if (call.method === "notifications/initialized") return notify();
+  if (call.method === "ping") return notification ? notify() : reply(200, { jsonrpc: "2.0", id, result: {} });
+  if (call.method === "tools/list") return notification ? notify() : reply(200, { jsonrpc: "2.0", id, result: { tools: [mcpTool()] } });
+  if (call.method !== "tools/call") return mcpError(id, "HANDOFF_INVALID_JSON");
+  if (notification) return notify();
+  const oauth = oauthConfig(env);
+  const metadataUrl = oauth ? `${oauth.resource}/.well-known/oauth-protected-resource` : "";
+  if (!(await accessTokenPayload(request, env))) return mcpAuthError(id, metadataUrl);
+  const configured = workConfig(env);
+  if (!configured) return mcpError(id, "SERVICE_MISCONFIGURED", -32603);
+  const params = call.params as Record<string, unknown> | undefined;
+  if (!params || params.name !== "submit_learning_handoff" || typeof params.arguments !== "object" || params.arguments === null)
+    return mcpError(id, "HANDOFF_SCHEMA_INVALID");
+  const argumentsValue = params.arguments as Record<string, unknown>;
+  if (Object.keys(argumentsValue).length !== 1 || !("handoff" in argumentsValue) || typeof argumentsValue.handoff !== "object" || argumentsValue.handoff === null)
+    return mcpError(id, "HANDOFF_SCHEMA_INVALID");
+  const handoff = argumentsValue.handoff as Record<string, unknown>;
+  if (handoff.handoff_version !== "0.1.0") return mcpError(id, "HANDOFF_UNSUPPORTED_VERSION");
+  if (!validateHandoff(handoff)) return mcpError(id, "HANDOFF_SCHEMA_INVALID");
+  const semantic = handoffSemanticError(handoff);
+  if (semantic) return mcpError(id, semantic);
+  try {
+    const converted = await convertHandoff(handoff);
+    const response = await submitIntake(configured, converted.body, converted.idempotencyKey, Date.now());
+    if (!response.ok) return mcpError(id, "HANDOFF_SUBMISSION_FAILURE");
+    const job = await response.json<JobRecord>();
+    const result = {
+      status: "submitted", job_id: job.job_id, intake_digest: job.intake_digest,
+      concept_count: (handoff.concepts as unknown[]).length, claim_count: (handoff.claims as unknown[]).length,
+      learner_evidence_count: (handoff.learner_evidence as unknown[]).length,
+      misconception_count: (handoff.misconceptions as unknown[]).length,
+      unresolved_count: (handoff.unresolved_questions as unknown[]).length,
+      unfinished_count: (handoff.unfinished_topics as unknown[]).length,
+    };
+    return reply(200, { jsonrpc: "2.0", id, result: { content: [{ type: "text", text: JSON.stringify(result) }], structuredContent: result } });
+  } catch (error) {
+    const code = error instanceof Error && error.message === "HANDOFF_CONVERSION_FAILURE" ? error.message : "HANDOFF_CONVERSION_FAILURE";
+    return mcpError(id, code);
+  }
 }
 
 async function routeV1(request: Request, env: Config, url: URL): Promise<Response> {
@@ -602,6 +896,23 @@ export async function handle(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   if (request.method === "GET" && url.pathname === "/") return reply(200, { service: "medlearn-cloud", status: "ok" });
   if (request.method === "GET" && url.pathname === "/health") return reply(200, { status: "ok" });
+  if (request.method === "GET" && url.pathname === "/.well-known/oauth-protected-resource") {
+    const oauth = oauthConfig(env);
+    return secureMcp(reply(200, {
+      resource: oauth?.resource ?? "",
+      authorization_servers: oauth ? [oauth.issuer] : [],
+      scopes_supported: [MCP_SCOPE],
+      resource_documentation: "https://github.com/fangzh05/medlearn-vault/blob/main/docs/medlearn-plugin-setup.md",
+    }));
+  }
+  if (url.pathname === "/mcp") {
+    try {
+      return secureMcp(await routeMcp(request, env));
+    } catch {
+      console.error(JSON.stringify({ stage: "mcp_route", error_code: "HANDOFF_SUBMISSION_FAILURE" }));
+      return secureMcp(reply(503, { error: "HANDOFF_SUBMISSION_FAILURE" }));
+    }
+  }
   if (!url.pathname.startsWith("/v1/")) return reply(404, { error: "NOT_FOUND" });
 
   // Vault routes — independent config check, does not affect control routes

@@ -80,6 +80,12 @@ It still reads the existing authenticated Worker manifest, verifies every manife
 digest, and writes only `MedLearn/` inside an existing local Obsidian Vault. See
 [Windows sync](docs/windows-sync.md).
 
+Version 0.14.0 adds strict `MedLearnHandoff` 0.1.0 import from a user-selected
+Chat Project Source through the single authenticated Work MCP tool. It derives
+deterministic CaptureDraft bytes and reuses the existing intake, review,
+approval, publication, and read-only Windows sync chain. See
+[Project handoff import](docs/project-handoff-import.md).
+
 `medlearn-synthetic-intake.yml` submits a fixed, excerpt-free synthetic fixture through the real
 Worker intake path, waits for Proposal completion, and reports only sanitized Proposal provenance
 through the read-only inspector. It accepts no dispatch inputs and runs only from `main`.
