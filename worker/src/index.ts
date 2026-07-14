@@ -423,9 +423,10 @@ function canonicalJson(value: unknown): string {
 }
 
 function handoffSemanticError(handoff: Record<string, unknown>): string | null {
-  const messages = handoff.evidence_messages as { local_id: string }[];
+  const messages = handoff.evidence_messages as { local_id: string; role: "user" | "assistant"; observed_at: string | null }[];
   const ids = messages.map((item) => item.local_id);
   if (new Set(ids).size !== ids.length) return "HANDOFF_DUPLICATE_LOCAL_ID";
+  const roles = new Map(messages.map((item) => [item.local_id, item.role]));
   const known = new Set(ids);
   const groups: string[][] = [];
   for (const key of ["concepts", "claims", "learner_evidence", "unresolved_questions", "unfinished_topics"] as const) {
@@ -434,7 +435,28 @@ function handoffSemanticError(handoff: Record<string, unknown>): string | null {
   for (const item of handoff.misconceptions as { observed_error_local_ids: string[]; correction_local_ids: string[] }[]) {
     groups.push(item.observed_error_local_ids, item.correction_local_ids);
   }
-  return groups.some((group) => group.some((id) => !known.has(id))) ? "HANDOFF_DANGLING_EVIDENCE_REFERENCE" : null;
+  if (groups.some((group) => group.some((id) => !known.has(id)))) return "HANDOFF_DANGLING_EVIDENCE_REFERENCE";
+  const assertionGroups = [
+    ...(handoff.claims as { evidence_local_ids: string[] }[]).map((item) => item.evidence_local_ids),
+    ...(handoff.learner_evidence as { evidence_local_ids: string[] }[]).map((item) => item.evidence_local_ids),
+    ...(handoff.unresolved_questions as { evidence_local_ids: string[] }[]).map((item) => item.evidence_local_ids),
+  ];
+  if (assertionGroups.some((group) => new Set(group.map((id) => roles.get(id))).size !== 1))
+    return "HANDOFF_ASSERTION_EVIDENCE_ROLE_CONFLICT";
+  if ((handoff.learner_evidence as { evidence_local_ids: string[] }[]).some(
+    (item) => item.evidence_local_ids.some((id) => roles.get(id) !== "user"),
+  )) return "HANDOFF_LEARNER_EVIDENCE_NOT_USER_OWNED";
+  if ((handoff.misconceptions as { observed_error_local_ids: string[] }[]).some(
+    (item) => item.observed_error_local_ids.some((id) => roles.get(id) !== "user"),
+  )) return "HANDOFF_MISCONCEPTION_EVIDENCE_NOT_USER_OWNED";
+  const session = handoff.session as { session_started_at: string; captured_at: string };
+  const started = Date.parse(session.session_started_at);
+  const captured = Date.parse(session.captured_at);
+  if (messages.some((item) => {
+    const observed = Date.parse(item.observed_at ?? session.captured_at);
+    return observed < started || observed > captured;
+  })) return "HANDOFF_EVIDENCE_TIME_OUT_OF_RANGE";
+  return null;
 }
 
 async function convertHandoff(handoff: Record<string, unknown>): Promise<{ body: ArrayBuffer; idempotencyKey: string }> {

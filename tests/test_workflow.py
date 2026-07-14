@@ -928,6 +928,43 @@ def test_digest_and_job_input_mismatches_fail_safely() -> None:
         )
 
 
+def test_invalid_intake_envelope_is_recorded_without_claiming_a_digest_failure() -> None:
+    payload = IntakeEnvelope.model_validate_json(copd_envelope()).model_dump(mode="json")
+    captured_at = payload["draft"]["context"]["captured_at"]
+    payload["draft"]["evidence_messages"].extend(
+        [
+            {
+                "message_id": "message_schema_failure_user",
+                "role": "user",
+                "observed_at": captured_at,
+                "excerpt": "synthetic user evidence",
+            },
+            {
+                "message_id": "message_schema_failure_assistant",
+                "role": "assistant",
+                "observed_at": captured_at,
+                "excerpt": "synthetic assistant evidence",
+            },
+        ]
+    )
+    payload["draft"]["claim_candidates"][0]["evidence_message_ids"] = [
+        "message_schema_failure_user",
+        "message_schema_failure_assistant",
+    ]
+    exact = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    store = MemoryStore()
+    inputs, _ = seed_job(store, exact, job_id="job-invalid-envelope")
+    with pytest.raises(WorkflowError, match="INVALID_INTAKE_ENVELOPE"):
+        ProposalOrchestrator(store, ROOT).run(
+            inputs, bundle_path="examples/copd", workflow_run_id="run-invalid-envelope", now=NOW
+        )
+    job = JobRecord.model_validate_json(store.objects[f"v1/jobs/{inputs.job_id}.json"].body)
+    execution = ProposalExecutionRecord.model_validate_json(
+        store.objects[f"v1/executions/{inputs.job_id}.json"].body
+    )
+    assert job.error_code == execution.error_code == "INVALID_INTAKE_ENVELOPE"
+
+
 @pytest.mark.parametrize("configured", ["", "../examples/copd", "/tmp/bundle", "missing"])
 def test_bundle_path_has_no_implicit_fallback(configured: str) -> None:
     with pytest.raises(WorkflowError, match="INVALID_BUNDLE_PATH"):

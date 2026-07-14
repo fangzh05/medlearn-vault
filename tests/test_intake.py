@@ -1,4 +1,5 @@
 import hashlib
+import json
 from pathlib import Path
 
 import pytest
@@ -7,7 +8,9 @@ from typer.testing import CliRunner
 
 from medlearn_vault.capture import (
     CaptureDraft,
+    IntakeDigestMismatch,
     IntakeEnvelope,
+    InvalidIntakeEnvelope,
     capture_draft_digest,
     extract_capture_draft,
     intake_envelope_digest,
@@ -42,7 +45,7 @@ def test_client_kind_is_only_untrusted_envelope_metadata() -> None:
 
 def test_intake_rejects_tampering_and_unsupported_versions() -> None:
     exact = FIXTURE.read_bytes()
-    with pytest.raises(ValueError, match="INTAKE_DIGEST_MISMATCH"):
+    with pytest.raises(IntakeDigestMismatch, match="INTAKE_DIGEST_MISMATCH"):
         extract_capture_draft(exact, "sha256:" + "0" * 64)
     payload = IntakeEnvelope.model_validate_json(exact).model_dump(mode="json")
     payload["intake_version"] = "0.2.0"
@@ -54,13 +57,42 @@ def test_intake_rejects_tampering_and_unsupported_versions() -> None:
         IntakeEnvelope.model_validate(payload)
 
 
+def test_exact_digest_and_invalid_envelope_have_distinct_failures() -> None:
+    payload = IntakeEnvelope.model_validate_json(FIXTURE.read_bytes()).model_dump(mode="json")
+    captured_at = payload["draft"]["context"]["captured_at"]
+    payload["draft"]["evidence_messages"].extend(
+        [
+            {
+                "message_id": "message_schema_failure_user",
+                "role": "user",
+                "observed_at": captured_at,
+                "excerpt": "synthetic user evidence",
+            },
+            {
+                "message_id": "message_schema_failure_assistant",
+                "role": "assistant",
+                "observed_at": captured_at,
+                "excerpt": "synthetic assistant evidence",
+            },
+        ]
+    )
+    payload["draft"]["claim_candidates"][0]["evidence_message_ids"] = [
+        "message_schema_failure_user",
+        "message_schema_failure_assistant",
+    ]
+    exact = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    digest = intake_envelope_digest(exact)
+    with pytest.raises(InvalidIntakeEnvelope, match="INVALID_INTAKE_ENVELOPE"):
+        extract_capture_draft(exact, digest)
+
+
 def test_cross_runtime_handoff_fixture_preserves_exact_bytes() -> None:
     exact = HANDOFF_FIXTURE.read_bytes()
     expected = HANDOFF_DIGEST.read_text(encoding="utf-8").strip()
     assert intake_envelope_digest(exact) == expected
     assert extract_capture_draft(exact, expected)
     tampered = exact[:-1] + bytes([exact[-1] ^ 1])
-    with pytest.raises(ValueError, match="INTAKE_DIGEST_MISMATCH"):
+    with pytest.raises(IntakeDigestMismatch, match="INTAKE_DIGEST_MISMATCH"):
         extract_capture_draft(tampered, expected)
 
 

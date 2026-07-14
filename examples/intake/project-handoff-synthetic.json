@@ -1,0 +1,50 @@
+{
+  "handoff_version": "0.1.0",
+  "session": {
+    "title": "Synthetic contract fixture",
+    "discipline_id": "medicine",
+    "course_id": "synthetic_course",
+    "chapter_id": "synthetic_chapter",
+    "session_started_at": "2026-07-14T09:00:00+08:00",
+    "captured_at": "2026-07-14T09:15:00+08:00"
+  },
+  "learning_goals": [],
+  "evidence_messages": [
+    {
+      "local_id": "e001",
+      "role": "user",
+      "observed_at": "2026-07-14T09:05:00+08:00",
+      "excerpt": "Synthetic learner statement.",
+      "purpose": "contract_fixture"
+    },
+    {
+      "local_id": "e002",
+      "role": "assistant",
+      "observed_at": "2026-07-14T09:10:00+08:00",
+      "excerpt": "Synthetic teaching response.",
+      "purpose": "contract_fixture"
+    }
+  ],
+  "concepts": [
+    {"name": "Synthetic concept 1", "preferred_english": null, "concept_type": "other", "scope_note": null, "evidence_local_ids": ["e001"]},
+    {"name": "Synthetic concept 2", "preferred_english": null, "concept_type": "other", "scope_note": null, "evidence_local_ids": ["e001"]},
+    {"name": "Synthetic concept 3", "preferred_english": null, "concept_type": "other", "scope_note": null, "evidence_local_ids": ["e002"]},
+    {"name": "Synthetic concept 4", "preferred_english": null, "concept_type": "other", "scope_note": null, "evidence_local_ids": ["e002"]},
+    {"name": "Synthetic concept 5", "preferred_english": null, "concept_type": "other", "scope_note": null, "evidence_local_ids": ["e001"]}
+  ],
+  "claims": [
+    {"statement": "Synthetic claim 1.", "claim_type": "mechanism", "concept_terms": ["Synthetic concept 1"], "evidence_local_ids": ["e001"], "question_priority": null},
+    {"statement": "Synthetic claim 2.", "claim_type": "mechanism", "concept_terms": ["Synthetic concept 2"], "evidence_local_ids": ["e002"], "question_priority": null},
+    {"statement": "Synthetic claim 3.", "claim_type": "mechanism", "concept_terms": ["Synthetic concept 3"], "evidence_local_ids": ["e001"], "question_priority": null}
+  ],
+  "learner_evidence": [
+    {"concept_terms": ["Synthetic concept 1"], "evidence_type": "correct_independent", "confidence": 0.9, "rationale": "Synthetic user-owned evidence.", "evidence_local_ids": ["e001"]}
+  ],
+  "misconceptions": [
+    {"observed_error_logic": "Synthetic incorrect link.", "concept_terms": ["Synthetic concept 2"], "observed_error_local_ids": ["e001"], "correction_local_ids": ["e002"], "proposed_correction": "Synthetic correction.", "correction_terms": ["Synthetic concept 2"], "severity": "medium"}
+  ],
+  "unresolved_questions": [
+    {"statement": "Synthetic open question?", "concept_terms": ["Synthetic concept 4"], "evidence_local_ids": ["e001"], "question_priority": "medium"}
+  ],
+  "unfinished_topics": []
+}

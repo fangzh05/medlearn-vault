@@ -149,6 +149,30 @@ class MedLearnHandoff(DomainModel):
         )
         if any(not set(group) <= known for group in references):
             raise ValueError("all evidence_local_ids must exist in evidence_messages")
+        roles = {item.local_id: item.role for item in self.evidence_messages}
+        assertion_groups = (
+            *(item.evidence_local_ids for item in self.claims),
+            *(item.evidence_local_ids for item in self.learner_evidence),
+            *(item.evidence_local_ids for item in self.unresolved_questions),
+        )
+        if any(len({roles[item] for item in group}) != 1 for group in assertion_groups):
+            raise ValueError("assertion evidence must have exactly one derived speaker role")
+        if any(
+            {roles[item] for item in candidate.evidence_local_ids} != {"user"}
+            for candidate in self.learner_evidence
+        ):
+            raise ValueError("learner evidence must be owned by user evidence messages")
+        if any(
+            {roles[item] for item in candidate.observed_error_local_ids} != {"user"}
+            for candidate in self.misconceptions
+        ):
+            raise ValueError("observed errors must be owned by user evidence messages")
+        if any(
+            observed_at < self.session.session_started_at or observed_at > self.session.captured_at
+            for item in self.evidence_messages
+            for observed_at in (item.observed_at or self.session.captured_at,)
+        ):
+            raise ValueError("evidence times must fall within the capture interval")
         return self
 
 

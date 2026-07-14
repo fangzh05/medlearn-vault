@@ -63,3 +63,12 @@ content-addressed object is safely reused. A different object at the same key,
 including BOM, whitespace, newline, or JSON key-order differences, returns
 `INTAKE_STORAGE_CONFLICT`; it is never overwritten or deleted. Python retains
 its independent exact-byte validation when the workflow reads the intake.
+
+Read-only diagnosis of the subsequent production intake confirmed that its
+exact SHA-256 matched its content-addressed key. The sanitized Python failure
+was at `draft`: `value_error` / `assertion evidence must have exactly one
+derived speaker role`. Exact-byte mismatches now remain
+`INTAKE_DIGEST_MISMATCH`, while a matching-but-invalid Envelope is recorded as
+`INVALID_INTAKE_ENVELOPE`. Before persistence, the Worker also rejects a
+Handoff assertion whose evidence references mix user and assistant roles, so
+this cross-field domain invariant cannot bypass JSON Schema validation again.

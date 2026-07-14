@@ -562,6 +562,7 @@ describe("Chat Project Source MCP handoff", () => {
   it.each([
     ["duplicate", (value: ReturnType<typeof handoff>) => { value.evidence_messages.push({ ...value.evidence_messages[0] }); }, "HANDOFF_DUPLICATE_LOCAL_ID"],
     ["dangling", (value: ReturnType<typeof handoff>) => { value.claims[0].evidence_local_ids = ["missing"]; }, "HANDOFF_DANGLING_EVIDENCE_REFERENCE"],
+    ["mixed assertion roles", (value: ReturnType<typeof handoff>) => { value.evidence_messages.push({ local_id: "e002", role: "assistant", observed_at: null, excerpt: "synthetic assistant evidence", purpose: "correction" }); value.claims[0].evidence_local_ids = ["e001", "e002"]; }, "HANDOFF_ASSERTION_EVIDENCE_ROLE_CONFLICT"],
     ["unsupported", (value: ReturnType<typeof handoff>) => { value.handoff_version = "9.9.9"; }, "HANDOFF_UNSUPPORTED_VERSION"],
   ])("returns a stable error for %s input", async (_name, mutate, code) => {
     const value = handoff();
@@ -569,6 +570,19 @@ describe("Chat Project Source MCP handoff", () => {
     const response = await handle(mcp("tools/call", { name: "submit_learning_handoff", arguments: { handoff: value } }), env);
     const body = await response.json<{ error: { message: string } }>();
     expect(body.error.message).toBe(code);
+  });
+
+  it("converts the shared sanitized nonempty handoff to a schema-valid envelope", async () => {
+    const value = JSON.parse(readFileSync(resolve("../examples/intake/project-handoff-synthetic.json"), "utf8"));
+    const response = await handle(mcp("tools/call", { name: "submit_learning_handoff", arguments: { handoff: value } }), env);
+    const body = await response.json<{ result: { structuredContent: { concept_count: number; claim_count: number; learner_evidence_count: number; misconception_count: number; unresolved_count: number; unfinished_count: number; intake_digest: string } } }>();
+    expect(body.result.structuredContent).toMatchObject({ concept_count: 5, claim_count: 3, learner_evidence_count: 1, misconception_count: 1, unresolved_count: 1, unfinished_count: 0 });
+    const key = `v1/intakes/sha256/${body.result.structuredContent.intake_digest.slice("sha256:".length)}.json`;
+    const stored = bucket.rawBytes(key);
+    expect(stored).toBeDefined();
+    const ajv = new Ajv({ strict: false });
+    addFormats(ajv);
+    expect(ajv.compile(intakeSchema)(JSON.parse(new TextDecoder().decode(stored)))).toBe(true);
   });
 
   it("returns an OAuth challenge without a valid access token", async () => {

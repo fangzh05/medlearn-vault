@@ -8,7 +8,7 @@ import re
 import unicodedata
 from typing import Any, Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, ValidationError, model_validator
 
 from medlearn_vault.bundle import ContractBundle
 from medlearn_vault.domain.base import AwareDatetime, DomainModel
@@ -30,6 +30,20 @@ MAX_EVIDENCE_MESSAGES = 200
 MAX_CANDIDATES_PER_KIND = 200
 MAX_EXCERPT_LENGTH = 1000
 MAX_STATEMENT_LENGTH = 4000
+
+
+class IntakeDigestMismatch(ValueError):
+    """The bytes read from storage do not match their content-addressed key."""
+
+    def __init__(self) -> None:
+        super().__init__("INTAKE_DIGEST_MISMATCH")
+
+
+class InvalidIntakeEnvelope(ValueError):
+    """The exact, integrity-checked intake bytes fail the Envelope contract."""
+
+    def __init__(self) -> None:
+        super().__init__("INVALID_INTAKE_ENVELOPE")
 
 
 class CaptureContext(DomainModel):
@@ -372,8 +386,11 @@ def intake_envelope_digest(exact_bytes: bytes) -> str:
 
 def extract_capture_draft(exact_bytes: bytes, expected_intake_digest: str) -> tuple[bytes, str]:
     if intake_envelope_digest(exact_bytes) != expected_intake_digest:
-        raise ValueError("INTAKE_DIGEST_MISMATCH")
-    envelope = IntakeEnvelope.model_validate_json(exact_bytes)
+        raise IntakeDigestMismatch()
+    try:
+        envelope = IntakeEnvelope.model_validate_json(exact_bytes)
+    except ValidationError as exc:
+        raise InvalidIntakeEnvelope() from exc
     draft_bytes = canonical_capture_draft_json(envelope.draft)
     return draft_bytes, capture_draft_digest(envelope.draft)
 
