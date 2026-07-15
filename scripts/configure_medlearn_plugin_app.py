@@ -9,7 +9,7 @@ import re
 import tempfile
 from pathlib import Path
 
-APP_ID = re.compile(r"plugin_asdk_app_[A-Za-z0-9]+$")
+APP_ID = re.compile(r"(?:asdk_app_[A-Za-z0-9]+|plugin_asdk_app_[A-Za-z0-9]+)$")
 
 
 def atomic_json(path: Path, value: object) -> None:
@@ -22,8 +22,10 @@ def atomic_json(path: Path, value: object) -> None:
 
 
 def configure(root: Path, app_id: str) -> None:
+    if app_id.startswith("asdk_app_v_"):
+        raise ValueError("versioned asdk_app_v_ identifiers are not valid App IDs")
     if not APP_ID.fullmatch(app_id):
-        raise ValueError("app_id must be a plugin_asdk_app identifier")
+        raise ValueError("app_id must be an asdk_app or legacy plugin_asdk_app identifier")
     plugin = root / "plugins" / "medlearn"
     manifest_path = plugin / ".codex-plugin" / "plugin.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))

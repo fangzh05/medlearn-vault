@@ -25,13 +25,14 @@ already occupied by different bytes returns the stable MCP error
    deploy the Worker.
 3. Verify OAuth in MCP Inspector, enable ChatGPT Developer Mode, then create a
    Plugin pointing to `https://medlearn-cloud.fzh050531.workers.dev/mcp`.
-4. Complete OAuth, copy the resulting `plugin_asdk_app...` ID, and run:
+4. Complete OAuth, copy the resulting stable `asdk_app_<hex-or-alphanumeric>` ID, and run:
 
    ```powershell
-   python scripts/configure_medlearn_plugin_app.py plugin_asdk_app_...
+   python scripts/configure_medlearn_plugin_app.py asdk_app_...
    ```
 
-5. Commit the generated `.app.json` and manifest wiring, install the local
+5. Keep the generated `.app.json` local and ignored; commit only the manifest
+   wiring, then install the local
    plugin, then in a new Work task explicitly select one Project Source and
    invoke `submit_learning_handoff`.
 6. Verify the returned `job_id`, then repeat the same Source to confirm

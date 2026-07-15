@@ -29,7 +29,10 @@ for existing clients.
 `.app.json.example` is documentation only and cannot be installed. Generate the real ignored `.app.json` after creating a ChatGPT Developer Mode App:
 
 ```powershell
-python scripts/configure_medlearn_plugin_app.py plugin_asdk_app_...
+python scripts/configure_medlearn_plugin_app.py asdk_app_...
 ```
+
+Legacy `plugin_asdk_app_...` IDs remain accepted. Version IDs beginning with
+`asdk_app_v_` are not valid application IDs.
 
 The real `.app.json` is a locally generated file excluded by `.gitignore`. Never commit the real App binding, token, or secret.
