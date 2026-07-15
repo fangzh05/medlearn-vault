@@ -99,6 +99,9 @@ class ManifestArtifact(StrictModel):
 
 class Manifest(StrictModel):
     manifest_version: Literal["0.1.0", "0.2.0"]
+    presentation_generation_id: str | None = None
+    presentation_receipt_digest: str | None = None
+    previous_generation_id: str | None = None
     artifacts: list[ManifestArtifact]
 
     @model_validator(mode="after")
@@ -119,6 +122,30 @@ class Manifest(StrictModel):
             for item in self.artifacts
         ):
             raise ValueError("presentation manifest contains legacy artifact")
+        if self.manifest_version == "0.2.0" and (
+            self.presentation_generation_id is None
+            or not PRESENTATION_RE.fullmatch(self.presentation_generation_id)
+            or self.presentation_receipt_digest is None
+            or not DIGEST_RE.fullmatch(self.presentation_receipt_digest)
+            or (
+                self.previous_generation_id is not None
+                and not PRESENTATION_RE.fullmatch(self.previous_generation_id)
+            )
+            or any(
+                item.presentation_generation_id != self.presentation_generation_id
+                for item in self.artifacts
+            )
+        ):
+            raise ValueError("invalid presentation manifest identity")
+        if self.manifest_version == "0.1.0" and any(
+            value is not None
+            for value in (
+                self.presentation_generation_id,
+                self.presentation_receipt_digest,
+                self.previous_generation_id,
+            )
+        ):
+            raise ValueError("legacy manifest has presentation identity")
         paths = [artifact.path for artifact in self.artifacts]
         if paths != sorted(paths) or len(paths) != len(set(paths)):
             raise ValueError("manifest paths are not unique and sorted")
@@ -137,6 +164,8 @@ class SyncState(StrictModel):
     vault_path: str
     manifest_etag: str
     manifest_version: Literal["0.1.0", "0.2.0"] = "0.1.0"
+    presentation_generation_id: str | None = None
+    presentation_receipt_digest: str | None = None
     manifest_artifacts: list[ManifestArtifact]
     managed_artifacts: dict[str, ManagedArtifact]
 
@@ -145,7 +174,10 @@ class SyncState(StrictModel):
         if not re.fullmatch(r'"sha256:[a-f0-9]{64}"', self.manifest_etag):
             raise ValueError("invalid manifest ETag")
         manifest = Manifest(
-            manifest_version=self.manifest_version, artifacts=self.manifest_artifacts
+            manifest_version=self.manifest_version,
+            presentation_generation_id=self.presentation_generation_id,
+            presentation_receipt_digest=self.presentation_receipt_digest,
+            artifacts=self.manifest_artifacts,
         )
         artifacts = {artifact.path: artifact for artifact in manifest.artifacts}
         for path, managed in self.managed_artifacts.items():

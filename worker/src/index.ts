@@ -742,6 +742,9 @@ interface ManifestArtifact extends VaultReceiptArtifact {
 
 interface VaultManifest {
   manifest_version: string;
+  presentation_generation_id?: string;
+  presentation_receipt_digest?: string;
+  previous_generation_id?: string | null;
   artifacts: ManifestArtifact[];
 }
 
@@ -991,7 +994,13 @@ async function visibleManifest(bucket: R2Bucket): Promise<{ manifest: VaultManif
       if (receipt.presentation_generation_id !== pointer.active_presentation_generation_id || !Array.isArray(receipt.artifacts)) throw new Error();
       const artifacts = receipt.artifacts.map(item => ({ ...item, presentation_generation_id: receipt.presentation_generation_id, storage_key: item.storage_key }));
       if (artifacts.some(item => !item.storage_key || !item.path.startsWith("MedLearn/") || !item.path.endsWith(".md"))) throw new Error();
-      return { manifest: { manifest_version: "0.2.0", artifacts: artifacts.sort((a, b) => a.path.localeCompare(b.path)) } };
+      return { manifest: {
+        manifest_version: "0.2.0",
+        presentation_generation_id: pointer.active_presentation_generation_id,
+        presentation_receipt_digest: pointer.presentation_receipt_object_digest,
+        previous_generation_id: pointer.previous_generation_id as string | null,
+        artifacts: artifacts.sort((a, b) => a.path.localeCompare(b.path)),
+      } };
     } catch { return { manifest: { manifest_version: "0.2.0", artifacts: [] }, error: "INVALID_PRESENTATION_RECEIPT" }; }
   }
   const legacy = await listAllReceipts(bucket);

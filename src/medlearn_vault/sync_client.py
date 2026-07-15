@@ -296,7 +296,10 @@ def _manifest(
                 raise SyncError("SYNC_MANIFEST_PROTOCOL_ERROR") from exc
             return (
                 Manifest(
-                    manifest_version=state.manifest_version, artifacts=state.manifest_artifacts
+                    manifest_version=state.manifest_version,
+                    presentation_generation_id=state.presentation_generation_id,
+                    presentation_receipt_digest=state.presentation_receipt_digest,
+                    artifacts=state.manifest_artifacts,
                 ),
                 state.manifest_etag,
                 "not_modified",
@@ -345,6 +348,15 @@ def _manifest(
 
 def _check_rollback(previous: SyncState | None, manifest: Manifest) -> None:
     if previous is None:
+        return
+    if previous.manifest_version == "0.2.0" and manifest.manifest_version == "0.2.0":
+        if (
+            manifest.presentation_generation_id == previous.presentation_generation_id
+            and manifest.presentation_receipt_digest == previous.presentation_receipt_digest
+        ):
+            return
+        if manifest.previous_generation_id != previous.presentation_generation_id:
+            raise SyncError("SYNC_PRESENTATION_ROLLBACK")
         return
     now = {a.path: a for a in manifest.artifacts}
     for old in previous.manifest_artifacts:
@@ -673,6 +685,8 @@ def pull(
                     vault_path=config.vault_path,
                     manifest_etag=etag,
                     manifest_version=manifest.manifest_version,
+                    presentation_generation_id=manifest.presentation_generation_id,
+                    presentation_receipt_digest=manifest.presentation_receipt_digest,
                     manifest_artifacts=manifest.artifacts,
                     managed_artifacts=managed,
                 ),
