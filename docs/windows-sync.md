@@ -5,7 +5,7 @@ the authenticated Worker manifest under `MedLearn/` in one existing Obsidian Vau
 the whole Vault, uploads, deletes, bidirectionally syncs, force-overwrites, or changes `.obsidian`,
 attachments, plugins, themes, workspace state, iCloud metadata, or unrelated notes.
 
-### Reader-first graph migration (0.16.0)
+### Reader-first graph migration (0.16.1)
 
 When the authenticated manifest switches to the reader-first projection, only Markdown under
 `MedLearn/学习记录/` and `MedLearn/概念/` is materialized. The legacy
@@ -41,8 +41,8 @@ Build the trusted, pinned release bundle, then install or upgrade:
 New-Item -ItemType Directory -Force dist\wheelhouse | Out-Null
 python -m pip wheel --require-hashes -r requirements\ci.txt --wheel-dir dist\wheelhouse
 python -m pip wheel --no-build-isolation --no-deps --wheel-dir dist\wheelhouse .
-$wheel = Get-ChildItem dist\wheelhouse\medlearn_vault-0.13.0-*.whl | Select-Object -First 1
-medlearn sync install-windows --wheel $wheel.FullName --json
+$wheel = Get-ChildItem dist\wheelhouse\medlearn_vault-0.16.1-*.whl | Select-Object -First 1
+.\scripts\install_windows_client.ps1 -Wheel $wheel.FullName -InstallRoot "$env:LOCALAPPDATA\MedLearn\sync-client" -Json
 ```
 
 Identical reruns reuse the client. Upgrades build and smoke-test a staging virtual environment before
@@ -190,7 +190,7 @@ powershell -NoProfile -NonInteractive -File scripts/acceptance/windows_sync_roll
 # confirmation; do NOT use -NonInteractive):
 powershell -NoProfile -File scripts/acceptance/windows_sync_rollout.ps1 `
     -Endpoint "https://medlearn-cloud.<subdomain>.workers.dev" `
-    -Wheel "dist/wheelhouse/medlearn_vault-0.13.0-py3-none-any.whl"
+    -Wheel "dist/wheelhouse/medlearn_vault-0.16.1-py3-none-any.whl"
 ```
 
 The acceptance script:

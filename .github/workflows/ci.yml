@@ -74,39 +74,66 @@ jobs:
       - run: python -m pytest -q
       - run: python -m pip wheel --require-hashes -r requirements/ci.txt --wheel-dir wheelhouse
       - run: python -m pip wheel --no-build-isolation --no-deps --wheel-dir wheelhouse .
-      - name: Isolated Windows installer JSON smoke test
+      - name: Isolated Windows self-upgrade bootstrap acceptance
         shell: pwsh
         run: |
-          $wheel = Get-ChildItem wheelhouse\medlearn_vault-*.whl | Select-Object -First 1
-          if ($null -eq $wheel) { throw "wheel not found" }
-          python -m pip install --force-reinstall --no-deps $wheel.FullName
-          medlearn --version
-          medlearn sync --help
+          $headWheel = Get-ChildItem wheelhouse\medlearn_vault-0.16.1-*.whl | Select-Object -First 1
+          if ($null -eq $headWheel) { throw "head wheel not found" }
+          $base = Join-Path $env:RUNNER_TEMP 'medlearn base A'
+          $archive = Join-Path $env:RUNNER_TEMP 'medlearn-base.zip'
+          $installRoot = Join-Path $env:RUNNER_TEMP "medlearn sync 用户"
+          $home = Join-Path $env:RUNNER_TEMP 'medlearn external state'
+          git archive --format=zip HEAD -o $archive
+          Expand-Archive -LiteralPath $archive -DestinationPath $base -Force
+          (Get-Content -Raw "$base\pyproject.toml").Replace('0.16.1', '0.16.0') | Set-Content -NoNewline "$base\pyproject.toml"
+          (Get-Content -Raw "$base\src\medlearn_vault\__init__.py").Replace('0.16.1', '0.16.0') | Set-Content -NoNewline "$base\src\medlearn_vault\__init__.py"
+          python -m pip wheel --no-build-isolation --no-deps --wheel-dir wheelhouse $base
+          $baseWheel = Get-ChildItem wheelhouse\medlearn_vault-0.16.0-*.whl | Select-Object -First 1
+          if ($null -eq $baseWheel) { throw "base wheel not found" }
+          New-Item -ItemType Directory -Force $home | Out-Null
+          Set-Content -NoNewline (Join-Path $home 'config.json') 'sentinel-config'
+          Set-Content -NoNewline (Join-Path $home 'state.json') 'sentinel-state'
+          Set-Content -NoNewline (Join-Path $home 'credential.dpapi') 'sentinel-credential'
+          $sentinels = Get-ChildItem $home -File | Get-FileHash | ForEach-Object { "$($_.Path):$($_.Hash)" }
           $installRoot = Join-Path $env:RUNNER_TEMP "medlearn sync 用户"
           $env:MEDLEARN_SYNC_INSTALL_ROOT = $installRoot
+          $env:MEDLEARN_HOME = $home
           $previousPythonIoEncoding = $env:PYTHONIOENCODING
           $env:PYTHONIOENCODING = 'cp1252:strict'
           $stderrPath = Join-Path $env:RUNNER_TEMP 'medlearn-sync-installer.stderr'
           try {
-            $rawText = (& medlearn sync install-windows --wheel $wheel.FullName --json 2> $stderrPath | Out-String).Trim()
-            if ($LASTEXITCODE -ne 0) { throw "install failed: $rawText" }
+            $bootstrap = Join-Path $PWD 'scripts\install_windows_client.ps1'
+            $rawText = (& $bootstrap -Wheel $baseWheel.FullName -InstallRoot $installRoot -Json 2> $stderrPath | Out-String).Trim()
+            if ($LASTEXITCODE -ne 0) { throw "base bootstrap failed" }
+            $rawText | ConvertFrom-Json | Out-Null
+            $installed = Join-Path $installRoot 'venv\Scripts\medlearn.exe'
+            $baseVersion = (& $installed --version | Out-String).Trim()
+            if ($baseVersion -ne '0.16.0') { throw 'base version mismatch' }
+            $selfUpgrade = (& $installed sync install-windows --wheel $headWheel.FullName --json 2>&1 | Out-String).Trim()
+            if ($LASTEXITCODE -eq 0 -or ($selfUpgrade | ConvertFrom-Json).error_code -ne 'SYNC_INSTALL_SELF_UPGRADE_REQUIRES_BOOTSTRAP') { throw 'self-hosted guard failed' }
+            & $installed --help | Out-Null
+            $rawText = (& $bootstrap -Wheel $headWheel.FullName -InstallRoot $installRoot -Json 2> $stderrPath | Out-String).Trim()
+            if ($LASTEXITCODE -ne 0) { throw "head bootstrap failed" }
             $installedResult = $rawText | ConvertFrom-Json
-            if ($rawText | Select-String -Pattern "Looking in links|Processing|Successfully installed|\[notice\]") {
-              throw "installer JSON output was contaminated"
-            }
-            if ($rawText.ToCharArray() | Where-Object { [int][char]$_ -gt 127 }) {
-              throw "installer JSON output was not ASCII-safe"
-            }
-            if ((Get-Content -Raw $stderrPath -ErrorAction SilentlyContinue) -match 'Traceback') {
-              throw "installer wrote a traceback to stderr"
-            }
-            $installed = $installedResult.executable
-            if (-not (Test-Path $installed -PathType Leaf)) { throw "installed executable not found: $installed" }
-            & $installed --version
-            if ($LASTEXITCODE -ne 0) { throw "installed executable --version failed" }
+            if ($rawText.ToCharArray() | Where-Object { [int][char]$_ -gt 127 }) { throw "installer JSON output was not ASCII-safe" }
+            if ((Get-Content -Raw $stderrPath -ErrorAction SilentlyContinue) -match 'Traceback') { throw "installer wrote a traceback to stderr" }
+            $headVersion = (& $installed --version | Out-String).Trim()
+            if ($headVersion -ne '0.16.1') { throw 'head version mismatch' }
+            & $installed --help | Out-Null
+            & $installed doctor | Out-Null
+            & (Join-Path $installRoot 'venv\Scripts\python.exe') -m pip check
+            if (Get-ChildItem $installRoot -Directory -Filter '.venv-*' -ErrorAction SilentlyContinue) { throw 'installer leftovers found' }
+            $after = Get-ChildItem $home -File | Get-FileHash | ForEach-Object { "$($_.Path):$($_.Hash)" }
+            if (Compare-Object $sentinels $after) { throw 'external state changed' }
+            $rerunRaw = (& $bootstrap -Wheel $headWheel.FullName -InstallRoot $installRoot -Json 2> $stderrPath | Out-String).Trim()
+            $rerun = $rerunRaw | ConvertFrom-Json
+            if ($rerun.status -ne 'reused') { throw 'bootstrap rerun was not idempotent' }
           } finally {
             Remove-Item -LiteralPath $installRoot -Recurse -Force -ErrorAction SilentlyContinue
             Remove-Item -LiteralPath $stderrPath -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $base -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $archive -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $home -Recurse -Force -ErrorAction SilentlyContinue
             if ($null -eq $previousPythonIoEncoding) {
               Remove-Item Env:PYTHONIOENCODING -ErrorAction SilentlyContinue
             } else {

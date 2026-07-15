@@ -106,6 +106,22 @@ def _executable_works(path: Path) -> bool:
     return True
 
 
+def _running_from_target_venv(current: Path) -> bool:
+    """Return whether this process is hosted by the venv about to be replaced."""
+    try:
+        target = current.resolve(strict=False)
+        candidates = (Path(sys.executable), Path(sys.argv[0]))
+    except OSError:
+        return False
+    for candidate in candidates:
+        try:
+            if _is_within(candidate.resolve(strict=False), target):
+                return True
+        except OSError:
+            continue
+    return False
+
+
 def _run_installer_command(
     command: list[str], *, cwd: str | None = None
 ) -> subprocess.CompletedProcess[str]:
@@ -180,6 +196,13 @@ def install_windows(
         Path(plan.executable)
     ):
         return {"status": "reused", **asdict(plan), "network_download": False}
+
+    # Windows keeps the running interpreter (and the console executable shim)
+    # open.  Fail before creating staging so an installed client can never try
+    # to rename its own venv.  A durable external PowerShell bootstrap installs
+    # a temporary client and calls this function from outside ``current``.
+    if _running_from_target_venv(current):
+        raise SyncError("SYNC_INSTALL_SELF_UPGRADE_REQUIRES_BOOTSTRAP")
 
     destination.mkdir(parents=True, exist_ok=True)
     staging = destination / f".venv-staging-{uuid.uuid4().hex}"
