@@ -1,10 +1,10 @@
 {
   "proposal_version": "0.3.0",
-  "proposal_id": "proposal_2940199947d0b8e8bec4a1e91a6d8296",
+  "proposal_id": "proposal_ebe69ee65e9085099b830fd522c1023e",
   "status": "ready_for_review",
-  "draft_digest": "sha256:ce237ac0a447ec7cfcdc72af8e3a7bfba4dd5ac5824b5b5c27333d727b02349b",
-  "base_bundle_digest": "sha256:43f051e5aa169f2f3eed2891b2e0a78ec4460b46b3d93ef015f7330adedd3d72",
-  "proposal_digest": "sha256:6dcd228ffa95a9517511a4077140797b37ea00c5129f8741d66d7d45a2eb442d",
+  "draft_digest": "sha256:3b8e2334e4e89d85fc349f43c3bd8df86be6a1b538a596837fb1ff09093e28ad",
+  "base_bundle_digest": "sha256:c9b9c78e7bb91d2ddc043654c438c53cb86e551c85c56881ec70ed227f0c666d",
+  "proposal_digest": "sha256:e54ab62a680fc5ecc493eb6c35d512f4029837faa76562fd7950626859fb6985",
   "context": {
     "source_id": "source_22222222222222222222222222222222",
     "session_id": "session:copd-001",

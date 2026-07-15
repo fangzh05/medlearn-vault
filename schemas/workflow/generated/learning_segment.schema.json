@@ -835,7 +835,6 @@
       "type": "string"
     },
     "segment_message_count": {
-      "maximum": 50,
       "minimum": 1,
       "title": "Segment Message Count",
       "type": "integer"

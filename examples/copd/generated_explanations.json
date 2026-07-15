@@ -1,0 +1,172 @@
+[
+  {
+    "concept_id": "concept_c3c1cab3932e14e4668f750c8832af19",
+    "explanation_text": "D-二聚体形成机制指交联纤维蛋白形成后被纤溶系统降解，并释放可检测的降解片段。它同时反映凝血形成和随后纤溶两个环节，因此在理解相关检验题时，关键是先有交联纤维蛋白，再有D-二聚体。",
+    "origin": "gpt_generated",
+    "verification_status": "unverified",
+    "generated_at": "2026-07-15T18:00:00+08:00",
+    "generator_id": "gpt-5/content-quality-v1",
+    "learning_session_id": "session_8aece5f5f4995bf6a409f45928cf0349",
+    "generation_context_digest": "sha256:d94cf701f669b0481d2a9580732f5621dca55518dace7557697ad3f8f5f46dbe"
+  },
+  {
+    "concept_id": "concept_09a8e0de3eb33b3b8720f0b1a993bc3d",
+    "explanation_text": "抗磷脂综合征抗体谱是用于支持抗磷脂综合征判断的一组相关自身抗体结果。其核心意义在于结合持续阳性情况与临床事件评估疾病可能性，而不能把一次阳性或单个抗体直接等同于确诊。考试常考抗体证据与临床诊断之间的边界。",
+    "origin": "gpt_generated",
+    "verification_status": "unverified",
+    "generated_at": "2026-07-15T18:00:00+08:00",
+    "generator_id": "gpt-5/content-quality-v1",
+    "learning_session_id": "session_8aece5f5f4995bf6a409f45928cf0349",
+    "generation_context_digest": "sha256:d94cf701f669b0481d2a9580732f5621dca55518dace7557697ad3f8f5f46dbe"
+  },
+  {
+    "concept_id": "concept_380a0c80a3656056801da33b7a17dbb2",
+    "explanation_text": "干燥综合征相关远端肾小管酸中毒是自身免疫相关肾小管损害所致的酸排泄障碍。其特征是远端肾单位不能有效酸化尿液，可伴酸碱和电解质异常。临床与考试中，它提示干燥综合征除腺体症状外还可累及肾脏。",
+    "origin": "gpt_generated",
+    "verification_status": "unverified",
+    "generated_at": "2026-07-15T18:00:00+08:00",
+    "generator_id": "gpt-5/content-quality-v1",
+    "learning_session_id": "session_8aece5f5f4995bf6a409f45928cf0349",
+    "generation_context_digest": "sha256:d94cf701f669b0481d2a9580732f5621dca55518dace7557697ad3f8f5f46dbe"
+  },
+  {
+    "concept_id": "concept_fc4fcb0e7d10c770f42987171700ece3",
+    "explanation_text": "DIC诊断是对全身性凝血激活、凝血物质消耗和继发纤溶这一动态过程的综合判断。它通常需要结合诱因、出血或微血栓表现以及一组凝血检验的整体变化，单项异常不能独立定论。考试重点常是识别这种组合图景。",
+    "origin": "gpt_generated",
+    "verification_status": "unverified",
+    "generated_at": "2026-07-15T18:00:00+08:00",
+    "generator_id": "gpt-5/content-quality-v1",
+    "learning_session_id": "session_8aece5f5f4995bf6a409f45928cf0349",
+    "generation_context_digest": "sha256:d94cf701f669b0481d2a9580732f5621dca55518dace7557697ad3f8f5f46dbe"
+  },
+  {
+    "concept_id": "concept_71f8654e537e409d5d1fd385a4363f53",
+    "explanation_text": "RA典型关节分布指类风湿关节炎常见的对称性小关节受累模式。识别分布特点有助于把炎性关节炎与其他关节病区分开，也是病例题中判断疾病方向的重要线索。",
+    "origin": "gpt_generated",
+    "verification_status": "unverified",
+    "generated_at": "2026-07-15T18:00:00+08:00",
+    "generator_id": "gpt-5/content-quality-v1",
+    "learning_session_id": "session_8aece5f5f4995bf6a409f45928cf0349",
+    "generation_context_digest": "sha256:d94cf701f669b0481d2a9580732f5621dca55518dace7557697ad3f8f5f46dbe"
+  },
+  {
+    "concept_id": "concept_2048effa7ddf8ff15e3e5e714895a8a5",
+    "explanation_text": "Felty综合征是类风湿关节炎背景下出现的一种特定临床综合征，核心涉及关节病、脾脏改变和中性粒细胞减少。它的重要性在于提示感染风险及系统性受累，考试中常用于鉴别长期RA患者出现血细胞异常的原因。",
+    "origin": "gpt_generated",
+    "verification_status": "unverified",
+    "generated_at": "2026-07-15T18:00:00+08:00",
+    "generator_id": "gpt-5/content-quality-v1",
+    "learning_session_id": "session_8aece5f5f4995bf6a409f45928cf0349",
+    "generation_context_digest": "sha256:d94cf701f669b0481d2a9580732f5621dca55518dace7557697ad3f8f5f46dbe"
+  },
+  {
+    "concept_id": "concept_6c466328a6ee605dd892f9ffd511730f",
+    "explanation_text": "强直性脊柱炎是一类以中轴骨骼慢性炎症为主的疾病，可累及骶髂关节和脊柱。其核心特点是炎性腰背痛及可能发生的结构改变。病例题常结合发病年龄、疼痛性质、影像和相关标志物综合判断。",
+    "origin": "gpt_generated",
+    "verification_status": "unverified",
+    "generated_at": "2026-07-15T18:00:00+08:00",
+    "generator_id": "gpt-5/content-quality-v1",
+    "learning_session_id": "session_8aece5f5f4995bf6a409f45928cf0349",
+    "generation_context_digest": "sha256:d94cf701f669b0481d2a9580732f5621dca55518dace7557697ad3f8f5f46dbe"
+  },
+  {
+    "concept_id": "concept_eda9f456fdce41465e71da8631e84723",
+    "explanation_text": "HLA-B27是与部分中轴脊柱关节炎相关的遗传标志，但它不是单独确诊疾病的检验。其诊断价值取决于临床表现、影像和患病背景；阳性可增加支持度，阴性也不能简单排除。考试常考相关性与确诊证据的区别。",
+    "origin": "gpt_generated",
+    "verification_status": "unverified",
+    "generated_at": "2026-07-15T18:00:00+08:00",
+    "generator_id": "gpt-5/content-quality-v1",
+    "learning_session_id": "session_8aece5f5f4995bf6a409f45928cf0349",
+    "generation_context_digest": "sha256:d94cf701f669b0481d2a9580732f5621dca55518dace7557697ad3f8f5f46dbe"
+  },
+  {
+    "concept_id": "concept_bf3fbd6d172fd3254ab9b40fe00ed280",
+    "explanation_text": "SLE活动与狼疮性肾炎描述系统性红斑狼疮整体炎症活动和肾脏受累之间的关系。肾损害可能是疾病活动的重要表现，但判断仍需结合症状、尿液、肾功能及免疫学信息。考试题常要求区分一般活动指标与提示肾脏受累的证据。",
+    "origin": "gpt_generated",
+    "verification_status": "unverified",
+    "generated_at": "2026-07-15T18:00:00+08:00",
+    "generator_id": "gpt-5/content-quality-v1",
+    "learning_session_id": "session_8aece5f5f4995bf6a409f45928cf0349",
+    "generation_context_digest": "sha256:d94cf701f669b0481d2a9580732f5621dca55518dace7557697ad3f8f5f46dbe"
+  },
+  {
+    "concept_id": "concept_ecdda41f2929c90fbd99f9cfe97d3100",
+    "explanation_text": "抗dsDNA抗体是SLE相关自身抗体之一，其变化可在一定情境下提示疾病活动，尤其需要关注肾脏受累线索。它不能脱离临床和其他检查单独解释。考试常考其与疾病活动及狼疮性肾炎之间的联系，而不是把它视为唯一判断依据。",
+    "origin": "gpt_generated",
+    "verification_status": "unverified",
+    "generated_at": "2026-07-15T18:00:00+08:00",
+    "generator_id": "gpt-5/content-quality-v1",
+    "learning_session_id": "session_8aece5f5f4995bf6a409f45928cf0349",
+    "generation_context_digest": "sha256:d94cf701f669b0481d2a9580732f5621dca55518dace7557697ad3f8f5f46dbe"
+  },
+  {
+    "concept_id": "concept_dabe3bd75c985d34d98fe96e08010839",
+    "explanation_text": "急性痛风抗炎药是用于控制急性发作期炎症和疼痛的一类药物。其作用目标是抑制晶体诱发的炎症反应，而不是直接降低体内尿酸负荷。考试中需要把急性抗炎处理与长期降尿酸策略区分开。",
+    "origin": "gpt_generated",
+    "verification_status": "unverified",
+    "generated_at": "2026-07-15T18:00:00+08:00",
+    "generator_id": "gpt-5/content-quality-v1",
+    "learning_session_id": "session_8aece5f5f4995bf6a409f45928cf0349",
+    "generation_context_digest": "sha256:d94cf701f669b0481d2a9580732f5621dca55518dace7557697ad3f8f5f46dbe"
+  },
+  {
+    "concept_id": "concept_1f20643c301f35873cfbf258ccac0c81",
+    "explanation_text": "这一概念指急性痛风发作时，对患者原先已经规律使用的降尿酸药进行连续性处理。核心考点是急性炎症控制与长期尿酸管理属于不同目标，不能因发作便机械混为一谈。具体处置仍应结合既往方案和临床评估。",
+    "origin": "gpt_generated",
+    "verification_status": "unverified",
+    "generated_at": "2026-07-15T18:00:00+08:00",
+    "generator_id": "gpt-5/content-quality-v1",
+    "learning_session_id": "session_8aece5f5f4995bf6a409f45928cf0349",
+    "generation_context_digest": "sha256:d94cf701f669b0481d2a9580732f5621dca55518dace7557697ad3f8f5f46dbe"
+  },
+  {
+    "concept_id": "concept_e267a2683cad20f167fffafa728f223d",
+    "explanation_text": "降尿酸治疗初期出现发作，通常不是因为药物增加了尿酸，而是尿酸环境变化使既有沉积发生动员或晶体状态改变，从而短期触发炎症。理解这一机制有助于区分治疗目标与早期波动，也是常见纠错题的核心。",
+    "origin": "gpt_generated",
+    "verification_status": "unverified",
+    "generated_at": "2026-07-15T18:00:00+08:00",
+    "generator_id": "gpt-5/content-quality-v1",
+    "learning_session_id": "session_8aece5f5f4995bf6a409f45928cf0349",
+    "generation_context_digest": "sha256:d94cf701f669b0481d2a9580732f5621dca55518dace7557697ad3f8f5f46dbe"
+  },
+  {
+    "concept_id": "concept_45e7035f550d5e4da8c131f3c61ae8a4",
+    "explanation_text": "2010 ACR/EULAR评分是一套用于类风湿关节炎分类判断的积分框架，综合关节受累、血清学、炎症指标和病程信息。它的核心是把病例各项信息逐项计分后判断是否达到分类条件。考试中要避免把分类阈值误当作患者的实际总分。",
+    "origin": "gpt_generated",
+    "verification_status": "unverified",
+    "generated_at": "2026-07-15T18:00:00+08:00",
+    "generator_id": "gpt-5/content-quality-v1",
+    "learning_session_id": "session_8aece5f5f4995bf6a409f45928cf0349",
+    "generation_context_digest": "sha256:d94cf701f669b0481d2a9580732f5621dca55518dace7557697ad3f8f5f46dbe"
+  },
+  {
+    "concept_id": "concept_882880b074d42d969076d5c0a8da1208",
+    "explanation_text": "类风湿关节炎是一种以慢性炎性滑膜病变为核心的系统性自身免疫疾病，常表现为对称性关节炎。持续炎症可造成关节结构损害并伴关节外表现。考试通常结合关节分布、病程、血清学和炎症指标综合识别。",
+    "origin": "gpt_generated",
+    "verification_status": "unverified",
+    "generated_at": "2026-07-15T18:00:00+08:00",
+    "generator_id": "gpt-5/content-quality-v1",
+    "learning_session_id": "session_8aece5f5f4995bf6a409f45928cf0349",
+    "generation_context_digest": "sha256:d94cf701f669b0481d2a9580732f5621dca55518dace7557697ad3f8f5f46dbe"
+  },
+  {
+    "concept_id": "concept_fb1d7ae804d70b1a0c514efe9cb1921a",
+    "explanation_text": "痛风是单钠尿酸盐结晶沉积并诱发炎症的晶体相关关节病。核心机制是尿酸盐负荷与结晶沉积，而急性疼痛来自晶体触发的炎症反应。考试中常区分临床怀疑、结晶证据、急性抗炎和长期尿酸管理。",
+    "origin": "gpt_generated",
+    "verification_status": "unverified",
+    "generated_at": "2026-07-15T18:00:00+08:00",
+    "generator_id": "gpt-5/content-quality-v1",
+    "learning_session_id": "session_8aece5f5f4995bf6a409f45928cf0349",
+    "generation_context_digest": "sha256:d94cf701f669b0481d2a9580732f5621dca55518dace7557697ad3f8f5f46dbe"
+  },
+  {
+    "concept_id": "concept_fe1aa113718dbd306d5f3f4de1c90b0f",
+    "explanation_text": "诊断金标准指在特定疾病中被视为最可靠的确认依据或参照方法。它强调证据层级，并不等同于最常用、最方便或最先进行的检查。考试题常用它检验能否区分提示性证据与确认性证据。",
+    "origin": "gpt_generated",
+    "verification_status": "unverified",
+    "generated_at": "2026-07-15T18:00:00+08:00",
+    "generator_id": "gpt-5/content-quality-v1",
+    "learning_session_id": "session_8aece5f5f4995bf6a409f45928cf0349",
+    "generation_context_digest": "sha256:d94cf701f669b0481d2a9580732f5621dca55518dace7557697ad3f8f5f46dbe"
+  }
+]

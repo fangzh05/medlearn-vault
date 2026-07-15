@@ -1,0 +1,19 @@
+[
+  {
+    "concept_id": "concept_3d0423e222a66e9f3479703924b80c77",
+    "explanation_text": "DIC同时涉及凝血激活、凝血物质消耗和继发纤溶；根本治疗是控制原发病。",
+    "evidence_message_ids": [
+      "message_71c6b24c2885a832c16136e9475f6469",
+      "message_04677040bf37e4842fe7abfb49b26879"
+    ],
+    "origin": "learning_chat",
+    "verification_status": "unverified_chat"
+  },
+  {
+    "concept_id": "concept_bc9132d313b0a4e6d58faaeb35a8cbcc",
+    "explanation_text": "急性痛风一线抗炎药包括NSAIDs、秋水仙碱和糖皮质激素；既往已规律使用的别嘌醇在发作时继续。",
+    "evidence_message_ids": ["message_f288ccd5f3ab37d3359806574b54f4bf"],
+    "origin": "learning_chat",
+    "verification_status": "unverified_chat"
+  }
+]

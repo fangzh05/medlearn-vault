@@ -1,5 +1,7 @@
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from medlearn_vault.bundle import ContractBundle
 from medlearn_vault.capture import CaptureProposal, concept_candidate_blocker
 from medlearn_vault.handoff import (
@@ -13,7 +15,14 @@ from medlearn_vault.handoff import (
 from medlearn_vault.publication import render_learning_capture_markdown
 
 
-def _segment(index: int, previous: str | None, *, finalized: bool = False) -> LearningSegment:
+def _segment(
+    index: int,
+    previous: str | None,
+    *,
+    finalized: bool = False,
+    message_count: int = 50,
+    complete: bool = True,
+) -> LearningSegment:
     start = datetime(2026, 7, 15, tzinfo=UTC) + timedelta(minutes=index)
     messages = tuple(
         HandoffEvidenceMessage(
@@ -23,7 +32,7 @@ def _segment(index: int, previous: str | None, *, finalized: bool = False) -> Le
             excerpt=f"用户回答 {index}-{number}",
             purpose="selected_learning_evidence",
         )
-        for number in range(50)
+        for number in range(message_count)
     )
     handoff = MedLearnHandoff(
         handoff_version="0.1.0",
@@ -43,10 +52,11 @@ def _segment(index: int, previous: str | None, *, finalized: bool = False) -> Le
         learning_session_id="session_long_001",
         segment_index=index,
         previous_segment_digest=previous,
-        first_evidence_marker=f"{index}-first",
-        last_evidence_marker=f"{index}-last",
-        segment_message_count=50,
-        coverage_status="complete",
+        first_evidence_marker="m0" if complete else "missing-start",
+        last_evidence_marker=f"m{message_count - 1}",
+        segment_message_count=message_count,
+        coverage_status="complete" if complete else "partial",
+        coverage_note=None if complete else "requested start marker is not visible",
         finalized=finalized,
         handoff=handoff,
     )
@@ -60,6 +70,27 @@ def test_150_messages_are_received_as_three_verified_segments_and_retry_is_idemp
     assert result.finalized and result.coverage_status == "complete"
     assert len(result.segment_digests) == 3
     assert result.evidence_message_count == 150
+
+
+def test_segment_accepts_49_50_51_56_and_100_messages() -> None:
+    for count in (49, 50, 51, 56, 100):
+        segment = _segment(0, None, message_count=count)
+        assert segment.segment_message_count == count
+        assert len(segment.handoff.evidence_messages) == count
+
+
+def test_complete_coverage_is_semantic_and_partial_when_start_marker_is_absent() -> None:
+    assert _segment(0, None, message_count=56).coverage_status == "complete"
+    partial = _segment(0, None, message_count=56, complete=False)
+    assert partial.coverage_status == "partial"
+
+
+def test_complete_coverage_rejects_invisible_start_marker() -> None:
+    segment = _segment(0, None, message_count=51).model_copy(
+        update={"first_evidence_marker": "not-visible"}
+    )
+    with pytest.raises(ValueError, match="visible start and end"):
+        LearningSegment.model_validate(segment.model_dump())
 
 
 def test_missing_middle_segment_is_explicitly_partial() -> None:
