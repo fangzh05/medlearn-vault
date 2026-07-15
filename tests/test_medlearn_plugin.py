@@ -63,7 +63,7 @@ def test_manifest_does_not_contain_sensitive_config() -> None:
 def test_configure_plugin_app_is_atomic_idempotent_and_rejects_invalid_ids(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     shutil.copytree(ROOT / "plugins", root / "plugins")
-    app_id = "plugin_asdk_app_AbC123"
+    app_id = "asdk_app_6a5610bb8abc81919fef8bb21a1ef0e3"
 
     manifest_path = root / "plugins" / "medlearn" / ".codex-plugin" / "plugin.json"
     orig_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -89,3 +89,8 @@ def test_configure_plugin_app_is_atomic_idempotent_and_rejects_invalid_ids(tmp_p
     with pytest.raises(ValueError):
         MODULE.configure(root, "https://not-an-app-id")
 
+    with pytest.raises(ValueError, match="versioned"):
+        MODULE.configure(root, "asdk_app_v_6a5610bb8abc81919fef8bb21a1ef0e3")
+
+    MODULE.configure(root, "plugin_asdk_app_AbC123")
+    assert json.loads(app.read_text(encoding="utf-8"))["apps"][0]["id"] == "plugin_asdk_app_AbC123"

@@ -31,5 +31,6 @@
       "Do not auto-approve, auto-publish, or represent a successful submission as published knowledge.",
       "On success return only status, job_id, intake_digest, and the returned counts. On failure return the stable error code without fallback."
     ]
-  }
+  },
+  "apps": "./.app.json"
 }
