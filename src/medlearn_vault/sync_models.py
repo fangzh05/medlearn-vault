@@ -16,6 +16,19 @@ JSON_MEDIA = "application/json; charset=utf-8"
 MARKDOWN_MEDIA = "text/markdown; charset=utf-8"
 
 
+def _safe_managed_path(path: str) -> bool:
+    parts = PurePosixPath(path).parts
+    return (
+        path.startswith("MedLearn/")
+        and "\\" not in path
+        and "\x00" not in path
+        and "%" not in path
+        and "//" not in path
+        and not path.startswith("/")
+        and all(part not in {".", ".."} for part in parts)
+    )
+
+
 class SyncError(RuntimeError):
     def __init__(self, code: str):
         super().__init__(code)
@@ -23,7 +36,7 @@ class SyncError(RuntimeError):
 
 
 class StrictModel(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
 
 class SyncConfig(StrictModel):
@@ -43,15 +56,8 @@ class ManifestArtifact(StrictModel):
 
     @model_validator(mode="after")
     def valid_artifact(self) -> ManifestArtifact:
-        parts = PurePosixPath(self.path).parts
         if (
-            not self.path.startswith("MedLearn/")
-            or "\\" in self.path
-            or "\x00" in self.path
-            or "%" in self.path
-            or "//" in self.path
-            or self.path.startswith("/")
-            or any(part in {".", ".."} for part in parts)
+            not _safe_managed_path(self.path)
             or not DIGEST_RE.fullmatch(self.content_digest)
         ):
             raise ValueError("invalid manifest artifact")
@@ -166,8 +172,11 @@ class SyncState(StrictModel):
     manifest_version: Literal["0.1.0", "0.2.0"] = "0.1.0"
     presentation_generation_id: str | None = None
     presentation_receipt_digest: str | None = None
+    previous_generation_id: str | None = None
     manifest_artifacts: list[ManifestArtifact]
     managed_artifacts: dict[str, ManagedArtifact]
+    unresolved_conflict_paths: list[str] = Field(default_factory=list)
+    pending_cleanup_artifacts: dict[str, ManagedArtifact] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def valid_state(self) -> SyncState:
@@ -177,6 +186,7 @@ class SyncState(StrictModel):
             manifest_version=self.manifest_version,
             presentation_generation_id=self.presentation_generation_id,
             presentation_receipt_digest=self.presentation_receipt_digest,
+            previous_generation_id=self.previous_generation_id,
             artifacts=self.manifest_artifacts,
         )
         artifacts = {artifact.path: artifact for artifact in manifest.artifacts}
@@ -188,6 +198,14 @@ class SyncState(StrictModel):
                 or managed.byte_length != artifact.byte_length
             ):
                 raise ValueError("managed artifact does not match manifest")
+        known_paths = set(artifacts)
+        if (
+            self.unresolved_conflict_paths != sorted(set(self.unresolved_conflict_paths))
+            or any(not _safe_managed_path(path) for path in self.unresolved_conflict_paths)
+            or any(path in known_paths for path in self.pending_cleanup_artifacts)
+            or any(not _safe_managed_path(path) for path in self.pending_cleanup_artifacts)
+        ):
+            raise ValueError("invalid sync recovery state")
         return self
 
 

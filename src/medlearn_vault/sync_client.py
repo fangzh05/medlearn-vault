@@ -299,6 +299,7 @@ def _manifest(
                     manifest_version=state.manifest_version,
                     presentation_generation_id=state.presentation_generation_id,
                     presentation_receipt_digest=state.presentation_receipt_digest,
+                    previous_generation_id=state.previous_generation_id,
                     artifacts=state.manifest_artifacts,
                 ),
                 state.manifest_etag,
@@ -349,14 +350,22 @@ def _manifest(
 def _check_rollback(previous: SyncState | None, manifest: Manifest) -> None:
     if previous is None:
         return
-    if previous.manifest_version == "0.2.0" and manifest.manifest_version == "0.2.0":
+    if previous.manifest_version == "0.2.0":
+        if manifest.manifest_version != "0.2.0":
+            raise SyncError("SYNC_PRESENTATION_ROLLBACK")
         if (
             manifest.presentation_generation_id == previous.presentation_generation_id
             and manifest.presentation_receipt_digest == previous.presentation_receipt_digest
         ):
             return
+        if manifest.presentation_generation_id == previous.presentation_generation_id:
+            raise SyncError("SYNC_PRESENTATION_ROLLBACK")
         if manifest.previous_generation_id != previous.presentation_generation_id:
             raise SyncError("SYNC_PRESENTATION_ROLLBACK")
+        return
+    if manifest.manifest_version == "0.2.0":
+        # A legacy state has no presentation lineage.  Its first complete
+        # presentation generation is therefore a monotonic upgrade.
         return
     now = {a.path: a for a in manifest.artifacts}
     for old in previous.manifest_artifacts:
@@ -373,36 +382,56 @@ def _legacy_path(path: str) -> bool:
     )
 
 
-def _remove_untouched_legacy(root: Path, state: SyncState | None, manifest: Manifest) -> list[str]:
-    """Remove only previously managed, byte-identical legacy artifacts.
-
-    The state write remains the commit point; a later retry safely repeats a
-    deletion after an interrupted run, while a local edit is preserved.
-    """
+def _pending_cleanup(state: SyncState | None, manifest: Manifest) -> dict[str, ManagedArtifact]:
+    """Carry incomplete cleanup forward and add paths removed by this manifest."""
     if state is None:
-        return []
+        return {}
     retained = {item.path for item in manifest.artifacts}
+    pending = {
+        path: managed
+        for path, managed in state.pending_cleanup_artifacts.items()
+        if path not in retained
+    }
+    pending.update(
+        {
+            path: managed
+            for path, managed in state.managed_artifacts.items()
+            if path not in retained
+        }
+    )
+    return dict(sorted(pending.items()))
+
+
+def _cleanup_obsolete(
+    root: Path, pending: dict[str, ManagedArtifact]
+) -> tuple[dict[str, ManagedArtifact], list[str]]:
+    """Best-effort cleanup after the new state is durable.
+
+    A failure intentionally leaves the state at the new generation with the
+    remaining candidates recorded.  The next pull checks each path again;
+    no old generation bytes are restored.
+    """
+    remaining: dict[str, ManagedArtifact] = {}
     conflicts: list[str] = []
-    for path, managed in state.managed_artifacts.items():
-        if path in retained or not _legacy_path(path):
-            continue
+    for path, managed in pending.items():
         target = root.joinpath(*PurePosixPath(path).parts)
         _validate_target_parent(root, target)
         if not _path_exists(target):
             continue
         if _is_reparse(target) or not target.is_file():
+            remaining[path] = managed
             conflicts.append(path)
             continue
-        body = target.read_bytes()
-        digest = hashlib.sha256(body).hexdigest()
-        if len(body) != managed.byte_length or "sha256:" + digest != managed.content_digest:
+        if not _managed_file_matches(target, managed):
+            remaining[path] = managed
             conflicts.append(path)
             continue
         try:
             target.unlink()
         except OSError as exc:
+            remaining[path] = managed
             raise SyncError("SYNC_LOCAL_WRITE_FAILURE") from exc
-    return conflicts
+    return remaining, conflicts
 
 
 def _target(root: Path, artifact: ManifestArtifact) -> Path:
@@ -716,10 +745,6 @@ def pull(
                 else:
                     conflicts += 1
                     conflict_paths.append(artifact.path)
-            # Deletes run only after every staged byte has been successfully installed.
-            legacy_conflicts = _remove_untouched_legacy(root, state, manifest)
-            conflicts += len(legacy_conflicts)
-            conflict_paths.extend(legacy_conflicts)
         if dry_run:
             _atomic_json(
                 item.rollout,
@@ -731,19 +756,41 @@ def pull(
                 ),
             )
         else:
-            _atomic_json(
-                item.state,
-                SyncState(
-                    endpoint=config.endpoint,
-                    vault_path=config.vault_path,
-                    manifest_etag=etag,
-                    manifest_version=manifest.manifest_version,
-                    presentation_generation_id=manifest.presentation_generation_id,
-                    presentation_receipt_digest=manifest.presentation_receipt_digest,
-                    manifest_artifacts=manifest.artifacts,
-                    managed_artifacts=managed,
-                ),
+            pending_cleanup = _pending_cleanup(state, manifest)
+            committed_state = SyncState(
+                endpoint=config.endpoint,
+                vault_path=config.vault_path,
+                manifest_etag=etag,
+                manifest_version=manifest.manifest_version,
+                presentation_generation_id=manifest.presentation_generation_id,
+                presentation_receipt_digest=manifest.presentation_receipt_digest,
+                previous_generation_id=manifest.previous_generation_id,
+                manifest_artifacts=manifest.artifacts,
+                managed_artifacts=managed,
+                unresolved_conflict_paths=sorted(set(conflict_paths)),
+                pending_cleanup_artifacts=pending_cleanup,
             )
+            # This is the commit point.  Cleanup is deliberately afterwards:
+            # its failure leaves a usable B state whose pending paths can be
+            # retried from a 304 response without rolling back to A.
+            _atomic_json(item.state, committed_state)
+            remaining_cleanup, cleanup_conflicts = _cleanup_obsolete(root, pending_cleanup)
+            conflicts += len(cleanup_conflicts)
+            conflict_paths.extend(cleanup_conflicts)
+            if (
+                remaining_cleanup != pending_cleanup
+                or cleanup_conflicts
+                or committed_state.unresolved_conflict_paths != sorted(set(conflict_paths))
+            ):
+                _atomic_json(
+                    item.state,
+                    committed_state.model_copy(
+                        update={
+                            "unresolved_conflict_paths": sorted(set(conflict_paths)),
+                            "pending_cleanup_artifacts": remaining_cleanup,
+                        }
+                    ),
+                )
             _atomic_json(
                 item.rollout,
                 RolloutState(

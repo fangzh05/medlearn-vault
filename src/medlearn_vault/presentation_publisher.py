@@ -44,7 +44,7 @@ def _digest(value: bytes) -> str:
     return "sha256:" + hashlib.sha256(value).hexdigest()
 
 
-class PresentationReceiptArtifact(DomainModel):
+class PresentationArtifact(DomainModel):
     path: str
     storage_key: str
     media_type: str = MARKDOWN_MEDIA
@@ -52,7 +52,7 @@ class PresentationReceiptArtifact(DomainModel):
     byte_length: int = Field(gt=0)
 
     @model_validator(mode="after")
-    def valid(self) -> PresentationReceiptArtifact:
+    def valid(self) -> PresentationArtifact:
         if (
             not self.path.startswith(("MedLearn/学习记录/", "MedLearn/概念/"))
             or not self.path.endswith(".md")
@@ -64,16 +64,16 @@ class PresentationReceiptArtifact(DomainModel):
         return self
 
 
-class PresentationReceipt(DomainModel):
+class PresentationGenerationReceipt(DomainModel):
     presentation_version: str = PRESENTATION_CONTRACT_VERSION
     renderer_version: str = PRESENTATION_RENDERER_VERSION
     presentation_generation_id: str = Field(pattern=GENERATION_RE)
     active_bundle_digest: str = Field(pattern=DIGEST_RE)
     publication_receipt_digests: tuple[str, ...]
-    artifacts: tuple[PresentationReceiptArtifact, ...]
+    artifacts: tuple[PresentationArtifact, ...]
 
     @model_validator(mode="after")
-    def valid(self) -> PresentationReceipt:
+    def valid(self) -> PresentationGenerationReceipt:
         if (
             self.presentation_version != PRESENTATION_CONTRACT_VERSION
             or self.renderer_version != PRESENTATION_RENDERER_VERSION
@@ -87,7 +87,7 @@ class PresentationReceipt(DomainModel):
         return self
 
 
-class PresentationPointer(DomainModel):
+class PresentationCurrentPointer(DomainModel):
     pointer_version: str = "1.0.0"
     active_presentation_generation_id: str = Field(pattern=GENERATION_RE)
     presentation_receipt_object_digest: str = Field(pattern=DIGEST_RE)
@@ -173,15 +173,15 @@ class S3PresentationStore:
             raise WorkflowError("VAULT_STORE_FAILURE") from exc
 
 
-def canonical_presentation_receipt_json(receipt: PresentationReceipt) -> bytes:
+def canonical_presentation_receipt_json(receipt: PresentationGenerationReceipt) -> bytes:
     return _bytes(receipt)
 
 
-def presentation_receipt_digest(receipt: PresentationReceipt) -> str:
+def presentation_receipt_digest(receipt: PresentationGenerationReceipt) -> str:
     return _digest(canonical_presentation_receipt_json(receipt))
 
 
-def canonical_presentation_pointer_json(pointer: PresentationPointer) -> bytes:
+def canonical_presentation_pointer_json(pointer: PresentationCurrentPointer) -> bytes:
     return _bytes(pointer)
 
 
@@ -192,7 +192,7 @@ class PresentationPublisher:
         self.store = store
         self.repository_root = repository_root
 
-    def run(self, bundle_path: str) -> PresentationReceipt:
+    def run(self, bundle_path: str) -> PresentationGenerationReceipt:
         try:
             bundle = ContractBundle.from_directory(self.repository_root / bundle_path)
             bundle_bytes = json.dumps(
@@ -227,12 +227,12 @@ class PresentationPublisher:
             raise
         except Exception as exc:
             raise WorkflowError("INVALID_PRESENTATION_INPUT") from exc
-        receipt = PresentationReceipt(
+        receipt = PresentationGenerationReceipt(
             presentation_generation_id=generation.generation_id,
             active_bundle_digest=_digest(bundle_bytes),
             publication_receipt_digests=tuple(sorted(receipt_digests)),
             artifacts=tuple(
-                PresentationReceiptArtifact(
+                PresentationArtifact(
                     path=item.path,
                     storage_key=f"v1/presentation-generations/{generation.generation_id}/artifacts/{item.content_digest[7:]}.md",
                     content_digest=item.content_digest,
@@ -259,11 +259,11 @@ class PresentationPublisher:
         previous = self.store.get(current_key)
         previous_id = None
         if previous is not None:
-            old = PresentationPointer.model_validate_json(previous)
+            old = PresentationCurrentPointer.model_validate_json(previous)
             if canonical_presentation_pointer_json(old) != previous:
                 raise WorkflowError("INVALID_PRESENTATION_POINTER")
             previous_id = old.active_presentation_generation_id
-        pointer = PresentationPointer(
+        pointer = PresentationCurrentPointer(
             active_presentation_generation_id=receipt.presentation_generation_id,
             presentation_receipt_object_digest=presentation_receipt_digest(receipt),
             previous_generation_id=previous_id,

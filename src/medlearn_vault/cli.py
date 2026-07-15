@@ -45,6 +45,11 @@ from medlearn_vault.domain import (
 )
 from medlearn_vault.handoff import LearningSegment, MedLearnHandoff
 from medlearn_vault.identifiers import normalize_text
+from medlearn_vault.presentation_publisher import (
+    PresentationArtifact,
+    PresentationCurrentPointer,
+    PresentationGenerationReceipt,
+)
 from medlearn_vault.preview import (
     PreviewBuildError,
     PreviewRequest,
@@ -72,7 +77,7 @@ from medlearn_vault.sync_client import scheduled_pull as scheduled_pull_service
 from medlearn_vault.sync_client import (
     status as sync_status_service,
 )
-from medlearn_vault.sync_models import SyncError
+from medlearn_vault.sync_models import Manifest, SyncError, SyncState
 from medlearn_vault.windows_rollout import (
     install_schedule,
     install_windows,
@@ -143,6 +148,11 @@ CONTROL_SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "proposal_execution": ProposalExecutionRecord,
     "vault_publication_plan": VaultPublicationPlan,
     "vault_publication_receipt": VaultPublicationReceipt,
+    "presentation_artifact": PresentationArtifact,
+    "presentation_generation_receipt": PresentationGenerationReceipt,
+    "presentation_current_pointer": PresentationCurrentPointer,
+    "manifest_0_2": Manifest,
+    "sync_state_0_2": SyncState,
 }
 
 
