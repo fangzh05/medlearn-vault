@@ -107,7 +107,7 @@ class ManifestArtifact(StrictModel):
 
 
 class Manifest(StrictModel):
-    manifest_version: Literal["0.1.0", "0.2.0"]
+    manifest_version: Literal["0.1.0", "0.2.0", "0.3.0"]
     presentation_generation_id: str | None = None
     presentation_receipt_digest: str | None = None
     previous_generation_id: str | None = None
@@ -115,7 +115,7 @@ class Manifest(StrictModel):
 
     @model_validator(mode="after")
     def valid_manifest(self) -> Manifest:
-        if self.manifest_version not in {"0.1.0", "0.2.0"} or len(self.artifacts) > 10000:
+        if self.manifest_version not in {"0.1.0", "0.2.0", "0.3.0"} or len(self.artifacts) > 10000:
             raise ValueError("unsupported manifest")
         if self.manifest_version == "0.1.0" and any(
             item.capture_id is None
@@ -131,7 +131,7 @@ class Manifest(StrictModel):
             for item in self.artifacts
         ):
             raise ValueError("presentation manifest contains legacy artifact")
-        if self.manifest_version == "0.2.0" and (
+        if self.manifest_version in {"0.2.0", "0.3.0"} and (
             self.presentation_generation_id is None
             or not PRESENTATION_RE.fullmatch(self.presentation_generation_id)
             or self.presentation_receipt_digest is None
@@ -172,7 +172,7 @@ class SyncState(StrictModel):
     endpoint: str
     vault_path: str
     manifest_etag: str
-    manifest_version: Literal["0.1.0", "0.2.0"] = "0.1.0"
+    manifest_version: Literal["0.1.0", "0.2.0", "0.3.0"] = "0.1.0"
     presentation_generation_id: str | None = None
     presentation_receipt_digest: str | None = None
     previous_generation_id: str | None = None
