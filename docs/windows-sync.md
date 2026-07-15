@@ -45,6 +45,17 @@ $wheel = Get-ChildItem dist\wheelhouse\medlearn_vault-0.16.1-*.whl | Select-Obje
 .\scripts\install_windows_client.ps1 -Wheel $wheel.FullName -InstallRoot "$env:LOCALAPPDATA\MedLearn\sync-client" -Json
 ```
 
+## One-step release entrypoint
+
+Use `scripts/release_windows.ps1` for future Windows releases. It builds an
+offline wheel, invokes the external bootstrap, validates/deploys the Worker,
+publishes the presentation, runs temporary-Vault acceptance, and requires an
+explicit production confirmation. It never accepts secrets as arguments.
+
+`-ValidateOnly` has no deployment, login, Vault, or task side effects.
+`-SkipProduction` completes pre-production gates without touching the
+production Vault.
+
 Identical reruns reuse the client. Upgrades build and smoke-test a staging virtual environment before
 replacing the stable one, so a failed upgrade leaves the prior usable installation intact. Use
 `--dry-run --json` to inspect without changing the machine. To uninstall, remove the optional task,
