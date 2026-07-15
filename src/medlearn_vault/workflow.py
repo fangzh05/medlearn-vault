@@ -1499,7 +1499,7 @@ class ProposalOrchestrator:
     ) -> tuple[StoredObject, JobRecord]:
         if job.status == "running":
             return stored, job
-        if job.status != "dispatched":
+        if job.status not in {"dispatched", "failed"}:
             raise WorkflowError("INVALID_JOB_STATE")
         running = JobRecord.model_validate(
             {
