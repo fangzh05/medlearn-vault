@@ -58,6 +58,27 @@ def presentation_manifest(
     )
 
 
+def test_manifest_v02_accepts_server_lookup_key() -> None:
+    generation = "presentation_" + "a" * 32
+    item = presentation_artifact("MedLearn/概念/房室结.md", "# 房室结\n".encode(), generation)
+    payload = {
+        "manifest_version": "0.2.0",
+        "presentation_generation_id": generation,
+        "presentation_receipt_digest": "sha256:" + "b" * 64,
+        "previous_generation_id": None,
+        "artifacts": [
+            {
+                **item.model_dump(),
+                "storage_key": f"v1/presentation-generations/{generation}/artifacts/x.md",
+            }
+        ],
+    }
+
+    manifest = Manifest.model_validate(payload)
+
+    assert manifest.artifacts[0].storage_key.endswith("/artifacts/x.md")
+
+
 def managed(item: ManifestArtifact) -> ManagedArtifact:
     return ManagedArtifact(
         content_digest=item.content_digest, media_type=item.media_type, byte_length=item.byte_length

@@ -53,6 +53,9 @@ class ManifestArtifact(StrictModel):
     capture_id: str | None = None
     publication_plan_id: str | None = None
     presentation_generation_id: str | None = None
+    # Manifest 0.2 carries this server-side lookup key. The client never
+    # writes or renders it; file requests remain addressed by public path.
+    storage_key: str | None = None
 
     @model_validator(mode="after")
     def valid_artifact(self) -> ManifestArtifact:
