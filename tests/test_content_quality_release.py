@@ -12,6 +12,7 @@ from medlearn_vault.capture import (
     CaptureProposal,
     backfill_learning_capture,
     capture_proposal_digest,
+    contract_bundle_digest,
 )
 from medlearn_vault.domain.learner import (
     AssessmentAttempt,
@@ -23,6 +24,7 @@ from medlearn_vault.domain.learner import (
     LearningCapture,
 )
 from medlearn_vault.handoff import MedLearnHandoff, handoff_to_intake
+from medlearn_vault.presentation import build_presentation, resolve_concept_explanation
 from medlearn_vault.publication import (
     canonical_learning_capture_json,
     render_learning_capture_markdown,
@@ -293,7 +295,11 @@ def test_backfill_creates_new_capture_without_mutating_old_capture() -> None:
         }
     )
     proposal = proposal.model_copy(
-        update={"learning_capture_candidate": candidate, "claim_proposals": (claim,)}
+        update={
+            "learning_capture_candidate": candidate,
+            "claim_proposals": (claim,),
+            "base_bundle_digest": contract_bundle_digest(bundle),
+        }
     )
     proposal = proposal.model_copy(update={"proposal_digest": capture_proposal_digest(proposal)})
     old_bytes = canonical_learning_capture_json(old_capture)
@@ -302,3 +308,61 @@ def test_backfill_creates_new_capture_without_mutating_old_capture() -> None:
     assert backfilled != old_capture
     assert backfilled.conversation_explanations
     assert backfilled.assessment_attempts == old_capture.assessment_attempts
+
+
+def test_presentation_uses_chat_then_gpt_with_visible_provenance() -> None:
+    bundle, capture = base()
+    capture = with_concept(capture, ENGLISH_SCOPE).model_copy(
+        update={
+            "conversation_explanations": (chat(),),
+            "generated_explanations": (generated(),),
+        }
+    )
+    generation = build_presentation(
+        bundle, (("capture_" + "a" * 32, capture, "sha256:" + "b" * 64),)
+    )
+    concept_note = next(
+        item.content_utf8
+        for item in generation.artifacts
+        if item.path.endswith("抗磷脂综合征抗体谱与诊断边界.md")
+    )
+    assert "## 对话内解释" in concept_note
+    assert "来源：本次学习对话，未经外部核验。" in concept_note
+    assert "GPT 解释文本。" not in concept_note
+
+
+def test_presentation_reuses_persisted_gpt_text_and_generation_identity() -> None:
+    bundle, capture = base()
+    capture = with_concept(capture, ENGLISH_SCOPE).model_copy(
+        update={"generated_explanations": (generated(),)}
+    )
+    inputs = (("capture_" + "a" * 32, capture, "sha256:" + "b" * 64),)
+    first = build_presentation(bundle, inputs)
+    second = build_presentation(bundle, inputs)
+    assert first == second
+    note = next(
+        item.content_utf8
+        for item in first.artifacts
+        if item.path.endswith("抗磷脂综合征抗体谱与诊断边界.md")
+    )
+    assert "## GPT 生成解释" in note
+    assert "未经教材或指南核验" in note
+
+
+def test_learner_incorrect_text_is_never_an_explanation() -> None:
+    bundle, capture = base()
+    incorrect = LearnerEvidence(
+        evidence_id="evidence_incorrect",
+        concept_id=ENGLISH_SCOPE,
+        evidence_type="incorrect",
+        confidence=0.9,
+        rationale="学习者错误地说这是抗生素。",
+        message_id="message_user",
+        observed_at=datetime.fromisoformat("2026-07-11T09:56:00+08:00"),
+    )
+    capture = with_concept(capture, ENGLISH_SCOPE).model_copy(
+        update={"learner_evidence": (incorrect,)}
+    )
+    explanation = resolve_concept_explanation(bundle, ENGLISH_SCOPE, (capture,))
+    assert explanation.source_type == "gpt_generated"
+    assert "抗生素" not in explanation.text

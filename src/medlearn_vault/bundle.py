@@ -10,7 +10,9 @@ from medlearn_vault.domain import (
     ChapterDossier,
     ConceptEntity,
     ConceptRelation,
+    ConversationExplanation,
     DisciplineLens,
+    GeneratedExplanation,
     LearningCapture,
     MedicalClaim,
     SourceDocument,
@@ -40,6 +42,8 @@ class ContractBundle(DomainModel):
     discipline_lenses: tuple[DisciplineLens, ...]
     chapters: tuple[ChapterDossier, ...]
     learning_captures: tuple[LearningCapture, ...]
+    conversation_explanations: tuple[ConversationExplanation, ...] = ()
+    generated_explanations: tuple[GeneratedExplanation, ...] = ()
 
     @classmethod
     def from_directory(cls, directory: Path) -> "ContractBundle":
@@ -49,6 +53,9 @@ class ContractBundle(DomainModel):
                 values = [values]
             return tuple(model.model_validate(value) for value in values)
 
+        def optional_records(filename: str, model: type[Record]) -> tuple[Record, ...]:
+            return records(filename, model) if (directory / filename).exists() else ()
+
         return cls(
             sources=records("sources.json", SourceDocument),
             concepts=records("concepts.json", ConceptEntity),
@@ -57,6 +64,12 @@ class ContractBundle(DomainModel):
             discipline_lenses=records("discipline_lenses.json", DisciplineLens),
             chapters=records("chapters.json", ChapterDossier),
             learning_captures=records("learning_capture.json", LearningCapture),
+            conversation_explanations=optional_records(
+                "conversation_explanations.json", ConversationExplanation
+            ),
+            generated_explanations=optional_records(
+                "generated_explanations.json", GeneratedExplanation
+            ),
         )
 
     def validate_integrity(self) -> tuple[ValidationIssue, ...]:
@@ -302,6 +315,24 @@ class ContractBundle(DomainModel):
                 "capture",
                 capture.session_id,
                 "correction_claim_ids",
+            )
+        for conversation_explanation in self.conversation_explanations:
+            require(
+                (conversation_explanation.concept_id,),
+                set(concepts),
+                "MISSING_CONCEPT",
+                "conversation_explanation",
+                conversation_explanation.evidence_message_ids[0],
+                "concept_id",
+            )
+        for generated_explanation in self.generated_explanations:
+            require(
+                (generated_explanation.concept_id,),
+                set(concepts),
+                "MISSING_CONCEPT",
+                "generated_explanation",
+                generated_explanation.generation_context_digest,
+                "concept_id",
             )
 
         redirects = {

@@ -17,10 +17,10 @@ from medlearn_vault.domain.claims import MedicalClaim
 from medlearn_vault.domain.concepts import ConceptEntity, ConceptRelation
 from medlearn_vault.domain.learner import LearningCapture
 
-PRESENTATION_RENDERER_VERSION = "1.0.0"
+PRESENTATION_RENDERER_VERSION = "1.1.0"
 PRESENTATION_CONTRACT_VERSION = "1.0.0"
 MARKDOWN_MEDIA = "text/markdown; charset=utf-8"
-NO_EXPLANATION = "暂无已验证解释"
+NO_EXPLANATION = "暂无解释"
 _INVALID_FILENAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 _RESERVED = {
     "CON",
@@ -88,8 +88,12 @@ def _eligible_definition(bundle: ContractBundle, concept_id: str) -> list[Medica
     return eligible
 
 
-def resolve_concept_explanation(bundle: ContractBundle, concept_id: str) -> ConceptExplanation:
-    """Return a source-governed definition without synthesising medical prose."""
+def resolve_concept_explanation(
+    bundle: ContractBundle,
+    concept_id: str,
+    captures: tuple[LearningCapture, ...] = (),
+) -> ConceptExplanation:
+    """Resolve one explanation without blending or relabeling provenance tiers."""
     candidates = _eligible_definition(bundle, concept_id)
     if candidates:
         winner = sorted(
@@ -105,6 +109,52 @@ def resolve_concept_explanation(bundle: ContractBundle, concept_id: str) -> Conc
     concept = next((item for item in bundle.concepts if str(item.concept_id) == concept_id), None)
     if concept is not None and _chinese(concept.scope_note):
         return ConceptExplanation(concept.scope_note, "scope_note")
+    ordered = sorted(
+        captures, key=lambda item: (item.captured_at, str(item.session_id)), reverse=True
+    )
+    for capture in ordered:
+        chat = next(
+            (
+                item
+                for item in capture.conversation_explanations
+                if str(item.concept_id) == concept_id
+            ),
+            None,
+        )
+        if chat is not None:
+            return ConceptExplanation(chat.explanation_text, "unverified_chat")
+    persisted_chat = next(
+        (
+            item
+            for item in bundle.conversation_explanations
+            if str(item.concept_id) == concept_id
+        ),
+        None,
+    )
+    if persisted_chat is not None:
+        return ConceptExplanation(persisted_chat.explanation_text, "unverified_chat")
+    for capture in ordered:
+        generated = next(
+            (item for item in capture.generated_explanations if str(item.concept_id) == concept_id),
+            None,
+        )
+        if generated is not None:
+            return ConceptExplanation(generated.explanation_text, "gpt_generated")
+    persisted = sorted(
+        (
+            item
+            for item in bundle.generated_explanations
+            if str(item.concept_id) == concept_id
+        ),
+        key=lambda item: (
+            item.generated_at,
+            item.generation_context_digest,
+            item.generator_id,
+        ),
+        reverse=True,
+    )
+    if persisted:
+        return ConceptExplanation(persisted[0].explanation_text, "gpt_generated")
     return ConceptExplanation(NO_EXPLANATION, "unavailable")
 
 
@@ -181,6 +231,54 @@ def _resolved_ids(capture: LearningCapture, concepts: dict[str, ConceptEntity]) 
     )
 
 
+def _used_ids(capture: LearningCapture, concepts: dict[str, ConceptEntity]) -> tuple[str, ...]:
+    """Return every safely renderable active concept referenced by visible capture content."""
+    candidates = (
+        *(
+            str(item.resolved_concept_id)
+            for item in capture.concept_mentions
+            if item.resolved_concept_id
+        ),
+        *(str(item.concept_id) for item in capture.learner_evidence),
+        *(str(cid) for item in capture.misconception_observations for cid in item.concept_ids),
+        *(str(cid) for item in capture.open_questions for cid in item.concept_ids),
+        *(str(cid) for item in capture.assessment_attempts for cid in item.concept_ids),
+        *(str(item.concept_id) for item in capture.conversation_explanations),
+        *(str(item.concept_id) for item in capture.generated_explanations),
+    )
+    return tuple(
+        dict.fromkeys(
+            concept_id
+            for concept_id in candidates
+            if concept_id in concepts and concepts[concept_id].status == "active"
+        )
+    )
+
+
+def _explanation_block(explanation: ConceptExplanation) -> list[str]:
+    if explanation.source_type in {"verified_reference", "source_backed"}:
+        return ["## 已验证解释", "", explanation.text]
+    if explanation.source_type == "scope_note":
+        return ["## 目录范围说明", "", explanation.text]
+    if explanation.source_type == "unverified_chat":
+        return [
+            "## 对话内解释",
+            "",
+            explanation.text,
+            "",
+            "> 来源：本次学习对话，未经外部核验。",
+        ]
+    if explanation.source_type == "gpt_generated":
+        return [
+            "## GPT 生成解释",
+            "",
+            explanation.text,
+            "",
+            "> 由 GPT 根据概念名称和当前学习上下文生成，未经教材或指南核验。",
+        ]
+    return ["## 暂无解释", "", NO_EXPLANATION]
+
+
 def _display(concept_id: str, concepts: dict[str, ConceptEntity], paths: dict[str, str]) -> str:
     concept = concepts.get(concept_id)
     return (
@@ -193,9 +291,10 @@ def render_capture_note(
 ) -> str:
     concepts = {str(item.concept_id): item for item in bundle.concepts}
     explanations = {
-        concept_id: resolve_concept_explanation(bundle, concept_id) for concept_id in paths
+        concept_id: resolve_concept_explanation(bundle, concept_id, (capture,))
+        for concept_id in paths
     }
-    resolved = set(_resolved_ids(capture, concepts))
+    visible = set(_used_ids(capture, concepts))
     front = [
         "---",
         f"medlearn_type: {_yaml('learning_capture')}",
@@ -213,7 +312,7 @@ def render_capture_note(
         items = [item for item in capture.learner_evidence if item.evidence_type in kinds]
         for item in items:
             concept_id = str(item.concept_id)
-            text = _display(concept_id, concepts, paths) if concept_id in resolved else "未收录概念"
+            text = _display(concept_id, concepts, paths)
             lines.extend([f"- {text}", f"  - 表现：{item.rationale}"])
         return [*lines, *(["- 无"] if not items else [])]
 
@@ -271,15 +370,52 @@ def render_capture_note(
             linked = [
                 _display(str(concept_id), concepts, paths)
                 for concept_id in question.concept_ids
-                if str(concept_id) in resolved
+                if str(concept_id) in visible
             ]
             body.append(f"- {question.text}" + (f"（{'、'.join(linked)}）" if linked else ""))
     else:
         body.append("- 无")
+    body.extend(["", "## 题目作答"])
+    verdicts = {
+        "correct": "正确",
+        "partial": "部分正确",
+        "incorrect": "错误",
+        "unresolved": "未判定",
+    }
+    for attempt in capture.assessment_attempts:
+        body.extend(
+            [
+                f"### {attempt.attempt_id}",
+                f"- 题干：{attempt.question_text or '题干未提供'}",
+                "- 选项：",
+                *(
+                    [f"  - {option.label}. {option.text}" for option in attempt.options]
+                    or ["  - 未提供"]
+                ),
+                f"- 我的回答：{attempt.learner_answer}",
+                f"- 当时判定：{verdicts[attempt.verdict]}"
+                + (
+                    f"（助手当时判定：{attempt.assistant_judged_answer}）"
+                    if attempt.assistant_judged_answer
+                    else ""
+                ),
+                f"- 对话解析：{attempt.assistant_explanation or '未提供'}",
+                "- 关联概念："
+                + (
+                    "、".join(_display(str(cid), concepts, paths) for cid in attempt.concept_ids)
+                    or "未关联"
+                ),
+                "",
+            ]
+        )
+    if not capture.assessment_attempts:
+        body.append("- 无")
     body.extend(["", "## 本次涉及概念"])
-    for concept_id in sorted(resolved, key=lambda item: paths[item]):
-        body.append(f"- {_display(concept_id, concepts, paths)}：{explanations[concept_id].text}")
-    if not resolved:
+    for concept_id in sorted(visible, key=lambda item: paths[item]):
+        explanation = explanations[concept_id]
+        marker = "〔GPT 生成，未核验〕" if explanation.source_type == "gpt_generated" else ""
+        body.append(f"- {_display(concept_id, concepts, paths)}：{explanation.text}{marker}")
+    if not visible:
         body.append("- 无")
     return "\n".join(body).rstrip("\n") + "\n"
 
@@ -324,7 +460,9 @@ def render_concept_note(
     capture_notes: tuple[tuple[str, LearningCapture, str], ...],
 ) -> tuple[str, tuple[str, ...]]:
     concept_id = str(concept.concept_id)
-    explanation = resolve_concept_explanation(bundle, concept_id)
+    explanation = resolve_concept_explanation(
+        bundle, concept_id, tuple(capture for _, capture, _ in capture_notes)
+    )
     aliases = sorted({alias.text for alias in concept.aliases})
     front = [
         "---",
@@ -340,7 +478,7 @@ def render_concept_note(
         "",
         f"# {concept.canonical_name}",
         "",
-        f"> {explanation.text}",
+        *_explanation_block(explanation),
         "",
         "## 基本信息",
         f"- 英文名：{concept.preferred_english or '暂无'}",
@@ -364,7 +502,7 @@ def render_concept_note(
     front.extend(["", "## 学习记录"])
     backlinks = []
     for capture_id, capture, path in capture_notes:
-        if concept_id in _resolved_ids(
+        if concept_id in _used_ids(
             capture, {str(item.concept_id): item for item in bundle.concepts}
         ):
             concepts = {str(item.concept_id): item for item in bundle.concepts}
@@ -384,9 +522,7 @@ def build_presentation(
     """Build the visible projection from immutable capture identities and bundle data."""
     paths = concept_paths(bundle.concepts)
     concepts = {str(item.concept_id): item for item in bundle.concepts}
-    used = {
-        concept_id for _, capture, _ in captures for concept_id in _resolved_ids(capture, concepts)
-    }
+    used = {concept_id for _, capture, _ in captures for concept_id in _used_ids(capture, concepts)}
     # Add only reviewed relation targets; capture co-occurrence never creates an edge.
     pending = list(used)
     while pending:

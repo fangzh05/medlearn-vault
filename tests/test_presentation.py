@@ -41,7 +41,7 @@ def test_reader_projection_is_deterministic_and_only_exposes_markdown() -> None:
     assert "concept_" not in capture_note and "claim_" not in capture_note
 
 
-def test_scope_note_or_explicit_unavailable_is_the_only_fallback() -> None:
+def test_persisted_generated_explanation_is_the_final_normal_fallback() -> None:
     bundle, _ = bundle_and_capture()
     concept = bundle.concepts[0]
     explanation = resolve_concept_explanation(bundle, str(concept.concept_id))
@@ -49,6 +49,7 @@ def test_scope_note_or_explicit_unavailable_is_the_only_fallback() -> None:
         "scope_note",
         "source_backed",
         "verified_reference",
+        "gpt_generated",
     }
 
 
