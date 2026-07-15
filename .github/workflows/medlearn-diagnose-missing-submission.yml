@@ -1,0 +1,139 @@
+name: MedLearn Diagnose Missing Submission
+
+on:
+  workflow_dispatch:
+    inputs:
+      start_utc:
+        description: Target window start (ISO-8601 UTC)
+        required: true
+        type: string
+        default: '2026-07-15T09:10:00Z'
+      end_utc:
+        description: Target window end (ISO-8601 UTC)
+        required: true
+        type: string
+        default: '2026-07-15T09:25:00Z'
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    env:
+      CONTROL_R2_ENDPOINT: ${{ secrets.CONTROL_R2_ENDPOINT }}
+      CONTROL_R2_ACCESS_KEY_ID: ${{ secrets.CONTROL_R2_ACCESS_KEY_ID }}
+      CONTROL_R2_SECRET_ACCESS_KEY: ${{ secrets.CONTROL_R2_SECRET_ACCESS_KEY }}
+      START_UTC: ${{ inputs.start_utc }}
+      END_UTC: ${{ inputs.end_utc }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install read-only diagnostic dependencies
+        run: python -m pip install --disable-pip-version-check -q -e .
+      - name: Inspect control R2 metadata
+        run: |
+          python - <<'PY'
+          import hashlib, json, os
+          from datetime import datetime, timezone
+          from pathlib import Path
+          import boto3
+          from botocore.config import Config
+          from botocore.exceptions import ClientError
+
+          BUCKET = "medlearn-control"
+          START = datetime.fromisoformat(os.environ["START_UTC"].replace("Z", "+00:00"))
+          END = datetime.fromisoformat(os.environ["END_UTC"].replace("Z", "+00:00"))
+          client = boto3.client(
+              "s3", endpoint_url=os.environ["CONTROL_R2_ENDPOINT"],
+              aws_access_key_id=os.environ["CONTROL_R2_ACCESS_KEY_ID"],
+              aws_secret_access_key=os.environ["CONTROL_R2_SECRET_ACCESS_KEY"],
+              region_name="auto", config=Config(signature_version="s3v4", s3={"addressing_style": "path"}),
+          )
+
+          def listed(prefix):
+              paginator = client.get_paginator("list_objects_v2")
+              for page in paginator.paginate(Bucket=BUCKET, Prefix=prefix):
+                  for item in page.get("Contents", []):
+                      changed = item["LastModified"].astimezone(timezone.utc)
+                      if START <= changed <= END:
+                          yield item["Key"], changed.isoformat().replace("+00:00", "Z")
+
+          def get(key):
+              return client.get_object(Bucket=BUCKET, Key=key)["Body"].read()
+
+          def digest(body):
+              return "sha256:" + hashlib.sha256(body).hexdigest()
+
+          def intake_summary(key, changed):
+              body = get(key)
+              obj = json.loads(body)
+              draft = obj["draft"]
+              return {
+                  "object_key": key,
+                  "object_digest": digest(body),
+                  "object_timestamp": changed,
+                  "client_kind": obj.get("client_kind"),
+                  "session_started_at": draft.get("context", {}).get("session_started_at"),
+                  "captured_at": draft.get("context", {}).get("captured_at"),
+                  "evidence_message_count": len(draft.get("evidence_messages", [])),
+                  "concept_candidate_count": len(draft.get("concept_mentions", [])),
+                  "claim_candidate_count": len(draft.get("claim_candidates", [])),
+                  "learner_evidence_candidate_count": len(draft.get("learner_evidence_candidates", [])),
+                  "misconception_candidate_count": len(draft.get("misconception_candidates", [])),
+              }
+
+          counts = {
+              "concept_candidate_count": 15,
+              "claim_candidate_count": 20,
+              "learner_evidence_candidate_count": 25,
+              "misconception_candidate_count": 4,
+              "evidence_message_count": 56,
+          }
+          intake_rows = [intake_summary(k, t) for k, t in listed("v1/intakes/sha256/")]
+          matches = [row for row in intake_rows if all(row.get(k) == v for k, v in counts.items())]
+          job_rows = []
+          for key, changed in listed("v1/jobs/"):
+              body = get(key)
+              obj = json.loads(body)
+              job_rows.append({
+                  "object_key": key, "object_timestamp": changed,
+                  "job_id": obj.get("job_id"), "intake_digest": obj.get("intake_digest"),
+                  "status": obj.get("status"), "error_code": obj.get("error_code"),
+                  "proposal_id": obj.get("proposal_id"), "workflow_run_id": obj.get("workflow_run_id"),
+              })
+          matching_jobs = [j for j in job_rows if matches and j.get("intake_digest") == matches[0]["object_digest"]]
+
+          result = {
+              "window": {"start_utc": os.environ["START_UTC"], "end_utc": os.environ["END_UTC"]},
+              "candidate_intakes": matches,
+              "candidate_jobs": matching_jobs,
+              "searched_prefixes": ["v1/intakes/sha256/", "v1/jobs/", "v1/executions/", "v1/proposals/", "v1/approvals/", "v1/publication/", "v1/publication-plans/", "v1/publication-receipts/"],
+          }
+          if not matches:
+              result.update({"classification": "NO_INTAKE_CREATED", "failed_boundary": "submission persistence before Worker Intake"})
+          elif not matching_jobs:
+              result.update({"classification": "INTAKE_CREATED_NO_JOB", "failed_boundary": "Worker Intake-to-Job dispatch"})
+          else:
+              from medlearn_vault.workflow import S3ReadOnlyObjectStore, trace_source_job
+              job = matching_jobs[0]
+              store = S3ReadOnlyObjectStore(os.environ["CONTROL_R2_ENDPOINT"], os.environ["CONTROL_R2_ACCESS_KEY_ID"], os.environ["CONTROL_R2_SECRET_ACCESS_KEY"])
+              trace = trace_source_job(store, job["job_id"]).model_dump(mode="json")
+              result["trace"] = trace
+              if trace["publication_status"] == "published":
+                  result["classification"] = "PUBLISHED_AND_PRESENTED" if trace.get("json_path") else "PUBLISHED_NOT_PRESENTED"
+                  result["failed_boundary"] = "presentation publication" if result["classification"] == "PUBLISHED_NOT_PRESENTED" else None
+              else:
+                  result["classification"] = "JOB_EXISTS"
+                  result["failed_boundary"] = trace.get("blocker_code") or "proposal/publication processing"
+          Path("diagnostic-result.json").write_text(json.dumps(result, sort_keys=True, separators=(",", ":")), encoding="utf-8")
+          print(json.dumps({k: result[k] for k in ("classification", "candidate_intakes", "candidate_jobs") if k in result}, sort_keys=True, separators=(",", ":")))
+          PY
+      - name: Upload sanitized diagnostic result
+        uses: actions/upload-artifact@v4
+        with:
+          name: medlearn-missing-submission-diagnostic
+          path: diagnostic-result.json
+          if-no-files-found: error

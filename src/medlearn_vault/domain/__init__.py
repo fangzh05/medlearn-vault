@@ -8,6 +8,10 @@ from medlearn_vault.domain.concepts import (
     ExternalIdentifiers,
 )
 from medlearn_vault.domain.learner import (
+    AssessmentAttempt,
+    AssessmentOption,
+    ConversationExplanation,
+    GeneratedExplanation,
     LearnerEvidence,
     LearnerState,
     LearningCapture,
@@ -18,12 +22,16 @@ from medlearn_vault.domain.sources import SourceCitation, SourceDocument, Source
 
 __all__ = [
     "ChapterDossier",
+    "AssessmentAttempt",
+    "AssessmentOption",
     "ConceptAlias",
     "ConceptEntity",
     "ConceptRelation",
+    "ConversationExplanation",
     "DisciplineLens",
     "ExternalIdentifiers",
     "KnowledgeUnit",
+    "GeneratedExplanation",
     "LearnerEvidence",
     "LearnerState",
     "LearningCapture",

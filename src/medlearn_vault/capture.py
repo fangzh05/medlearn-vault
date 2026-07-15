@@ -15,7 +15,11 @@ from medlearn_vault.domain.base import AwareDatetime, DomainModel
 from medlearn_vault.domain.concepts import ConceptAlias, ConceptType
 from medlearn_vault.domain.ids import ClaimId, ConceptId, ScopedExternalId, SourceId
 from medlearn_vault.domain.learner import (
+    AssessmentAttempt,
+    AssessmentOption,
     ConceptMention,
+    ConversationExplanation,
+    GeneratedExplanation,
     LearnerEvidence,
     LearningCapture,
     MisconceptionObservation,
@@ -208,6 +212,33 @@ class ExtractedMisconceptionCandidate(DomainModel):
     severity: Literal["low", "medium", "high"]
 
 
+class ExtractedAssessmentAttempt(DomainModel):
+    attempt_id: str = Field(min_length=1, max_length=128)
+    question_type: Literal["single_choice", "multiple_choice", "true_false", "short_answer"]
+    question_text: str | None = Field(default=None, min_length=1, max_length=MAX_STATEMENT_LENGTH)
+    options: tuple[tuple[str, str], ...] = ()
+    learner_answer: str = Field(min_length=1, max_length=MAX_STATEMENT_LENGTH)
+    assistant_judged_answer: str | None = Field(
+        default=None, min_length=1, max_length=MAX_STATEMENT_LENGTH
+    )
+    verdict: Literal["correct", "partial", "incorrect", "unresolved"]
+    assistant_explanation: str | None = Field(
+        default=None, min_length=1, max_length=MAX_STATEMENT_LENGTH
+    )
+    concept_terms: tuple[str, ...]
+    question_message_ids: tuple[ScopedExternalId, ...] = ()
+    learner_answer_message_ids: tuple[ScopedExternalId, ...] = Field(min_length=1)
+    feedback_message_ids: tuple[ScopedExternalId, ...] = ()
+
+
+class ExtractedGeneratedExplanation(DomainModel):
+    concept_term: str = Field(min_length=1, max_length=MAX_STATEMENT_LENGTH)
+    explanation_text: str = Field(min_length=1, max_length=MAX_STATEMENT_LENGTH)
+    generated_at: AwareDatetime
+    generator_id: str = Field(min_length=1, max_length=256)
+    generation_context_digest: str = Field(pattern=r"^sha256:[a-f0-9]{64}$")
+
+
 class CaptureDraft(DomainModel):
     draft_version: Literal["0.3.0"] = WORKFLOW_VERSION
     context: CaptureContext
@@ -222,7 +253,13 @@ class CaptureDraft(DomainModel):
         default=(), max_length=MAX_CANDIDATES_PER_KIND
     )
     misconception_candidates: tuple[ExtractedMisconceptionCandidate, ...] = Field(
-        max_length=MAX_CANDIDATES_PER_KIND
+        default=(), max_length=MAX_CANDIDATES_PER_KIND
+    )
+    assessment_attempts: tuple[ExtractedAssessmentAttempt, ...] = Field(
+        default=(), max_length=MAX_CANDIDATES_PER_KIND
+    )
+    generated_explanations: tuple[ExtractedGeneratedExplanation, ...] = Field(
+        default=(), max_length=MAX_CANDIDATES_PER_KIND
     )
 
     @model_validator(mode="after")
@@ -237,6 +274,9 @@ class CaptureDraft(DomainModel):
             *(item.evidence_message_ids for item in self.learner_evidence_candidates),
             *(item.observed_error_message_ids for item in self.misconception_candidates),
             *(item.correction_message_ids for item in self.misconception_candidates),
+            *(item.question_message_ids for item in self.assessment_attempts),
+            *(item.learner_answer_message_ids for item in self.assessment_attempts),
+            *(item.feedback_message_ids for item in self.assessment_attempts),
         )
         if any(not set(group) <= known for group in references):
             raise ValueError("all evidence_message_ids must exist in evidence_messages")
@@ -245,6 +285,7 @@ class CaptureDraft(DomainModel):
             *(item.evidence_message_ids for item in self.claim_candidates),
             *(item.evidence_message_ids for item in self.learner_evidence_candidates),
             *(item.observed_error_message_ids for item in self.misconception_candidates),
+            *(item.learner_answer_message_ids for item in self.assessment_attempts),
         )
         if any(not group for group in required_references):
             raise ValueError("all extracted candidates require evidence_message_ids")
@@ -265,6 +306,16 @@ class CaptureDraft(DomainModel):
             for item in self.misconception_candidates
         ):
             raise ValueError("observed errors must be owned by user evidence messages")
+        if any(
+            {roles[mid] for mid in item.learner_answer_message_ids} != {"user"}
+            for item in self.assessment_attempts
+        ):
+            raise ValueError("assessment learner answers must be owned by user evidence messages")
+        if any(
+            any(roles[mid] != "assistant" for mid in item.feedback_message_ids)
+            for item in self.assessment_attempts
+        ):
+            raise ValueError("assessment feedback must be owned by assistant evidence messages")
         if any(
             item.observed_at < self.context.session_started_at
             or item.observed_at > self.context.captured_at
@@ -436,6 +487,16 @@ def _canonical(
             for key, item in sorted(value.items())
             if not (exclude_proposal_digest and key == "proposal_digest")
             and not (key == "source_candidate" and item is None)
+            and not (key == "user_excerpt" and item is None)
+            and not (
+                key
+                in {
+                    "assessment_attempts",
+                    "generated_explanations",
+                    "conversation_explanations",
+                }
+                and not item
+            )
         }
     if isinstance(value, (list, tuple)):
         items = [
@@ -622,7 +683,9 @@ def build_capture_proposal(
         | {term for item in draft.claim_candidates for term in item.concept_terms}
         | {term for item in draft.learner_evidence_candidates for term in item.concept_terms}
         | {term for item in draft.misconception_candidates for term in item.concept_terms}
-        | {term for item in draft.misconception_candidates for term in item.correction_terms},
+        | {term for item in draft.misconception_candidates for term in item.correction_terms}
+        | {term for item in draft.assessment_attempts for term in item.concept_terms}
+        | {item.concept_term for item in draft.generated_explanations},
         key=normalize_text,
     )
     for term in all_terms:
@@ -850,6 +913,9 @@ def build_capture_proposal(
     learner_evidence: list[LearnerEvidence] = []
     misconception_observations: list[MisconceptionObservation] = []
     open_questions: list[OpenQuestion] = []
+    assessment_attempts: list[AssessmentAttempt] = []
+    generated_explanations: list[GeneratedExplanation] = []
+    conversation_explanations: list[ConversationExplanation] = []
     messages = {item.message_id: item for item in draft.evidence_messages}
 
     def observed_at(message_ids: tuple[str, ...]) -> AwareDatetime:
@@ -919,6 +985,18 @@ def build_capture_proposal(
                 matching_existing_claim_ids=matching,
             )
         )
+        if (
+            item.claim_type == "definition"
+            and len(existing_ids) == 1
+            and all(entry.concept_id != existing_ids[0] for entry in conversation_explanations)
+        ):
+            conversation_explanations.append(
+                ConversationExplanation(
+                    concept_id=existing_ids[0],
+                    explanation_text=item.statement,
+                    evidence_message_ids=_ordered_unique(item.evidence_message_ids),
+                )
+            )
 
     evidence_observation_type: dict[
         str, Literal["correct_recall", "incorrect_recall", "uncertain"]
@@ -1051,6 +1129,54 @@ def build_capture_proposal(
             )
         )
 
+    for attempt in draft.assessment_attempts:
+        item_refs = refs(attempt.concept_terms, "assessment_attempts.concept_terms")
+        concept_ids = tuple(ref.concept_id for ref in item_refs if ref.concept_id)
+        assessment_attempts.append(
+            AssessmentAttempt(
+                attempt_id=attempt.attempt_id,
+                question_type=attempt.question_type,
+                question_text=attempt.question_text,
+                options=tuple(
+                    AssessmentOption(label=label, text=text) for label, text in attempt.options
+                ),
+                learner_answer=attempt.learner_answer,
+                assistant_judged_answer=attempt.assistant_judged_answer,
+                verdict=attempt.verdict,
+                assistant_explanation=attempt.assistant_explanation,
+                concept_ids=concept_ids,
+                question_message_ids=_ordered_unique(attempt.question_message_ids),
+                learner_answer_message_ids=_ordered_unique(attempt.learner_answer_message_ids),
+                feedback_message_ids=_ordered_unique(attempt.feedback_message_ids),
+                observed_at=observed_at(attempt.learner_answer_message_ids),
+            )
+        )
+
+    for generated_item in draft.generated_explanations:
+        item_refs = refs(
+            (generated_item.concept_term,), "generated_explanations.concept_term"
+        )
+        if len(item_refs) != 1 or item_refs[0].concept_id is None:
+            issues.append(
+                ProposalIssue(
+                    code="INVALID_GENERATED_EXPLANATION_CONCEPT",
+                    severity="review",
+                    field="generated_explanations.concept_term",
+                    message="generated explanations require one resolved active concept",
+                )
+            )
+            continue
+        generated_explanations.append(
+            GeneratedExplanation(
+                concept_id=item_refs[0].concept_id,
+                explanation_text=generated_item.explanation_text,
+                generated_at=generated_item.generated_at,
+                generator_id=generated_item.generator_id,
+                learning_session_id=str(draft.context.session_id),
+                generation_context_digest=generated_item.generation_context_digest,
+            )
+        )
+
     issues = sorted(
         issues, key=lambda item: (item.severity, item.code, item.field, item.candidate_id or "")
     )
@@ -1116,6 +1242,9 @@ def build_capture_proposal(
         learner_evidence=tuple(learner_evidence),
         misconception_observations=tuple(misconception_observations),
         open_questions=tuple(open_questions),
+        assessment_attempts=tuple(assessment_attempts),
+        generated_explanations=tuple(generated_explanations),
+        conversation_explanations=tuple(conversation_explanations),
     )
     data = dict(
         proposal_id=proposal_id,
@@ -1163,6 +1292,9 @@ def materialize_learning_capture(
         *(item.concept_id for item in capture.learner_evidence),
         *(cid for item in capture.misconception_observations for cid in item.concept_ids),
         *(cid for item in capture.open_questions for cid in item.concept_ids),
+        *(cid for item in capture.assessment_attempts for cid in item.concept_ids),
+        *(item.concept_id for item in capture.generated_explanations),
+        *(item.concept_id for item in capture.conversation_explanations),
     }
     if not referenced_concepts <= active_concepts:
         raise ValueError("INVALID_CAPTURE_CONCEPT")
@@ -1179,6 +1311,35 @@ def materialize_learning_capture(
     if not correction_claim_ids <= valid_corrections:
         raise ValueError("INVALID_CORRECTION_CLAIM")
     return LearningCapture.model_validate(capture.model_dump())
+
+
+def backfill_learning_capture(bundle: ContractBundle, proposal: CaptureProposal) -> LearningCapture:
+    """Derive a new Capture from immutable proposal content without changing old bytes.
+
+    Only assistant-owned, already-persisted explanation statements with exactly one
+    persistent concept are promoted. Missing question text and options are never inferred.
+    """
+    capture = materialize_learning_capture(bundle, proposal)
+    existing = {item.concept_id for item in capture.conversation_explanations}
+    additions: list[ConversationExplanation] = []
+    for claim in sorted(proposal.claim_proposals, key=lambda item: item.candidate_id):
+        concept_ids = tuple(ref.concept_id for ref in claim.concept_refs if ref.concept_id)
+        if claim.claim_type not in {"definition", "assistant_explanation"} or not concept_ids:
+            continue
+        for concept_id in concept_ids:
+            if concept_id in existing:
+                continue
+            additions.append(
+                ConversationExplanation(
+                    concept_id=concept_id,
+                    explanation_text=claim.statement,
+                    evidence_message_ids=claim.evidence_message_ids,
+                )
+            )
+            existing.add(concept_id)
+    return capture.model_copy(
+        update={"conversation_explanations": (*capture.conversation_explanations, *additions)}
+    )
 
 
 def render_capture_proposal_markdown(proposal: CaptureProposal, *, bundle: ContractBundle) -> str:

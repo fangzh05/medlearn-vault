@@ -196,7 +196,7 @@ def test_markdown_frontmatter_structure() -> None:
     assert "proposal_id: " in md
     assert "captured_at: " in md
     assert "discipline_id: " in md
-    assert 'renderer_version: "2.0.0"' in md
+    assert 'renderer_version: "2.1.0"' in md
     assert "## 已掌握" in md
     assert "## 明确错误" in md
     assert "## 未解决问题" in md

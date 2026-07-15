@@ -306,42 +306,44 @@ def test_handoff_rejects_long_excerpt_and_accepts_misconception_without_correcti
     )
 
 
-# ── Converter v4 namespace tests ────────────────────────────────────────
+# ── Converter v5 namespace tests ────────────────────────────────────────
 
 
-def test_converter_v4_idempotency_key_is_stable_golden() -> None:
-    """The v4 idempotency key must be deterministic across platforms."""
+def test_converter_v5_idempotency_key_is_stable_golden() -> None:
+    """The v5 idempotency key must be deterministic across platforms."""
     from medlearn_vault.handoff import HANDOFF_CONVERSION_VERSION
 
-    assert HANDOFF_CONVERSION_VERSION == "medlearn.handoff_to_intake.v4"
+    assert HANDOFF_CONVERSION_VERSION == "medlearn.handoff_to_intake.v5"
     handoff = MedLearnHandoff.model_validate(payload())
     key = handoff_idempotency_key(handoff)
-    assert key.startswith("medlearn-handoff-v4-")
+    assert key.startswith("medlearn-handoff-v5-")
     # The key must be 64 hex chars after the prefix.
-    assert len(key) == len("medlearn-handoff-v4-") + 64
-    assert key == "medlearn-handoff-v4-" + handoff_digest(handoff)[7:]
+    assert len(key) == len("medlearn-handoff-v5-") + 64
+    assert key == "medlearn-handoff-v5-" + handoff_digest(handoff)[7:]
 
 
-def test_converter_v4_idempotency_key_differs_from_older_namespaces() -> None:
-    """The v4 key must use a different prefix namespace than v1/v2/v3."""
+def test_converter_v5_idempotency_key_differs_from_older_namespaces() -> None:
+    """The v5 key must use a different prefix namespace than v1-v4."""
     handoff = MedLearnHandoff.model_validate(payload())
-    v4_key = handoff_idempotency_key(handoff)
+    v5_key = handoff_idempotency_key(handoff)
     # The old v1 key would have been medlearn-handoff-<digest>
     v1_key = "medlearn-handoff-" + handoff_digest(handoff)[7:]
     v2_key = "medlearn-handoff-v2-" + handoff_digest(handoff)[7:]
     v3_key = "medlearn-handoff-v3-" + handoff_digest(handoff)[7:]
-    assert v1_key != v4_key
-    assert v2_key != v4_key
-    assert v3_key != v4_key
-    assert v4_key.startswith("medlearn-handoff-v4-")
+    v4_key = "medlearn-handoff-v4-" + handoff_digest(handoff)[7:]
+    assert v1_key != v5_key
+    assert v2_key != v5_key
+    assert v3_key != v5_key
+    assert v4_key != v5_key
+    assert v5_key.startswith("medlearn-handoff-v5-")
     assert v3_key.startswith("medlearn-handoff-v3-")
     assert v1_key.startswith("medlearn-handoff-")
     assert v2_key.startswith("medlearn-handoff-v2-")
     # Both share the same semantic digest portion after the prefix
-    assert v4_key[len("medlearn-handoff-v4-") :] == v1_key[len("medlearn-handoff-") :]
+    assert v5_key[len("medlearn-handoff-v5-") :] == v1_key[len("medlearn-handoff-") :]
 
 
-def test_converter_v4_intake_envelope_is_lf_only() -> None:
+def test_converter_v5_intake_envelope_is_lf_only() -> None:
     """Exact intake envelope bytes must be LF-only (no CR, no CRLF)."""
     handoff = MedLearnHandoff.model_validate(payload())
     exact, _ = handoff_submission(handoff)

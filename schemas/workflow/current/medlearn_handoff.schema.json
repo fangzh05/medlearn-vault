@@ -1,5 +1,160 @@
 {
   "$defs": {
+    "HandoffAssessmentAttempt": {
+      "additionalProperties": false,
+      "properties": {
+        "attempt_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Attempt Id",
+          "type": "string"
+        },
+        "question_type": {
+          "enum": [
+            "single_choice",
+            "multiple_choice",
+            "true_false",
+            "short_answer"
+          ],
+          "title": "Question Type",
+          "type": "string"
+        },
+        "question_text": {
+          "anyOf": [
+            {
+              "maxLength": 4000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Question Text"
+        },
+        "options": {
+          "items": {
+            "$ref": "#/$defs/HandoffAssessmentOption"
+          },
+          "maxItems": 100,
+          "title": "Options",
+          "type": "array"
+        },
+        "learner_answer": {
+          "maxLength": 4000,
+          "title": "Learner Answer",
+          "type": "string"
+        },
+        "assistant_judged_answer": {
+          "anyOf": [
+            {
+              "maxLength": 4000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Assistant Judged Answer"
+        },
+        "verdict": {
+          "enum": [
+            "correct",
+            "partial",
+            "incorrect",
+            "unresolved"
+          ],
+          "title": "Verdict",
+          "type": "string"
+        },
+        "assistant_explanation": {
+          "anyOf": [
+            {
+              "maxLength": 4000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Assistant Explanation"
+        },
+        "concept_terms": {
+          "items": {
+            "maxLength": 4000,
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Concept Terms",
+          "type": "array"
+        },
+        "question_local_ids": {
+          "items": {
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Question Local Ids",
+          "type": "array"
+        },
+        "learner_answer_local_ids": {
+          "items": {
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "maxItems": 100,
+          "minItems": 1,
+          "title": "Learner Answer Local Ids",
+          "type": "array"
+        },
+        "feedback_local_ids": {
+          "items": {
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Feedback Local Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "attempt_id",
+        "question_type",
+        "options",
+        "learner_answer",
+        "verdict",
+        "concept_terms",
+        "question_local_ids",
+        "learner_answer_local_ids",
+        "feedback_local_ids"
+      ],
+      "title": "HandoffAssessmentAttempt",
+      "type": "object"
+    },
+    "HandoffAssessmentOption": {
+      "additionalProperties": false,
+      "properties": {
+        "label": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        },
+        "text": {
+          "maxLength": 4000,
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "label",
+        "text"
+      ],
+      "title": "HandoffAssessmentOption",
+      "type": "object"
+    },
     "HandoffClaim": {
       "additionalProperties": false,
       "properties": {
@@ -192,6 +347,59 @@
         "purpose"
       ],
       "title": "HandoffEvidenceMessage",
+      "type": "object"
+    },
+    "HandoffGeneratedExplanation": {
+      "additionalProperties": false,
+      "description": "GPT-generated prose supplied once by ChatGPT and persisted with the Capture.",
+      "properties": {
+        "concept_term": {
+          "maxLength": 4000,
+          "title": "Concept Term",
+          "type": "string"
+        },
+        "explanation_text": {
+          "maxLength": 4000,
+          "title": "Explanation Text",
+          "type": "string"
+        },
+        "origin": {
+          "const": "gpt_generated",
+          "default": "gpt_generated",
+          "title": "Origin",
+          "type": "string"
+        },
+        "verification_status": {
+          "const": "unverified",
+          "default": "unverified",
+          "title": "Verification Status",
+          "type": "string"
+        },
+        "generated_at": {
+          "format": "date-time",
+          "title": "Generated At",
+          "type": "string"
+        },
+        "generator_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Generator Id",
+          "type": "string"
+        },
+        "generation_context_digest": {
+          "pattern": "^sha256:[a-f0-9]{64}$",
+          "title": "Generation Context Digest",
+          "type": "string"
+        }
+      },
+      "required": [
+        "concept_term",
+        "explanation_text",
+        "generated_at",
+        "generator_id",
+        "generation_context_digest"
+      ],
+      "title": "HandoffGeneratedExplanation",
       "type": "object"
     },
     "HandoffLearnerEvidence": {
@@ -545,6 +753,24 @@
       },
       "maxItems": 100,
       "title": "Unfinished Topics",
+      "type": "array"
+    },
+    "assessment_attempts": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/HandoffAssessmentAttempt"
+      },
+      "maxItems": 100,
+      "title": "Assessment Attempts",
+      "type": "array"
+    },
+    "generated_explanations": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/HandoffGeneratedExplanation"
+      },
+      "maxItems": 100,
+      "title": "Generated Explanations",
       "type": "array"
     }
   },

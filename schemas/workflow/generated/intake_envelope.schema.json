@@ -120,11 +120,30 @@
           "type": "array"
         },
         "misconception_candidates": {
+          "default": [],
           "items": {
             "$ref": "#/$defs/ExtractedMisconceptionCandidate"
           },
           "maxItems": 200,
           "title": "Misconception Candidates",
+          "type": "array"
+        },
+        "assessment_attempts": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ExtractedAssessmentAttempt"
+          },
+          "maxItems": 200,
+          "title": "Assessment Attempts",
+          "type": "array"
+        },
+        "generated_explanations": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ExtractedGeneratedExplanation"
+          },
+          "maxItems": 200,
+          "title": "Generated Explanations",
           "type": "array"
         }
       },
@@ -132,8 +151,7 @@
         "context",
         "evidence_messages",
         "concept_mentions",
-        "claim_candidates",
-        "misconception_candidates"
+        "claim_candidates"
       ],
       "title": "CaptureDraft",
       "type": "object"
@@ -179,6 +197,147 @@
         "observed_at"
       ],
       "title": "EvidenceMessage",
+      "type": "object"
+    },
+    "ExtractedAssessmentAttempt": {
+      "additionalProperties": false,
+      "properties": {
+        "attempt_id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "title": "Attempt Id",
+          "type": "string"
+        },
+        "question_type": {
+          "enum": [
+            "single_choice",
+            "multiple_choice",
+            "true_false",
+            "short_answer"
+          ],
+          "title": "Question Type",
+          "type": "string"
+        },
+        "question_text": {
+          "anyOf": [
+            {
+              "maxLength": 4000,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Question Text"
+        },
+        "options": {
+          "default": [],
+          "items": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "type": "array"
+          },
+          "title": "Options",
+          "type": "array"
+        },
+        "learner_answer": {
+          "maxLength": 4000,
+          "minLength": 1,
+          "title": "Learner Answer",
+          "type": "string"
+        },
+        "assistant_judged_answer": {
+          "anyOf": [
+            {
+              "maxLength": 4000,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Assistant Judged Answer"
+        },
+        "verdict": {
+          "enum": [
+            "correct",
+            "partial",
+            "incorrect",
+            "unresolved"
+          ],
+          "title": "Verdict",
+          "type": "string"
+        },
+        "assistant_explanation": {
+          "anyOf": [
+            {
+              "maxLength": 4000,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Assistant Explanation"
+        },
+        "concept_terms": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Concept Terms",
+          "type": "array"
+        },
+        "question_message_ids": {
+          "default": [],
+          "items": {
+            "pattern": "^[a-z][a-z0-9_:-]{2,127}$",
+            "type": "string"
+          },
+          "title": "Question Message Ids",
+          "type": "array"
+        },
+        "learner_answer_message_ids": {
+          "items": {
+            "pattern": "^[a-z][a-z0-9_:-]{2,127}$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Learner Answer Message Ids",
+          "type": "array"
+        },
+        "feedback_message_ids": {
+          "default": [],
+          "items": {
+            "pattern": "^[a-z][a-z0-9_:-]{2,127}$",
+            "type": "string"
+          },
+          "title": "Feedback Message Ids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "attempt_id",
+        "question_type",
+        "learner_answer",
+        "verdict",
+        "concept_terms",
+        "learner_answer_message_ids"
+      ],
+      "title": "ExtractedAssessmentAttempt",
       "type": "object"
     },
     "ExtractedClaimCandidate": {
@@ -334,6 +493,48 @@
         "evidence_message_ids"
       ],
       "title": "ExtractedConceptMention",
+      "type": "object"
+    },
+    "ExtractedGeneratedExplanation": {
+      "additionalProperties": false,
+      "properties": {
+        "concept_term": {
+          "maxLength": 4000,
+          "minLength": 1,
+          "title": "Concept Term",
+          "type": "string"
+        },
+        "explanation_text": {
+          "maxLength": 4000,
+          "minLength": 1,
+          "title": "Explanation Text",
+          "type": "string"
+        },
+        "generated_at": {
+          "format": "date-time",
+          "title": "Generated At",
+          "type": "string"
+        },
+        "generator_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Generator Id",
+          "type": "string"
+        },
+        "generation_context_digest": {
+          "pattern": "^sha256:[a-f0-9]{64}$",
+          "title": "Generation Context Digest",
+          "type": "string"
+        }
+      },
+      "required": [
+        "concept_term",
+        "explanation_text",
+        "generated_at",
+        "generator_id",
+        "generation_context_digest"
+      ],
+      "title": "ExtractedGeneratedExplanation",
       "type": "object"
     },
     "ExtractedLearnerEvidenceCandidate": {
