@@ -329,11 +329,14 @@ def _manifest(
         ):
             raise SyncError("SYNC_MANIFEST_PROTOCOL_ERROR")
         manifest = Manifest.model_validate_json(body)
+        canonical_value = manifest.model_dump(mode="json")
+        if manifest.manifest_version == "0.2.0":
+            canonical_value["artifacts"] = [
+                item.model_dump(mode="json", exclude_none=True) for item in manifest.artifacts
+            ]
         canonical = (
             json.dumps(
-                manifest.model_dump(
-                    mode="json", exclude_none=manifest.manifest_version == "0.2.0"
-                ),
+                canonical_value,
                 ensure_ascii=False,
                 sort_keys=True,
                 separators=(",", ":"),
