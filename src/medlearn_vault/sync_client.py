@@ -355,8 +355,8 @@ def _manifest(
 def _check_rollback(previous: SyncState | None, manifest: Manifest) -> None:
     if previous is None:
         return
-    if previous.manifest_version == "0.2.0":
-        if manifest.manifest_version != "0.2.0":
+    if previous.manifest_version in {"0.2.0", "0.3.0"}:
+        if manifest.manifest_version not in {"0.2.0", "0.3.0"}:
             raise SyncError("SYNC_PRESENTATION_ROLLBACK")
         if (
             manifest.presentation_generation_id == previous.presentation_generation_id
@@ -368,7 +368,7 @@ def _check_rollback(previous: SyncState | None, manifest: Manifest) -> None:
         if manifest.previous_generation_id != previous.presentation_generation_id:
             raise SyncError("SYNC_PRESENTATION_ROLLBACK")
         return
-    if manifest.manifest_version == "0.2.0":
+    if manifest.manifest_version in {"0.2.0", "0.3.0"}:
         # A legacy state has no presentation lineage.  Its first complete
         # presentation generation is therefore a monotonic upgrade.
         return

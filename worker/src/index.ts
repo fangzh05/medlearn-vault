@@ -1021,12 +1021,23 @@ async function visibleManifest(bucket: R2Bucket): Promise<{ manifest: VaultManif
       if (receipt.presentation_generation_id !== pointer.active_presentation_generation_id || !Array.isArray(receipt.artifacts)) throw new Error();
       const artifacts = receipt.artifacts.map(item => ({ ...item, presentation_generation_id: receipt.presentation_generation_id, storage_key: item.storage_key }));
       if (artifacts.some(item => !item.storage_key || !item.path.startsWith("MedLearn/") || !item.path.endsWith(".md"))) throw new Error();
+      const legacy = await listAllReceipts(bucket);
+      if (legacy.error) return { manifest: { manifest_version: "0.3.0", artifacts: [] }, error: legacy.error };
+      const legacyManifest = buildManifest(legacy.receipts);
+      if (legacyManifest.error) return { manifest: { manifest_version: "0.3.0", artifacts: [] }, error: legacyManifest.error };
+      const combined = new Map<string, ManifestArtifact>();
+      for (const artifact of legacyManifest.manifest.artifacts) combined.set(artifact.path, artifact);
+      for (const artifact of artifacts) {
+        const existing = combined.get(artifact.path);
+        if (existing && JSON.stringify(existing) !== JSON.stringify(artifact)) return { manifest: { manifest_version: "0.3.0", artifacts: [] }, error: "VAULT_MANIFEST_CONFLICT" };
+        combined.set(artifact.path, artifact);
+      }
       return { manifest: {
-        manifest_version: "0.2.0",
+        manifest_version: "0.3.0",
         presentation_generation_id: pointer.active_presentation_generation_id,
         presentation_receipt_digest: pointer.presentation_receipt_object_digest,
         previous_generation_id: pointer.previous_generation_id as string | null,
-        artifacts: artifacts.sort((a, b) => a.path.localeCompare(b.path)),
+        artifacts: [...combined.values()].sort((a, b) => a.path.localeCompare(b.path)),
       } };
     } catch { return { manifest: { manifest_version: "0.2.0", artifacts: [] }, error: "INVALID_PRESENTATION_RECEIPT" }; }
   }
