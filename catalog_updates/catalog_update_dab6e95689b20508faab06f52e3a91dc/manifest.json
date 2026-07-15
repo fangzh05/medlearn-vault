@@ -1,0 +1,10 @@
+{
+  "manifest_version": "0.1.0",
+  "catalog_update_id": "catalog_update_dab6e95689b20508faab06f52e3a91dc",
+  "base_bundle_digest": "sha256:24d12cadda6e8c02fabbbe98c3c4b84b2145f406aafd4e14e327e811402a4f61",
+  "target_bundle_path": "examples/copd",
+  "sources_old_digest": "sha256:431d0cfe46ec67453d9b2e471697c5f27d79a8b031d4fe16e81d57cff3f79464",
+  "sources_new_digest": "sha256:fda7f04e164642a49e6714d56be17982e729172db18a986b7dd0993754d9af80",
+  "concepts_old_digest": "sha256:be8495a1561f85e450cd4ff77aa5dba099869a490f5beda6f5f1dadb1575742a",
+  "concepts_new_digest": "sha256:8b0ed03eb014d6655f3d9aa367ce4d1bce04f97a0e1f9e5e064dd2fed798f2a0"
+}
