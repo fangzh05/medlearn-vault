@@ -20,7 +20,7 @@
     confirmation; do NOT use -NonInteractive):
         powershell -NoProfile -File scripts/acceptance/windows_sync_rollout.ps1 `
             -Endpoint "https://medlearn-cloud.<subdomain>.workers.dev" `
-            -Wheel "dist/wheelhouse/medlearn_vault-0.13.0-py3-none-any.whl"
+            -Wheel "dist/wheelhouse/medlearn_vault-0.16.1-py3-none-any.whl"
 
 .PARAMETER Endpoint
     Full HTTPS Worker endpoint, e.g. https://medlearn-cloud.example.workers.dev.
@@ -203,7 +203,7 @@ if ($ValidateOnly) {
     }
 
     # Verify install-windows --dry-run
-    $dummyWheel = Join-Path $dummyRoot 'medlearn_vault-0.13.0-py3-none-any.whl'
+    $dummyWheel = Join-Path $dummyRoot 'medlearn_vault-0.16.1-py3-none-any.whl'
     try {
         New-Item -ItemType File -Force $dummyWheel -Value 'dummy wheel' | Out-Null
         $saveInstallRoot2 = $env:MEDLEARN_SYNC_INSTALL_ROOT

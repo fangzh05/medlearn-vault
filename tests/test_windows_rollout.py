@@ -67,6 +67,69 @@ def test_install_is_idempotent_and_replaces_partial_venv_safely(
     assert Path(str(first["executable"])).is_file()
 
 
+def test_self_hosted_upgrade_fails_before_staging(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "同步 client"
+    current = root / "venv" / "Scripts"
+    current.mkdir(parents=True)
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(sys, "executable", str(current / "python.exe"))
+
+    with pytest.raises(SyncError, match="SYNC_INSTALL_SELF_UPGRADE_REQUIRES_BOOTSTRAP"):
+        windows_rollout.install_windows(wheel(tmp_path), root=root)
+
+    assert not list(root.glob(".venv-staging-*"))
+    assert not list(root.glob(".venv-backup-*"))
+
+
+def test_self_hosted_identical_wheel_is_reused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "sync-client"
+    current = root / "venv" / "Scripts"
+    current.mkdir(parents=True)
+    client = current / "medlearn.exe"
+    client.touch()
+    artifact = wheel(tmp_path)
+    (root / "install.json").write_text(
+        json.dumps({"wheel_sha256": windows_rollout._sha256(artifact)}), encoding="utf-8"
+    )
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(sys, "executable", str(current / "python.exe"))
+    monkeypatch.setattr(windows_rollout, "_executable_works", lambda _: True)
+
+    assert windows_rollout.install_windows(artifact, root=root)["status"] == "reused"
+
+
+def test_external_client_can_execute_upgrade(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_windows_install(monkeypatch)
+    root = tmp_path / "中文 路径" / "sync-client"
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "external" / "python.exe"))
+
+    result = windows_rollout.install_windows(wheel(tmp_path), root=root)
+
+    assert result["status"] == "installed"
+    assert Path(str(result["executable"])).is_file()
+
+
+def test_external_bootstrap_is_offline_quiet_and_durable() -> None:
+    source = Path("scripts/install_windows_client.ps1").read_text(encoding="utf-8")
+    assert "[string] $Wheel" in source and "[string] $InstallRoot" in source
+    assert "[switch] $Json" in source
+    assert "--no-index" in source and "--find-links" in source
+    assert "medlearn-bootstrap-" in source
+    assert "sync install-windows --wheel $wheelPath --json" in source
+    assert "install-windows-client.ps1" in source
+    assert "2>&1 | Out-Null" in source
+    assert "SYNC_INSTALL_BOOTSTRAP_FAILURE" in source
+    assert "SYNC_INSTALL_SELF_UPGRADE_REQUIRES_BOOTSTRAP" not in source
+    for forbidden in ("Get-ChildItem Env:", "Authorization", "MEDLEARN_SYNC_TOKEN", "Write-Host"):
+        assert forbidden not in source
+
+
 def test_failed_upgrade_keeps_existing_client(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
