@@ -28,7 +28,6 @@ HANDOFF_VERSION: Literal["0.1.0"] = "0.1.0"
 HANDOFF_CONVERSION_VERSION = "medlearn.handoff_to_intake.v5"
 MAX_HANDOFF_BYTES = 256 * 1024
 MAX_HANDOFF_ITEMS = 100
-MAX_SEGMENT_MESSAGES = 50
 MAX_TEXT = 4000
 MAX_EXCERPT = 1000
 HandoffText = Annotated[str, StringConstraints(max_length=MAX_TEXT)]
@@ -250,7 +249,7 @@ class LearningSegment(DomainModel):
     previous_segment_digest: str | None = Field(default=None, pattern=r"^sha256:[a-f0-9]{64}$")
     first_evidence_marker: str = Field(min_length=1, max_length=256)
     last_evidence_marker: str = Field(min_length=1, max_length=256)
-    segment_message_count: int = Field(ge=1, le=MAX_SEGMENT_MESSAGES)
+    segment_message_count: int = Field(ge=1)
     coverage_status: Literal["complete", "partial", "unknown"]
     coverage_note: str | None = Field(default=None, max_length=1000)
     finalized: bool = False
@@ -260,12 +259,21 @@ class LearningSegment(DomainModel):
     def validate_segment(self) -> LearningSegment:
         if self.segment_message_count != len(self.handoff.evidence_messages):
             raise ValueError("segment_message_count must match evidence_messages")
-        if len(self.handoff.evidence_messages) > MAX_SEGMENT_MESSAGES:
-            raise ValueError("segment exceeds maximum evidence messages")
         if (self.segment_index == 0) != (self.previous_segment_digest is None):
             raise ValueError("first segment has no predecessor; later segments require one")
         if self.coverage_status != "complete" and not self.coverage_note:
             raise ValueError("partial or unknown coverage requires coverage_note")
+        markers = [item.local_id for item in self.handoff.evidence_messages]
+        if self.coverage_status == "complete":
+            try:
+                first = markers.index(self.first_evidence_marker)
+                last = markers.index(self.last_evidence_marker)
+            except ValueError as exc:
+                raise ValueError(
+                    "complete coverage requires visible start and end evidence markers"
+                ) from exc
+            if first > last:
+                raise ValueError("complete coverage markers must be ordered")
         return self
 
 
