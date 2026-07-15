@@ -737,6 +737,7 @@ interface ManifestArtifact extends VaultReceiptArtifact {
   capture_id?: string;
   publication_plan_id?: string;
   presentation_generation_id?: string;
+  storage_key?: string;
 }
 
 interface VaultManifest {
@@ -946,7 +947,7 @@ function validatePresentationReceipt(r: Record<string, unknown>): PresentationRe
   return { presentation_version: "1.0.0", presentation_generation_id: r.presentation_generation_id, artifacts };
 }
 
-async function listAllPresentationReceipts(bucket: R2Bucket): Promise<{ receipts: PresentationReceipt[]; error?: string }> {
+export async function listAllPresentationReceipts(bucket: R2Bucket): Promise<{ receipts: PresentationReceipt[]; error?: string }> {
   const receipts: PresentationReceipt[] = [];
   let cursor: string | undefined;
   do {
@@ -976,9 +977,23 @@ async function listAllPresentationReceipts(bucket: R2Bucket): Promise<{ receipts
 }
 
 async function visibleManifest(bucket: R2Bucket): Promise<{ manifest: VaultManifest; error?: string }> {
-  const presentations = await listAllPresentationReceipts(bucket);
-  if (presentations.error) return { manifest: { manifest_version: "0.2.0", artifacts: [] }, error: presentations.error };
-  if (presentations.receipts.length) return buildPresentationManifest(presentations.receipts);
+  const pointerObject = await bucket.get("v1/presentation-current.json");
+  if (pointerObject) {
+    let pointerBody: Uint8Array; let pointer: Record<string, unknown>;
+    try { pointerBody = new Uint8Array(await pointerObject.arrayBuffer()); pointer = JSON.parse(new TextDecoder().decode(pointerBody)) as Record<string, unknown>; } catch { return { manifest: { manifest_version: "0.2.0", artifacts: [] }, error: "INVALID_PRESENTATION_POINTER" }; }
+    if (!hasExactKeys(pointer, ["pointer_version", "active_presentation_generation_id", "presentation_receipt_object_digest", "previous_generation_id"]) || pointer.pointer_version !== "1.0.0" || typeof pointer.active_presentation_generation_id !== "string" || !PRESENTATION_ID_RE.test(pointer.active_presentation_generation_id) || typeof pointer.presentation_receipt_object_digest !== "string" || !DIGEST_RE.test(pointer.presentation_receipt_object_digest) || !pointerBody.every((b, i) => b === canonicalJsonBytes(pointer)[i])) return { manifest: { manifest_version: "0.2.0", artifacts: [] }, error: "INVALID_PRESENTATION_POINTER" };
+    const receiptObject = await bucket.get(`v1/presentation-generations/${pointer.active_presentation_generation_id}/receipt.json`);
+    if (!receiptObject) return { manifest: { manifest_version: "0.2.0", artifacts: [] }, error: "INVALID_PRESENTATION_RECEIPT" };
+    const receiptBody = new Uint8Array(await receiptObject.arrayBuffer());
+    if (`sha256:${await sha256(receiptBody)}` !== pointer.presentation_receipt_object_digest) return { manifest: { manifest_version: "0.2.0", artifacts: [] }, error: "INVALID_PRESENTATION_RECEIPT" };
+    try {
+      const receipt = JSON.parse(new TextDecoder().decode(receiptBody)) as { presentation_generation_id?: string; artifacts?: Array<VaultReceiptArtifact & { storage_key?: string }> };
+      if (receipt.presentation_generation_id !== pointer.active_presentation_generation_id || !Array.isArray(receipt.artifacts)) throw new Error();
+      const artifacts = receipt.artifacts.map(item => ({ ...item, presentation_generation_id: receipt.presentation_generation_id, storage_key: item.storage_key }));
+      if (artifacts.some(item => !item.storage_key || !item.path.startsWith("MedLearn/") || !item.path.endsWith(".md"))) throw new Error();
+      return { manifest: { manifest_version: "0.2.0", artifacts: artifacts.sort((a, b) => a.path.localeCompare(b.path)) } };
+    } catch { return { manifest: { manifest_version: "0.2.0", artifacts: [] }, error: "INVALID_PRESENTATION_RECEIPT" }; }
+  }
   const legacy = await listAllReceipts(bucket);
   return legacy.error ? { manifest: { manifest_version: "0.1.0", artifacts: [] }, error: legacy.error } : buildManifest(legacy.receipts);
 }
@@ -1058,7 +1073,7 @@ async function routeVault(request: Request, env: Env, url: URL): Promise<Respons
     if (!match) return secure(reply(404, { error: "NOT_FOUND" }));
 
     // Download from R2
-    const object = await cfg.VAULT_BUCKET.get(rawPath);
+    const object = await cfg.VAULT_BUCKET.get(match.storage_key ?? rawPath);
     if (!object) return secure(reply(503, { error: "VAULT_ARTIFACT_INTEGRITY_FAILURE" }));
 
     const objectBody = await object.arrayBuffer();

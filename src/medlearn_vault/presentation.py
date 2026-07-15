@@ -75,7 +75,7 @@ def _eligible_definition(bundle: ContractBundle, concept_id: str) -> list[Medica
             and claim.evidence_state == "supported"
             and claim.verification_status in {"source_backed", "verified_reference"}
             and claim.claim_status == "active"
-            and concept_id in {str(item) for item in claim.concept_ids}
+            and tuple(str(item) for item in claim.concept_ids) == (concept_id,)
             and claim.citations
             and all(
                 (source := sources.get(str(citation.source_id))) is not None
@@ -148,14 +148,18 @@ def concept_paths(concepts: tuple[ConceptEntity, ...]) -> dict[str, str]:
     return result
 
 
-def _capture_title(capture: LearningCapture) -> str:
-    return sanitize_filename(str(capture.chapter_id or capture.course_id or capture.discipline_id))
+def _capture_title(capture: LearningCapture, concepts: dict[str, ConceptEntity]) -> str:
+    names = [concepts[item].canonical_name for item in _resolved_ids(capture, concepts)[:3]]
+    return sanitize_filename("、".join(names) if names else "学习记录")
 
 
-def capture_path(capture: LearningCapture, capture_id: str) -> str:
+def capture_path(
+    capture: LearningCapture, capture_id: str, concepts: dict[str, ConceptEntity]
+) -> str:
     return (
         f"MedLearn/学习记录/{capture.captured_at.year:04d}/{capture.captured_at.month:02d}/"
-        f"{_capture_title(capture)}｜{capture.captured_at.date().isoformat()}〔{_short_id(capture_id)}〕.md"
+        f"{_capture_title(capture, concepts)}｜{capture.captured_at.date().isoformat()}"
+        f"〔{_short_id(capture_id)}〕.md"
     )
 
 
@@ -200,7 +204,7 @@ def render_capture_note(
         f"captured_at: {_yaml(capture.captured_at.isoformat())}",
         "---",
         "",
-        f"# 学习记录｜{_capture_title(capture)}",
+        f"# 学习记录｜{_capture_title(capture, concepts)}",
         "",
     ]
 
@@ -221,8 +225,47 @@ def render_capture_note(
         "",
         *evidence("明确错误", {"incorrect", "high_confidence_incorrect"}),
         "",
-        "## 未解决问题",
+        "## 错误逻辑与纠正",
     ]
+    claims = {str(item.claim_id): item for item in bundle.claims}
+    if capture.misconception_observations:
+        for observation in capture.misconception_observations:
+            linked = [
+                _display(str(concept_id), concepts, paths)
+                for concept_id in observation.concept_ids
+                if str(concept_id) in paths
+            ]
+            body.append(f"- {'、'.join(linked) or '相关概念'}")
+            if observation.user_excerpt:
+                body.append(f"  - 我的原回答：{observation.user_excerpt}")
+            body.append(f"  - 错误逻辑：{observation.observed_error_logic}")
+            corrections = [
+                claims.get(str(claim_id)) for claim_id in observation.correction_claim_ids
+            ]
+            verified = [
+                claim
+                for claim in corrections
+                if claim is not None
+                and claim.claim_status == "active"
+                and claim.evidence_state == "supported"
+                and claim.verification_status in {"source_backed", "verified_reference"}
+                and claim.citations
+            ]
+            if verified:
+                for claim in verified:
+                    body.append(f"  - 纠正：{claim.statement}")
+            elif observation.proposed_correction:
+                body.append(f"  - 待验证建议：{observation.proposed_correction}")
+            else:
+                body.append("  - 纠正：待验证")
+    else:
+        body.append("- 无")
+    body.extend(
+        [
+            "",
+            "## 未解决问题",
+        ]
+    )
     if capture.open_questions:
         for question in capture.open_questions:
             linked = [
@@ -324,7 +367,10 @@ def render_concept_note(
         if concept_id in _resolved_ids(
             capture, {str(item.concept_id): item for item in bundle.concepts}
         ):
-            backlinks.append((capture.captured_at, capture_id, path, _capture_title(capture)))
+            concepts = {str(item.concept_id): item for item in bundle.concepts}
+            backlinks.append(
+                (capture.captured_at, capture_id, path, _capture_title(capture, concepts))
+            )
     for _, _, path, title in sorted(backlinks, key=lambda item: (item[0], item[1]), reverse=True):
         front.append(f"- [[{path.removesuffix('.md')}|{title}]]")
     if not backlinks:
@@ -354,7 +400,7 @@ def build_presentation(
     capture_notes = tuple(
         sorted(
             (
-                (capture_id, capture, capture_path(capture, capture_id))
+                (capture_id, capture, capture_path(capture, capture_id, concepts))
                 for capture_id, capture, _ in captures
             ),
             key=lambda item: item[0],

@@ -832,10 +832,7 @@ def workflow_publish_vault(
     source_job_id: str,
 ) -> None:
     """Publish exact planned artifact bytes to medlearn-vault (create-only)."""
-    from medlearn_vault.vault_writer import (
-        S3VaultObjectStore,
-        VaultPublicationWriter,
-    )
+    from medlearn_vault.vault_writer import S3VaultObjectStore, VaultPublicationWriter
 
     try:
         control_store = S3ReadOnlyObjectStore(
@@ -864,6 +861,29 @@ def workflow_publish_vault(
         f"created_count={len(result.created_paths)} "
         f"reused_count={len(result.reused_paths)} "
         f"receipt_status={result.receipt_status}"
+    )
+
+
+@workflow_app.command("publish-presentation")
+def workflow_publish_presentation(bundle_path: str) -> None:
+    """Build one complete reader-facing snapshot and CAS-activate it."""
+    from medlearn_vault.presentation_publisher import PresentationPublisher, S3PresentationStore
+
+    try:
+        result = PresentationPublisher(
+            S3PresentationStore(
+                os.environ.get("VAULT_R2_ENDPOINT", ""),
+                os.environ.get("VAULT_R2_ACCESS_KEY_ID", ""),
+                os.environ.get("VAULT_R2_SECRET_ACCESS_KEY", ""),
+            ),
+            Path.cwd(),
+        ).run(bundle_path)
+    except WorkflowError as exc:
+        typer.echo(f"error_code={exc.code}", err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(
+        f"status=published presentation_generation_id={result.presentation_generation_id} "
+        f"artifact_count={len(result.artifacts)}"
     )
 
 
