@@ -1,0 +1,39 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "pointer_version": {
+      "default": "1.0.0",
+      "title": "Pointer Version",
+      "type": "string"
+    },
+    "active_presentation_generation_id": {
+      "pattern": "^presentation_[a-f0-9]{32}$",
+      "title": "Active Presentation Generation Id",
+      "type": "string"
+    },
+    "presentation_receipt_object_digest": {
+      "pattern": "^sha256:[a-f0-9]{64}$",
+      "title": "Presentation Receipt Object Digest",
+      "type": "string"
+    },
+    "previous_generation_id": {
+      "anyOf": [
+        {
+          "pattern": "^presentation_[a-f0-9]{32}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Previous Generation Id"
+    }
+  },
+  "required": [
+    "active_presentation_generation_id",
+    "presentation_receipt_object_digest"
+  ],
+  "title": "PresentationCurrentPointer",
+  "type": "object"
+}

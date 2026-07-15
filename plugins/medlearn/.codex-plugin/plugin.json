@@ -1,11 +1,11 @@
 {
   "name": "medlearn",
-  "version": "0.15.0",
-  "description": "Submit exactly one explicit MedLearnHandoff through the authenticated MedLearn MCP workflow.",
+  "version": "0.16.0",
+  "description": "Archive the visible learning conversation as one validated LearningSegment through the authenticated MedLearn MCP workflow.",
   "interface": {
     "displayName": "MedLearn",
-    "shortDescription": "Submit structured learning handoffs",
-    "longDescription": "Builds and submits exactly one MedLearnHandoff from the current selected learning conversation. It preserves visible assessment context, assistant-stated definitions, and one persisted unverified GPT explanation when higher-priority content is absent. It never auto-approves or auto-publishes.",
+    "shortDescription": "Archive the visible learning conversation",
+    "longDescription": "Accepts a one-line archive command and builds, validates, and submits one complete LearningSegment from only the visible current learning conversation. It never asks the learner for JSON or schema fields, auto-approves, or auto-publishes.",
     "developerName": "fangzh05",
     "category": "Productivity",
     "capabilities": [
@@ -13,17 +13,21 @@
       "Write"
     ],
     "defaultPrompt": [
-      "Process exactly one MedLearnHandoff 0.1.0 explicitly selected or explicitly provided by the user in the current context.",
-      "If no single handoff is selected, or more than one handoff is a candidate, stop and ask the user to select exactly one.",
-      "Do not search or inspect other chats, Project Sources, project memory, files, or conversation history for additional evidence.",
+      "Treat @MedLearn 存档当前学习对话 as the normal command. Also accept @MedLearn 从“<visible start marker>”到现在存档. Never require the user to provide JSON, schema instructions, technical field names, or a prebuilt handoff.",
+      "Use only the visible selected current learning conversation and requested visible range. Do not search or inspect other chats, Project Sources, project memory, files, or hidden/truncated conversation history for additional evidence.",
+      "Construct exactly one LearningSegment 0.2.0 with exactly these top-level fields: segment_version, learning_session_id, segment_index, previous_segment_digest, first_evidence_marker, last_evidence_marker, segment_message_count, coverage_status, coverage_note, finalized, handoff. Construct handoff as MedLearnHandoff 0.1.0 with exactly: handoff_version, session, learning_goals, evidence_messages, concepts, claims, learner_evidence, misconceptions, unresolved_questions, unfinished_topics, assessment_attempts, generated_explanations. HandoffSession may contain only title, discipline_id, course_id, chapter_id, session_started_at, captured_at; never place Segment fields in session.",
+      "For a new one-shot archive create a stable learning_session_id, segment_index 0, previous_segment_digest null, and finalized true unless the user explicitly says the session continues. Set first_evidence_marker and last_evidence_marker to the first and last included evidence local_id, and set segment_message_count to the exact evidence_messages length. Use timezone-aware session_started_at and captured_at. Infer discipline, course, and chapter only when grounded in visible text; use null for optional unknown values and the literal unclassified only for required discipline_id when no grounded discipline is visible.",
+      "Set coverage_status complete only when both requested boundaries are visible and every message in the requested range is represented. Set partial when the start is absent or early context is truncated, and unknown when full coverage cannot be proven; partial and unknown require a concise coverage_note. Never infer coverage from message count.",
       "Use only the selected current learning conversation. Do not import external medical knowledge into claims, learner evidence, misconceptions, conversation evidence, or reviewed catalog fields.",
       "Do not infer or rewrite learner-owned content or assistant-stated conversation evidence; generated_explanations are the only field that may contain newly generated prose.",
       "For each clinically meaningful concept actually explained by the assistant, add exactly one definition claim with exactly one concept term and only assistant evidence_local_ids. Do not infer a definition from a mention and never use the learner's incorrect statement as an explanation.",
       "Preserve each visible assessment as one assessment_attempt: exact question text, all visible labeled options, exact learner answer, assistant-judged answer and verdict, and assistant explanation only when present. Never reconstruct a missing question or options from an answer such as B or C; use null question_text and an empty options array.",
       "For every used active concept lacking a verified_reference definition, source_backed definition, reviewed scope_note, or assistant-stated definition, generate one concise 2-5 sentence Chinese generated_explanation from concept name, concept type, and current-session context. Explain what it is, its defining mechanism or feature, and why it matters clinically or for exams. Do not fabricate citations, patient-specific advice, doses, thresholds, or treatment instructions. Persist origin gpt_generated, verification_status unverified, generated_at, generator_id, and a sha256 generation_context_digest. Reuse an identical active generated explanation for the same concept and context digest instead of generating another.",
       "Generated explanations are new unverified presentation content. Never place them in claims, learner evidence, learner statements, or conversation evidence, and never imply they appeared in the conversation.",
-      "Require handoff_version to equal 0.1.0 and require learning_goals and unfinished_topics to be empty until the conversion boundary supports them.",
-      "Pass the handoff object unchanged to submit_learning_handoff. Do not JSON-encode it as a string, call HTTP directly, or use another submission tool.",
+      "Keep learning_goals and unfinished_topics empty. Preserve assistant question text and visible options, learner exact answer, assistant verdict/feedback, learner evidence, misconceptions, unresolved questions, conversation-derived explanations, and GPT-generated explanations with explicit unverified provenance. Never reconstruct a missing question from A, B, or C alone. All referenced local IDs must exist and satisfy speaker-role requirements.",
+      "Run role-aware extraction before submission: learner_evidence and misconception observed-error references are user-only; misconception corrections and assessment feedback are assistant-only; assessment learner-answer references are user-only; question references are assistant-only for assistant questions and user-only for user-supplied questions. Claims and unresolved questions must each cite exactly one role. If a semantic item has both roles, split it into role-owned records: user performance remains learner evidence and assistant teaching remains an assistant claim/explanation. Never send a mixed-role assertion group or attach user evidence to generated_explanations.",
+      "Before invoking submit_learning_handoff, locally validate the exact LearningSegment schema, all reference IDs, markers and ordering, segment_message_count, timestamps/field placement, and serialized payload against MAX_HANDOFF_BYTES. Deterministically repair structural fields when possible. If repair is impossible, do not submit and return one concise stable validation error; do not ask the user to rewrite a schema.",
+      "Call submit_learning_handoff exactly once with the validated, unchanged preflight segment. Do not JSON-encode it as a string, call HTTP directly, or use another submission tool. If a formal receipt is visible, return learning_session_id, segment_index, segment_digest, coverage_status, status, job_id, intake_digest, and all returned counts. If no formal receipt is visible, return status=unknown and do not retry or claim success.",
       "Do not auto-approve, auto-publish, or represent a successful submission as published knowledge.",
       "On success return only status, job_id, intake_digest, and the returned counts. On failure return the stable error code without fallback."
     ]

@@ -13,3 +13,4 @@ function generate(source, target) {
 
 generate("../../schemas/workflow/current/intake_envelope.schema.json", "../src/generated/intake-validator.js");
 generate("../../schemas/workflow/current/medlearn_handoff.schema.json", "../src/generated/handoff-validator.js");
+generate("../../schemas/workflow/current/learning_segment.schema.json", "../src/generated/segment-validator.js");

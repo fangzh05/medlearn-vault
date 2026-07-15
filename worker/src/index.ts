@@ -1,12 +1,15 @@
 import validateEnvelope from "./generated/intake-validator.js";
+import validateSegment from "./generated/segment-validator.js";
 import validateHandoff from "./generated/handoff-validator.js";
+import segmentSchema from "../../schemas/workflow/current/learning_segment.schema.json";
 import handoffSchema from "../../schemas/workflow/current/medlearn_handoff.schema.json";
 import { createRemoteJWKSet, jwtVerify, type JWTPayload, type JWTVerifyGetKey } from "jose";
 
-const toolHandoffSchema = {
-  ...handoffSchema,
-  $id: "https://medlearn.invalid/schemas/medlearn_handoff.schema.json",
+const toolSegmentSchema = {
+  ...segmentSchema,
+  $id: "https://medlearn.invalid/schemas/learning_segment.schema.json",
 };
+const toolHandoffSchema = { ...handoffSchema, $id: "https://medlearn.invalid/schemas/medlearn_handoff.schema.json" };
 
 export interface Env {
   CONTROL_BUCKET?: R2Bucket;
@@ -466,6 +469,22 @@ function handoffSemanticError(handoff: Record<string, unknown>): string | null {
   return null;
 }
 
+function segmentSemanticError(segment: Record<string, unknown>): string | null {
+  const handoff = segment.handoff as Record<string, unknown>;
+  const messages = handoff.evidence_messages as { local_id: string }[];
+  if (segment.segment_message_count !== messages.length) return "SEGMENT_MESSAGE_COUNT_MISMATCH";
+  const markers = messages.map((item) => item.local_id);
+  const first = markers.indexOf(segment.first_evidence_marker as string);
+  const last = markers.indexOf(segment.last_evidence_marker as string);
+  if (segment.coverage_status === "complete" && (first < 0 || last < 0)) return "SEGMENT_MARKER_NOT_FOUND";
+  if (segment.coverage_status === "complete" && first > last) return "SEGMENT_MARKER_ORDER_INVALID";
+  if (segment.coverage_status !== "complete" && !segment.coverage_note)
+    return "SEGMENT_COVERAGE_NOTE_REQUIRED";
+  if ((segment.segment_index === 0) !== (segment.previous_segment_digest === null))
+    return "SEGMENT_PREDECESSOR_INVALID";
+  return handoffSemanticError(handoff);
+}
+
 const LEARNING_CHAT_SOURCE_IDENTITY_VERSION = "medlearn.learning_chat_source.v2";
 
 function sourceIdentityField(value: string | null): Uint8Array {
@@ -571,7 +590,7 @@ export async function convertHandoff(handoff: Record<string, unknown>): Promise<
 }
 
 const MCP_SCOPE = "medlearn:handoff:submit";
-const MCP_INSTRUCTIONS = "This server submits only an explicit MedLearnHandoff selected by the user. Do not infer, supplement, scan chats, auto-approve, or auto-publish.";
+const MCP_INSTRUCTIONS = "This server submits one locally validated LearningSegment containing an explicit MedLearnHandoff. Do not infer missing evidence, scan chats, auto-approve, or auto-publish.";
 const jwks = new Map<string, JWTVerifyGetKey>();
 
 function mcpError(id: unknown, code: string, rpcCode = -32602): Response {
@@ -581,12 +600,15 @@ function mcpError(id: unknown, code: string, rpcCode = -32602): Response {
 function mcpTool(): Record<string, unknown> {
   return {
     name: "submit_learning_handoff", title: "Submit MedLearn learning handoff",
-    description: "Use this only when the user has explicitly selected or provided a MedLearnHandoff 0.1.0. Validates and idempotently submits the handoff to the bounded MedLearn intake workflow. Do not use project memory or infer missing evidence.",
+    description: "Use only for one locally validated visible LearningSegment 0.2.0. Validates and idempotently submits its nested MedLearnHandoff to the bounded MedLearn intake workflow. Do not use project memory or infer missing evidence.",
     annotations: { readOnlyHint: false, openWorldHint: false, destructiveHint: false },
     securitySchemes: [{ type: "oauth2", scopes: [MCP_SCOPE] }],
-    inputSchema: { type: "object", additionalProperties: false, required: ["handoff"], properties: { handoff: toolHandoffSchema } },
-    outputSchema: { type: "object", additionalProperties: false, required: ["status", "job_id", "intake_digest", "concept_count", "claim_count", "learner_evidence_count", "misconception_count", "unresolved_count", "unfinished_count"], properties: {
-      status: { const: "submitted", type: "string" }, job_id: { type: "string" }, intake_digest: { pattern: "^sha256:[a-f0-9]{64}$", type: "string" },
+    inputSchema: { oneOf: [
+      { type: "object", additionalProperties: false, required: ["segment"], properties: { segment: toolSegmentSchema } },
+      { type: "object", additionalProperties: false, required: ["handoff"], properties: { handoff: toolHandoffSchema } },
+    ] },
+    outputSchema: { type: "object", additionalProperties: false, required: ["learning_session_id", "segment_index", "segment_digest", "coverage_status", "status", "job_id", "intake_digest", "concept_count", "claim_count", "learner_evidence_count", "misconception_count", "unresolved_count", "unfinished_count"], properties: {
+      learning_session_id: { type: "string" }, segment_index: { type: "integer", minimum: 0 }, segment_digest: { pattern: "^sha256:[a-f0-9]{64}$", type: "string" }, coverage_status: { enum: ["complete", "partial", "unknown"] }, status: { const: "submitted", type: "string" }, job_id: { type: "string" }, intake_digest: { pattern: "^sha256:[a-f0-9]{64}$", type: "string" },
       concept_count: { type: "integer", minimum: 0 }, claim_count: { type: "integer", minimum: 0 }, learner_evidence_count: { type: "integer", minimum: 0 }, misconception_count: { type: "integer", minimum: 0 }, unresolved_count: { type: "integer", minimum: 0 }, unfinished_count: { type: "integer", minimum: 0 },
     } },
   };
@@ -667,13 +689,16 @@ async function routeMcp(request: Request, env: Env): Promise<Response> {
   if (!params || params.name !== "submit_learning_handoff" || typeof params.arguments !== "object" || params.arguments === null)
     return mcpError(id, "HANDOFF_SCHEMA_INVALID");
   const argumentsValue = params.arguments as Record<string, unknown>;
-  if (Object.keys(argumentsValue).length !== 1 || !("handoff" in argumentsValue) || typeof argumentsValue.handoff !== "object" || argumentsValue.handoff === null)
+  if (Object.keys(argumentsValue).length !== 1 || (!("segment" in argumentsValue) && !("handoff" in argumentsValue)))
     return mcpError(id, "HANDOFF_SCHEMA_INVALID");
-  const handoff = argumentsValue.handoff as Record<string, unknown>;
+  const suppliedSegment = argumentsValue.segment as Record<string, unknown> | undefined;
+  if (suppliedSegment && (suppliedSegment.segment_version !== "0.2.0" || !validateSegment(suppliedSegment))) return mcpError(id, "HANDOFF_SCHEMA_INVALID");
+  if (suppliedSegment && segmentSemanticError(suppliedSegment)) return mcpError(id, segmentSemanticError(suppliedSegment)!);
+  const handoff = (suppliedSegment?.handoff ?? argumentsValue.handoff) as Record<string, unknown>;
   if (handoff.handoff_version !== "0.1.0") return mcpError(id, "HANDOFF_UNSUPPORTED_VERSION");
+  const legacySemantic = !suppliedSegment ? handoffSemanticError(handoff) : null;
+  if (legacySemantic) return mcpError(id, legacySemantic);
   if (!validateHandoff(handoff)) return mcpError(id, "HANDOFF_SCHEMA_INVALID");
-  const semantic = handoffSemanticError(handoff);
-  if (semantic) return mcpError(id, semantic);
   try {
     const converted = await convertHandoff(handoff);
     const response = await submitIntake(configured, converted.body, converted.idempotencyKey, Date.now());
@@ -684,6 +709,8 @@ async function routeMcp(request: Request, env: Env): Promise<Response> {
     }
     const job = await response.json<JobRecord>();
     const result = {
+      ...(suppliedSegment ? { learning_session_id: suppliedSegment.learning_session_id, segment_index: suppliedSegment.segment_index,
+      segment_digest: `sha256:${await sha256(canonicalJson(suppliedSegment))}`, coverage_status: suppliedSegment.coverage_status } : {}),
       status: "submitted", job_id: job.job_id, intake_digest: job.intake_digest,
       concept_count: (handoff.concepts as unknown[]).length, claim_count: (handoff.claims as unknown[]).length,
       learner_evidence_count: (handoff.learner_evidence as unknown[]).length,

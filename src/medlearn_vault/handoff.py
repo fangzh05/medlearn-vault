@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from copy import deepcopy
 from typing import Annotated, Any, Literal
 
 from pydantic import Field, StringConstraints, model_validator
@@ -275,6 +276,137 @@ class LearningSegment(DomainModel):
             if first > last:
                 raise ValueError("complete coverage markers must be ordered")
         return self
+
+
+class SegmentPreflightError(ValueError):
+    """A sanitized local diagnostic; it intentionally contains no chat excerpts."""
+
+    def __init__(self, collection: str, item: int, roles: set[str], error_code: str) -> None:
+        self.diagnostic = {
+            "collection": collection,
+            "item": item,
+            "observed_roles": sorted(roles),
+            "error_code": error_code,
+        }
+        super().__init__(json.dumps(self.diagnostic, ensure_ascii=False, separators=(",", ":")))
+
+
+def preflight_learning_segment(payload: dict[str, Any]) -> LearningSegment:
+    """Repair role-isolatable references before schema validation and submission.
+
+    This is the submission adapter boundary.  It never examines message excerpts:
+    role ownership is decided solely from ``local_id -> role``.  Mixed claims and
+    unresolved questions become separate role-owned records; fields with an
+    intrinsic owner are filtered to that owner.  A field that cannot retain its
+    required owner fails closed with a sanitized locator diagnostic.
+    """
+    value = deepcopy(payload)
+    handoff = value.get("handoff")
+    if not isinstance(handoff, dict):
+        raise SegmentPreflightError("segment", 0, set(), "SEGMENT_HANDOFF_MISSING")
+    messages = handoff.get("evidence_messages")
+    if not isinstance(messages, list):
+        raise SegmentPreflightError("evidence_messages", 0, set(), "EVIDENCE_MESSAGES_MISSING")
+    roles = {
+        item.get("local_id"): item.get("role")
+        for item in messages
+        if isinstance(item, dict) and isinstance(item.get("local_id"), str)
+    }
+
+    def group_roles(ids: object) -> set[str]:
+        if not isinstance(ids, list):
+            return set()
+        grouped: set[str] = set()
+        for item in ids:
+            if not isinstance(item, str):
+                continue
+            role = roles.get(item)
+            if role in {"user", "assistant"}:
+                grouped.add(role)
+        return grouped
+
+    def owned(ids: object, owner: str, collection: str, index: int, *, required: bool) -> list[str]:
+        if not isinstance(ids, list):
+            raise SegmentPreflightError(collection, index, set(), "ROLE_REFERENCE_INVALID")
+        retained = [item for item in ids if roles.get(item) == owner]
+        observed = group_roles(ids)
+        if required and not retained:
+            raise SegmentPreflightError(collection, index, observed, "ROLE_OWNER_REQUIRED")
+        return retained
+
+    for collection in ("claims", "unresolved_questions"):
+        records = handoff.get(collection, [])
+        if not isinstance(records, list):
+            raise SegmentPreflightError(collection, 0, set(), "ROLE_COLLECTION_INVALID")
+        repaired: list[dict[str, Any]] = []
+        for index, record in enumerate(records):
+            if not isinstance(record, dict):
+                raise SegmentPreflightError(collection, index, set(), "ROLE_ITEM_INVALID")
+            ids = record.get("evidence_local_ids")
+            observed = group_roles(ids)
+            if not observed:
+                raise SegmentPreflightError(collection, index, observed, "ROLE_OWNER_REQUIRED")
+            # One semantic item with mixed evidence is represented as two
+            # provenance-isolated records, never as an invalid mixed record.
+            for role in sorted(observed):
+                item = deepcopy(record)
+                item["evidence_local_ids"] = owned(ids, role, collection, index, required=True)
+                repaired.append(item)
+        handoff[collection] = repaired
+
+    for index, record in enumerate(handoff.get("learner_evidence", [])):
+        if not isinstance(record, dict):
+            raise SegmentPreflightError("learner_evidence", index, set(), "ROLE_ITEM_INVALID")
+        record["evidence_local_ids"] = owned(
+            record.get("evidence_local_ids"), "user", "learner_evidence", index, required=True
+        )
+    for index, record in enumerate(handoff.get("misconceptions", [])):
+        if not isinstance(record, dict):
+            raise SegmentPreflightError("misconceptions", index, set(), "ROLE_ITEM_INVALID")
+        record["observed_error_local_ids"] = owned(
+            record.get("observed_error_local_ids"), "user", "misconceptions", index, required=True
+        )
+        record["correction_local_ids"] = owned(
+            record.get("correction_local_ids"), "assistant", "misconceptions", index, required=False
+        )
+    for index, record in enumerate(handoff.get("assessment_attempts", [])):
+        if not isinstance(record, dict):
+            raise SegmentPreflightError("assessment_attempts", index, set(), "ROLE_ITEM_INVALID")
+        question_roles = group_roles(record.get("question_local_ids"))
+        if len(question_roles) > 1:
+            raise SegmentPreflightError(
+                "assessment_attempts.question_local_ids",
+                index,
+                question_roles,
+                "QUESTION_ROLE_AMBIGUOUS",
+            )
+        record["learner_answer_local_ids"] = owned(
+            record.get("learner_answer_local_ids"),
+            "user",
+            "assessment_attempts",
+            index,
+            required=True,
+        )
+        record["feedback_local_ids"] = owned(
+            record.get("feedback_local_ids"),
+            "assistant",
+            "assessment_attempts",
+            index,
+            required=False,
+        )
+
+    local_ids = [item.get("local_id") for item in messages if isinstance(item, dict)]
+    if local_ids:
+        value["first_evidence_marker"] = local_ids[0]
+        value["last_evidence_marker"] = local_ids[-1]
+        value["segment_message_count"] = len(local_ids)
+    segment = LearningSegment.model_validate(value)
+    encoded = json.dumps(
+        segment.model_dump(mode="json"), ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    if len(encoded) > MAX_HANDOFF_BYTES:
+        raise SegmentPreflightError("segment", 0, set(), "HANDOFF_BYTES_EXCEEDED")
+    return segment
 
 
 def segment_digest(segment: LearningSegment) -> str:
