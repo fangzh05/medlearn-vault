@@ -80,6 +80,18 @@
           ],
           "default": null,
           "title": "Presentation Generation Id"
+        },
+        "storage_key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Storage Key"
         }
       },
       "required": [
