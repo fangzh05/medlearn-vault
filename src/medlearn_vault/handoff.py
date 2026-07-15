@@ -12,8 +12,10 @@ from medlearn_vault.capture import (
     CaptureContext,
     CaptureDraft,
     EvidenceMessage,
+    ExtractedAssessmentAttempt,
     ExtractedClaimCandidate,
     ExtractedConceptMention,
+    ExtractedGeneratedExplanation,
     ExtractedLearnerEvidenceCandidate,
     ExtractedMisconceptionCandidate,
     IntakeEnvelope,
@@ -23,7 +25,7 @@ from medlearn_vault.domain.base import AwareDatetime, DomainModel
 from medlearn_vault.domain.concepts import ConceptType
 
 HANDOFF_VERSION: Literal["0.1.0"] = "0.1.0"
-HANDOFF_CONVERSION_VERSION = "medlearn.handoff_to_intake.v4"
+HANDOFF_CONVERSION_VERSION = "medlearn.handoff_to_intake.v5"
 MAX_HANDOFF_BYTES = 256 * 1024
 MAX_HANDOFF_ITEMS = 100
 MAX_SEGMENT_MESSAGES = 50
@@ -116,6 +118,46 @@ class HandoffQuestion(DomainModel):
     question_priority: Literal["low", "medium", "high"]
 
 
+class HandoffAssessmentOption(DomainModel):
+    label: str = Field(min_length=1, max_length=64)
+    text: HandoffText
+
+
+class HandoffAssessmentAttempt(DomainModel):
+    attempt_id: str = Field(min_length=1, max_length=128)
+    question_type: Literal["single_choice", "multiple_choice", "true_false", "short_answer"]
+    question_text: HandoffText | None = None
+    options: tuple[HandoffAssessmentOption, ...] = Field(max_length=MAX_HANDOFF_ITEMS)
+    learner_answer: HandoffText
+    assistant_judged_answer: HandoffText | None = None
+    verdict: Literal["correct", "partial", "incorrect", "unresolved"]
+    assistant_explanation: HandoffText | None = None
+    concept_terms: tuple[HandoffText, ...] = Field(max_length=MAX_HANDOFF_ITEMS)
+    question_local_ids: tuple[LocalReference, ...] = Field(max_length=MAX_HANDOFF_ITEMS)
+    learner_answer_local_ids: tuple[LocalReference, ...] = Field(
+        min_length=1, max_length=MAX_HANDOFF_ITEMS
+    )
+    feedback_local_ids: tuple[LocalReference, ...] = Field(max_length=MAX_HANDOFF_ITEMS)
+
+    @model_validator(mode="after")
+    def question_context_is_not_reconstructed(self) -> HandoffAssessmentAttempt:
+        if self.question_text is None and self.options:
+            raise ValueError("assessment options require question_text")
+        return self
+
+
+class HandoffGeneratedExplanation(DomainModel):
+    """GPT-generated prose supplied once by ChatGPT and persisted with the Capture."""
+
+    concept_term: HandoffText
+    explanation_text: HandoffText
+    origin: Literal["gpt_generated"] = "gpt_generated"
+    verification_status: Literal["unverified"] = "unverified"
+    generated_at: AwareDatetime
+    generator_id: str = Field(min_length=1, max_length=256)
+    generation_context_digest: str = Field(pattern=r"^sha256:[a-f0-9]{64}$")
+
+
 class HandoffTopic(DomainModel):
     title: str = Field(min_length=1, max_length=MAX_TEXT)
     evidence_local_ids: tuple[LocalReference, ...] = Field(
@@ -134,6 +176,12 @@ class MedLearnHandoff(DomainModel):
     misconceptions: tuple[HandoffMisconception, ...] = Field(max_length=MAX_HANDOFF_ITEMS)
     unresolved_questions: tuple[HandoffQuestion, ...] = Field(max_length=MAX_HANDOFF_ITEMS)
     unfinished_topics: tuple[HandoffTopic, ...] = Field(max_length=MAX_HANDOFF_ITEMS)
+    assessment_attempts: tuple[HandoffAssessmentAttempt, ...] = Field(
+        default=(), max_length=MAX_HANDOFF_ITEMS
+    )
+    generated_explanations: tuple[HandoffGeneratedExplanation, ...] = Field(
+        default=(), max_length=MAX_HANDOFF_ITEMS
+    )
 
     @model_validator(mode="after")
     def validate_evidence_references(self) -> MedLearnHandoff:
@@ -149,6 +197,9 @@ class MedLearnHandoff(DomainModel):
             *(item.correction_local_ids for item in self.misconceptions),
             *(item.evidence_local_ids for item in self.unresolved_questions),
             *(item.evidence_local_ids for item in self.unfinished_topics),
+            *(item.question_local_ids for item in self.assessment_attempts),
+            *(item.learner_answer_local_ids for item in self.assessment_attempts),
+            *(item.feedback_local_ids for item in self.assessment_attempts),
         )
         if any(not set(group) <= known for group in references):
             raise ValueError("all evidence_local_ids must exist in evidence_messages")
@@ -157,6 +208,7 @@ class MedLearnHandoff(DomainModel):
             *(item.evidence_local_ids for item in self.claims),
             *(item.evidence_local_ids for item in self.learner_evidence),
             *(item.evidence_local_ids for item in self.unresolved_questions),
+            *(item.learner_answer_local_ids for item in self.assessment_attempts),
         )
         if any(len({roles[item] for item in group}) != 1 for group in assertion_groups):
             raise ValueError("assertion evidence must have exactly one derived speaker role")
@@ -176,6 +228,16 @@ class MedLearnHandoff(DomainModel):
             for observed_at in (item.observed_at or self.session.captured_at,)
         ):
             raise ValueError("evidence times must fall within the capture interval")
+        if any(
+            {roles[item] for item in candidate.learner_answer_local_ids} != {"user"}
+            for candidate in self.assessment_attempts
+        ):
+            raise ValueError("assessment learner answers must be owned by user evidence messages")
+        if any(
+            any(roles[item] != "assistant" for item in candidate.feedback_local_ids)
+            for candidate in self.assessment_attempts
+        ):
+            raise ValueError("assessment feedback must be owned by assistant evidence messages")
         return self
 
 
@@ -287,9 +349,15 @@ def aggregate_segments(segments: tuple[LearningSegment, ...]) -> AggregatedLearn
 
 
 def canonical_handoff_json(handoff: MedLearnHandoff) -> bytes:
-    return json.dumps(
-        handoff.model_dump(mode="json"), ensure_ascii=False, sort_keys=True, separators=(",", ":")
-    ).encode("utf-8")
+    payload = handoff.model_dump(mode="json")
+    # Optional 0.1.0 extensions must not change identities of legacy handoffs.
+    if not payload["assessment_attempts"]:
+        payload.pop("assessment_attempts")
+    if not payload["generated_explanations"]:
+        payload.pop("generated_explanations")
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
+        "utf-8"
+    )
 
 
 def handoff_digest(handoff: MedLearnHandoff) -> str:
@@ -299,7 +367,7 @@ def handoff_digest(handoff: MedLearnHandoff) -> str:
 def handoff_idempotency_key(handoff: MedLearnHandoff) -> str:
     """Stable, versioned idempotency key.  Changing HANDOFF_CONVERSION_VERSION
     creates a separate idempotency namespace so old records are never touched."""
-    return f"medlearn-handoff-v4-{handoff_digest(handoff)[7:]}"
+    return f"medlearn-handoff-v5-{handoff_digest(handoff)[7:]}"
 
 
 def _single_concept_term_groups(terms: tuple[HandoffText, ...]) -> tuple[tuple[str, ...], ...]:
@@ -399,6 +467,33 @@ def handoff_to_intake(handoff: MedLearnHandoff) -> IntakeEnvelope:
             )
             for item in handoff.misconceptions
         ),
+        assessment_attempts=tuple(
+            ExtractedAssessmentAttempt(
+                attempt_id=item.attempt_id,
+                question_type=item.question_type,
+                question_text=item.question_text,
+                options=tuple((option.label, option.text) for option in item.options),
+                learner_answer=item.learner_answer,
+                assistant_judged_answer=item.assistant_judged_answer,
+                verdict=item.verdict,
+                assistant_explanation=item.assistant_explanation,
+                concept_terms=item.concept_terms,
+                question_message_ids=ref(item.question_local_ids),
+                learner_answer_message_ids=ref(item.learner_answer_local_ids),
+                feedback_message_ids=ref(item.feedback_local_ids),
+            )
+            for item in handoff.assessment_attempts
+        ),
+        generated_explanations=tuple(
+            ExtractedGeneratedExplanation(
+                concept_term=item.concept_term,
+                explanation_text=item.explanation_text,
+                generated_at=item.generated_at,
+                generator_id=item.generator_id,
+                generation_context_digest=item.generation_context_digest,
+            )
+            for item in handoff.generated_explanations
+        ),
     )
     return IntakeEnvelope(client_kind="chatgpt_work", draft=draft)
 
@@ -407,6 +502,10 @@ def handoff_submission(handoff: MedLearnHandoff) -> tuple[bytes, str]:
     """Return canonical envelope bytes and its stable HTTP idempotency key."""
     envelope = handoff_to_intake(handoff)
     payload: Any = envelope.model_dump(mode="json")
+    if not payload["draft"]["assessment_attempts"]:
+        payload["draft"].pop("assessment_attempts")
+    if not payload["draft"]["generated_explanations"]:
+        payload["draft"].pop("generated_explanations")
     return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
         "utf-8"
     ), handoff_idempotency_key(handoff)

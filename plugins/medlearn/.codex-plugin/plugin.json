@@ -1,11 +1,11 @@
 {
   "name": "medlearn",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "description": "Submit exactly one explicit MedLearnHandoff through the authenticated MedLearn MCP workflow.",
   "interface": {
     "displayName": "MedLearn",
     "shortDescription": "Submit structured learning handoffs",
-    "longDescription": "Submits exactly one explicitly selected or provided MedLearnHandoff through the authenticated MedLearn intake pipeline. It must not scan other sources, infer missing evidence, alter the handoff, auto-approve content, or auto-publish.",
+    "longDescription": "Builds and submits exactly one MedLearnHandoff from the current selected learning conversation. It preserves visible assessment context, assistant-stated definitions, and one persisted unverified GPT explanation when higher-priority content is absent. It never auto-approves or auto-publishes.",
     "developerName": "fangzh05",
     "category": "Productivity",
     "capabilities": [
@@ -16,7 +16,12 @@
       "Process exactly one MedLearnHandoff 0.1.0 explicitly selected or explicitly provided by the user in the current context.",
       "If no single handoff is selected, or more than one handoff is a candidate, stop and ask the user to select exactly one.",
       "Do not search or inspect other chats, Project Sources, project memory, files, or conversation history for additional evidence.",
-      "Do not infer, rewrite, summarize, correct, supplement, or add concepts, claims, learner evidence, misconceptions, corrections, unresolved questions, unfinished topics, learning goals, or any other handoff field.",
+      "Use only the selected current learning conversation. Do not import external medical knowledge into claims, learner evidence, misconceptions, conversation evidence, or reviewed catalog fields.",
+      "Do not infer or rewrite learner-owned content or assistant-stated conversation evidence; generated_explanations are the only field that may contain newly generated prose.",
+      "For each clinically meaningful concept actually explained by the assistant, add exactly one definition claim with exactly one concept term and only assistant evidence_local_ids. Do not infer a definition from a mention and never use the learner's incorrect statement as an explanation.",
+      "Preserve each visible assessment as one assessment_attempt: exact question text, all visible labeled options, exact learner answer, assistant-judged answer and verdict, and assistant explanation only when present. Never reconstruct a missing question or options from an answer such as B or C; use null question_text and an empty options array.",
+      "For every used active concept lacking a verified_reference definition, source_backed definition, reviewed scope_note, or assistant-stated definition, generate one concise 2-5 sentence Chinese generated_explanation from concept name, concept type, and current-session context. Explain what it is, its defining mechanism or feature, and why it matters clinically or for exams. Do not fabricate citations, patient-specific advice, doses, thresholds, or treatment instructions. Persist origin gpt_generated, verification_status unverified, generated_at, generator_id, and a sha256 generation_context_digest. Reuse an identical active generated explanation for the same concept and context digest instead of generating another.",
+      "Generated explanations are new unverified presentation content. Never place them in claims, learner evidence, learner statements, or conversation evidence, and never imply they appeared in the conversation.",
       "Require handoff_version to equal 0.1.0 and require learning_goals and unfinished_topics to be empty until the conversion boundary supports them.",
       "Pass the handoff object unchanged to submit_learning_handoff. Do not JSON-encode it as a string, call HTTP directly, or use another submission tool.",
       "Do not auto-approve, auto-publish, or represent a successful submission as published knowledge.",

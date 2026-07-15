@@ -15,6 +15,7 @@ from medlearn_vault.capture import (
     CaptureDraft,
     CaptureProposal,
     IntakeEnvelope,
+    backfill_learning_capture,
     build_capture_proposal,
     capture_proposal_digest,
     contract_bundle_digest,
@@ -59,6 +60,8 @@ from medlearn_vault.preview import (
 from medlearn_vault.publication import (
     VaultPublicationPlan,
     VaultPublicationReceipt,
+    canonical_learning_capture_json,
+    capture_identity,
     render_learning_capture_markdown,
 )
 from medlearn_vault.sync_client import (
@@ -1029,6 +1032,27 @@ def capture_render_view(
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(markdown, encoding="utf-8", newline="\n")
     typer.echo(output.as_posix())
+
+
+@capture_app.command("backfill-capture")
+def capture_backfill(
+    proposal_path: Path,
+    output: Path,
+    bundle_path: Annotated[Path, typer.Option("--bundle")],
+) -> None:
+    """Create a new derived Capture from immutable proposal statements; never overwrite input."""
+    try:
+        if output.resolve() == proposal_path.resolve():
+            raise ValueError("INVALID_BACKFILL_OUTPUT")
+        proposal = CaptureProposal.model_validate_json(proposal_path.read_bytes())
+        bundle = ContractBundle.from_directory(bundle_path)
+        capture = backfill_learning_capture(bundle, proposal)
+    except (OSError, ValidationError, ValueError) as exc:
+        _safe_error("INVALID_CAPTURE_BACKFILL_INPUT", "proposal", type(exc).__name__)
+        raise typer.Exit(1) from exc
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_bytes(canonical_learning_capture_json(capture))
+    typer.echo(f"capture_id={capture_identity(capture)} output={output.as_posix()}")
 
 
 @catalog_app.command("prepare-patch")

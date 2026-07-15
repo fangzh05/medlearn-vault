@@ -1,5 +1,159 @@
 {
   "$defs": {
+    "AssessmentAttempt": {
+      "additionalProperties": false,
+      "description": "Conversation-local assessment result; it is not a verified answer key.",
+      "properties": {
+        "attempt_id": {
+          "minLength": 1,
+          "title": "Attempt Id",
+          "type": "string"
+        },
+        "question_type": {
+          "enum": [
+            "single_choice",
+            "multiple_choice",
+            "true_false",
+            "short_answer"
+          ],
+          "title": "Question Type",
+          "type": "string"
+        },
+        "question_text": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Question Text"
+        },
+        "options": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/AssessmentOption"
+          },
+          "title": "Options",
+          "type": "array"
+        },
+        "learner_answer": {
+          "minLength": 1,
+          "title": "Learner Answer",
+          "type": "string"
+        },
+        "assistant_judged_answer": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Assistant Judged Answer"
+        },
+        "verdict": {
+          "enum": [
+            "correct",
+            "partial",
+            "incorrect",
+            "unresolved"
+          ],
+          "title": "Verdict",
+          "type": "string"
+        },
+        "assistant_explanation": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Assistant Explanation"
+        },
+        "concept_ids": {
+          "default": [],
+          "items": {
+            "pattern": "^concept_[a-f0-9]{32}$",
+            "type": "string"
+          },
+          "title": "Concept Ids",
+          "type": "array"
+        },
+        "question_message_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Question Message Ids",
+          "type": "array"
+        },
+        "learner_answer_message_ids": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Learner Answer Message Ids",
+          "type": "array"
+        },
+        "feedback_message_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Feedback Message Ids",
+          "type": "array"
+        },
+        "observed_at": {
+          "format": "date-time",
+          "title": "Observed At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "attempt_id",
+        "question_type",
+        "learner_answer",
+        "verdict",
+        "learner_answer_message_ids",
+        "observed_at"
+      ],
+      "title": "AssessmentAttempt",
+      "type": "object"
+    },
+    "AssessmentOption": {
+      "additionalProperties": false,
+      "description": "One visible option from an assessment prompt, retained verbatim.",
+      "properties": {
+        "label": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        },
+        "text": {
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "label",
+        "text"
+      ],
+      "title": "AssessmentOption",
+      "type": "object"
+    },
     "CaptureContext": {
       "additionalProperties": false,
       "properties": {
@@ -331,6 +485,107 @@
       "title": "ConceptResolutionProposal",
       "type": "object"
     },
+    "ConversationExplanation": {
+      "additionalProperties": false,
+      "description": "Assistant-stated definition from the current learning chat, not verified knowledge.",
+      "properties": {
+        "concept_id": {
+          "pattern": "^concept_[a-f0-9]{32}$",
+          "title": "Concept Id",
+          "type": "string"
+        },
+        "explanation_text": {
+          "minLength": 1,
+          "title": "Explanation Text",
+          "type": "string"
+        },
+        "evidence_message_ids": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Evidence Message Ids",
+          "type": "array"
+        },
+        "origin": {
+          "const": "learning_chat",
+          "default": "learning_chat",
+          "title": "Origin",
+          "type": "string"
+        },
+        "verification_status": {
+          "const": "unverified_chat",
+          "default": "unverified_chat",
+          "title": "Verification Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "concept_id",
+        "explanation_text",
+        "evidence_message_ids"
+      ],
+      "title": "ConversationExplanation",
+      "type": "object"
+    },
+    "GeneratedExplanation": {
+      "additionalProperties": false,
+      "description": "Persisted GPT prose, deliberately separate from claims and chat evidence.",
+      "properties": {
+        "concept_id": {
+          "pattern": "^concept_[a-f0-9]{32}$",
+          "title": "Concept Id",
+          "type": "string"
+        },
+        "explanation_text": {
+          "minLength": 1,
+          "title": "Explanation Text",
+          "type": "string"
+        },
+        "origin": {
+          "const": "gpt_generated",
+          "default": "gpt_generated",
+          "title": "Origin",
+          "type": "string"
+        },
+        "verification_status": {
+          "const": "unverified",
+          "default": "unverified",
+          "title": "Verification Status",
+          "type": "string"
+        },
+        "generated_at": {
+          "format": "date-time",
+          "title": "Generated At",
+          "type": "string"
+        },
+        "generator_id": {
+          "minLength": 1,
+          "title": "Generator Id",
+          "type": "string"
+        },
+        "learning_session_id": {
+          "minLength": 1,
+          "title": "Learning Session Id",
+          "type": "string"
+        },
+        "generation_context_digest": {
+          "pattern": "^sha256:[a-f0-9]{64}$",
+          "title": "Generation Context Digest",
+          "type": "string"
+        }
+      },
+      "required": [
+        "concept_id",
+        "explanation_text",
+        "generated_at",
+        "generator_id",
+        "learning_session_id",
+        "generation_context_digest"
+      ],
+      "title": "GeneratedExplanation",
+      "type": "object"
+    },
     "LearnerEvidence": {
       "additionalProperties": false,
       "properties": {
@@ -504,6 +759,30 @@
             "$ref": "#/$defs/OpenQuestion"
           },
           "title": "Open Questions",
+          "type": "array"
+        },
+        "assessment_attempts": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/AssessmentAttempt"
+          },
+          "title": "Assessment Attempts",
+          "type": "array"
+        },
+        "generated_explanations": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/GeneratedExplanation"
+          },
+          "title": "Generated Explanations",
+          "type": "array"
+        },
+        "conversation_explanations": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ConversationExplanation"
+          },
+          "title": "Conversation Explanations",
           "type": "array"
         }
       },

@@ -281,7 +281,7 @@ def render_learning_capture_markdown(
         f"medlearn_type: {_yaml('learning_capture')}",
         f"capture_id: {_yaml(capture_id)}",
         f"schema_version: {_yaml(capture.schema_version)}",
-        f"renderer_version: {_yaml('2.0.0')}",
+        f"renderer_version: {_yaml('2.1.0')}",
         f"approval_id: {_yaml(approval_id)}",
         f"proposal_id: {_yaml(proposal_id)}",
         f"captured_at: {_yaml(capture.captured_at.isoformat())}",
@@ -299,6 +299,49 @@ def render_learning_capture_markdown(
         if concept_id in concepts:
             return format_concept_label(concepts[concept_id])
         return "未收录概念"
+
+    def explanation(concept_id: str) -> tuple[str, str, str | None]:
+        """Resolve one visible explanation without blending provenance tiers."""
+        definition_claims = sorted(
+            (
+                claim
+                for claim in bundle.claims
+                if claim.claim_status == "active"
+                and claim.claim_type == "definition"
+                and concept_id in claim.concept_ids
+            ),
+            key=lambda claim: claim.claim_id,
+        )
+        for status, label in (
+            ("verified_reference", "已验证解释"),
+            ("source_backed", "已验证解释"),
+        ):
+            claim = next(
+                (item for item in definition_claims if item.verification_status == status), None
+            )
+            if claim is not None:
+                return label, claim.statement, None
+        concept = concepts.get(concept_id)
+        if concept is not None and any("\u4e00" <= char <= "\u9fff" for char in concept.scope_note):
+            return "目录范围说明", concept.scope_note, None
+        chat = next(
+            (item for item in capture.conversation_explanations if item.concept_id == concept_id),
+            None,
+        )
+        if chat is not None:
+            return "对话内解释", chat.explanation_text, "来自本次学习对话，未经外部核验。"
+        generated = next(
+            (item for item in capture.generated_explanations if item.concept_id == concept_id),
+            None,
+        )
+        if generated is not None:
+            return (
+                "GPT 生成解释",
+                generated.explanation_text,
+                "由 GPT 根据概念名称和当前学习上下文生成，未经教材或指南核验。",
+            )
+        return "暂无解释", "暂无解释", None
+
     evidence_labels = {
         "correct_independent": "独立答对",
         "correct_after_hint": "提示后答对",
@@ -345,8 +388,7 @@ def render_learning_capture_markdown(
     correction_lines: list[str] = []
     for misconception in capture.misconception_observations:
         names = (
-            "、".join(labels(concept_id) for concept_id in misconception.concept_ids)
-            or "相关概念"
+            "、".join(labels(concept_id) for concept_id in misconception.concept_ids) or "相关概念"
         )
         correction_lines.append(f"- {names}")
         if misconception.user_excerpt:
@@ -361,14 +403,52 @@ def render_learning_capture_markdown(
         else:
             correction_lines.append("  - 纠正：待验证")
     question_lines = [f"- {item.text}" for item in capture.open_questions]
-    concept_lines = [
-        f"- {labels(concept_id)}"
-        for concept_id in dict.fromkeys(
-            item.resolved_concept_id
-            for item in capture.concept_mentions
-            if item.resolved_concept_id in concepts
+    used_concept_ids = tuple(
+        dict.fromkeys(
+            concept_id
+            for concept_id in (
+                *(item.resolved_concept_id for item in capture.concept_mentions),
+                *(item.concept_id for item in capture.learner_evidence),
+                *(cid for item in capture.misconception_observations for cid in item.concept_ids),
+                *(cid for item in capture.open_questions for cid in item.concept_ids),
+                *(cid for item in capture.assessment_attempts for cid in item.concept_ids),
+                *(item.concept_id for item in capture.conversation_explanations),
+                *(item.concept_id for item in capture.generated_explanations),
+            )
+            if concept_id is not None
         )
-    ]
+    )
+    concept_lines: list[str] = []
+    for concept_id in used_concept_ids:
+        label, text, warning = explanation(concept_id)
+        marker = "〔GPT 生成，未核验〕" if label == "GPT 生成解释" else ""
+        concept_lines.extend([f"### [[{labels(concept_id)}]]：{text}{marker}", f"#### {label}"])
+        if warning:
+            concept_lines.extend([f"> 来源：{warning}", ""])
+
+    attempt_lines: list[str] = []
+    verdict_labels = {
+        "correct": "正确",
+        "partial": "部分正确",
+        "incorrect": "错误",
+        "unresolved": "未判定",
+    }
+    for attempt in capture.assessment_attempts:
+        attempt_lines.append(f"### 题目作答｜{attempt.attempt_id}")
+        attempt_lines.append(f"- 题干：{attempt.question_text or '题干未提供'}")
+        attempt_lines.append("- 选项：")
+        attempt_lines.extend(
+            [f"  - {option.label}. {option.text}" for option in attempt.options] or ["  - 未提供"]
+        )
+        attempt_lines.append(f"- 我的回答：{attempt.learner_answer}")
+        judged = attempt.assistant_judged_answer or "未提供"
+        attempt_lines.append(
+            f"- 当时判定：{verdict_labels[attempt.verdict]}（助手当时判定：{judged}）"
+        )
+        attempt_lines.append(f"- 对话解析：{attempt.assistant_explanation or '未提供'}")
+        linked = "、".join(f"[[{labels(cid)}]]" for cid in attempt.concept_ids) or "未关联"
+        attempt_lines.append(f"- 关联概念：{linked}")
+        attempt_lines.append("")
 
     def section(title: str, lines: list[str]) -> list[str]:
         return [f"## {title}", *(lines or ["- 无"])]
@@ -402,6 +482,8 @@ def render_learning_capture_markdown(
             ),
             "",
             *section("未解决问题", question_lines),
+            "",
+            *section("题目作答", attempt_lines),
             "",
             *section("本次涉及概念", concept_lines),
             "",
