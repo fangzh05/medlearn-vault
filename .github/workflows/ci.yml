@@ -82,7 +82,7 @@ jobs:
           $base = Join-Path $env:RUNNER_TEMP 'medlearn base A'
           $archive = Join-Path $env:RUNNER_TEMP 'medlearn-base.zip'
           $installRoot = Join-Path $env:RUNNER_TEMP "medlearn sync 用户"
-          $home = Join-Path $env:RUNNER_TEMP 'medlearn external state'
+          $stateHome = Join-Path $env:RUNNER_TEMP 'medlearn external state'
           git archive --format=zip HEAD -o $archive
           Expand-Archive -LiteralPath $archive -DestinationPath $base -Force
           (Get-Content -Raw "$base\pyproject.toml").Replace('0.16.1', '0.16.0') | Set-Content -NoNewline "$base\pyproject.toml"
@@ -90,14 +90,14 @@ jobs:
           python -m pip wheel --no-build-isolation --no-deps --wheel-dir wheelhouse $base
           $baseWheel = Get-ChildItem wheelhouse\medlearn_vault-0.16.0-*.whl | Select-Object -First 1
           if ($null -eq $baseWheel) { throw "base wheel not found" }
-          New-Item -ItemType Directory -Force $home | Out-Null
-          Set-Content -NoNewline (Join-Path $home 'config.json') 'sentinel-config'
-          Set-Content -NoNewline (Join-Path $home 'state.json') 'sentinel-state'
-          Set-Content -NoNewline (Join-Path $home 'credential.dpapi') 'sentinel-credential'
-          $sentinels = Get-ChildItem $home -File | Get-FileHash | ForEach-Object { "$($_.Path):$($_.Hash)" }
+          New-Item -ItemType Directory -Force $stateHome | Out-Null
+          Set-Content -NoNewline (Join-Path $stateHome 'config.json') 'sentinel-config'
+          Set-Content -NoNewline (Join-Path $stateHome 'state.json') 'sentinel-state'
+          Set-Content -NoNewline (Join-Path $stateHome 'credential.dpapi') 'sentinel-credential'
+          $sentinels = Get-ChildItem $stateHome -File | Get-FileHash | ForEach-Object { "$($_.Path):$($_.Hash)" }
           $installRoot = Join-Path $env:RUNNER_TEMP "medlearn sync 用户"
           $env:MEDLEARN_SYNC_INSTALL_ROOT = $installRoot
-          $env:MEDLEARN_HOME = $home
+          $env:MEDLEARN_HOME = $stateHome
           $previousPythonIoEncoding = $env:PYTHONIOENCODING
           $env:PYTHONIOENCODING = 'cp1252:strict'
           $stderrPath = Join-Path $env:RUNNER_TEMP 'medlearn-sync-installer.stderr'
@@ -123,7 +123,7 @@ jobs:
             & $installed doctor | Out-Null
             & (Join-Path $installRoot 'venv\Scripts\python.exe') -m pip check
             if (Get-ChildItem $installRoot -Directory -Filter '.venv-*' -ErrorAction SilentlyContinue) { throw 'installer leftovers found' }
-            $after = Get-ChildItem $home -File | Get-FileHash | ForEach-Object { "$($_.Path):$($_.Hash)" }
+            $after = Get-ChildItem $stateHome -File | Get-FileHash | ForEach-Object { "$($_.Path):$($_.Hash)" }
             if (Compare-Object $sentinels $after) { throw 'external state changed' }
             $rerunRaw = (& $bootstrap -Wheel $headWheel.FullName -InstallRoot $installRoot -Json 2> $stderrPath | Out-String).Trim()
             $rerun = $rerunRaw | ConvertFrom-Json
@@ -133,7 +133,7 @@ jobs:
             Remove-Item -LiteralPath $stderrPath -Force -ErrorAction SilentlyContinue
             Remove-Item -LiteralPath $base -Recurse -Force -ErrorAction SilentlyContinue
             Remove-Item -LiteralPath $archive -Force -ErrorAction SilentlyContinue
-            Remove-Item -LiteralPath $home -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $stateHome -Recurse -Force -ErrorAction SilentlyContinue
             if ($null -eq $previousPythonIoEncoding) {
               Remove-Item Env:PYTHONIOENCODING -ErrorAction SilentlyContinue
             } else {
