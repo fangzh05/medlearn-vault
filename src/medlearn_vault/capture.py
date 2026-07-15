@@ -33,6 +33,18 @@ from medlearn_vault.terminology import english_abbreviations, format_concept_lab
 WORKFLOW_VERSION: Literal["0.3.0"] = "0.3.0"
 LEGACY_LEARNING_CHAT_SOURCE_IDENTITY_VERSION = "medlearn.learning_chat_source.v1"
 LEARNING_CHAT_SOURCE_IDENTITY_VERSION = "medlearn.learning_chat_source.v2"
+SCOPED_EXTERNAL_ID_PATTERN = re.compile(r"^[a-z][a-z0-9_:-]{2,127}$")
+
+
+def _persistent_optional_scope_id(value: str | None) -> str | None:
+    """Drop display labels from optional persistent ID fields.
+
+    Capture context accepts human-readable course/chapter labels for ingestion,
+    while LearningCapture stores only machine-scoped external identifiers.
+    """
+    if value is None or SCOPED_EXTERNAL_ID_PATTERN.fullmatch(value) is None:
+        return None
+    return value
 MAX_EVIDENCE_MESSAGES = 200
 MAX_CANDIDATES_PER_KIND = 200
 MAX_EXCERPT_LENGTH = 1000
@@ -1242,8 +1254,8 @@ def build_capture_proposal(
         session_started_at=draft.context.session_started_at,
         captured_at=draft.context.captured_at,
         discipline_id=draft.context.discipline_id,
-        course_id=draft.context.course_id,
-        chapter_id=draft.context.chapter_id,
+        course_id=_persistent_optional_scope_id(draft.context.course_id),
+        chapter_id=_persistent_optional_scope_id(draft.context.chapter_id),
         concept_mentions=tuple(capture_mentions),
         learner_evidence=tuple(learner_evidence),
         misconception_observations=tuple(misconception_observations),
