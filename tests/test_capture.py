@@ -63,6 +63,19 @@ def test_capture_golden_is_deterministic_review_only_and_materializable() -> Non
     ).read_text(encoding="utf-8")
 
 
+def test_human_readable_optional_scope_labels_do_not_break_proposal() -> None:
+    bundle = ContractBundle.from_directory(Path("examples/copd"))
+    value = draft()
+    context = value.context.model_copy(
+        update={"course_id": "内科学", "chapter_id": "respiratory_system"}
+    )
+    proposal = build_capture_proposal(bundle, value.model_copy(update={"context": context}))
+
+    capture = proposal.learning_capture_candidate.capture
+    assert capture.course_id is None
+    assert capture.chapter_id == "respiratory_system"
+
+
 def test_forged_user_to_assistant_role_relabeling_is_rejected() -> None:
     payload = draft_payload()
     claim = payload["claim_candidates"][0]  # type: ignore[index]
