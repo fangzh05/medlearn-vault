@@ -1,0 +1,36 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "path": {
+      "title": "Path",
+      "type": "string"
+    },
+    "storage_key": {
+      "title": "Storage Key",
+      "type": "string"
+    },
+    "media_type": {
+      "default": "text/markdown; charset=utf-8",
+      "title": "Media Type",
+      "type": "string"
+    },
+    "content_digest": {
+      "pattern": "^sha256:[a-f0-9]{64}$",
+      "title": "Content Digest",
+      "type": "string"
+    },
+    "byte_length": {
+      "exclusiveMinimum": 0,
+      "title": "Byte Length",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "path",
+    "storage_key",
+    "content_digest",
+    "byte_length"
+  ],
+  "title": "PresentationArtifact",
+  "type": "object"
+}

@@ -1,0 +1,213 @@
+{
+  "$defs": {
+    "ManagedArtifact": {
+      "additionalProperties": false,
+      "properties": {
+        "content_digest": {
+          "title": "Content Digest",
+          "type": "string"
+        },
+        "media_type": {
+          "title": "Media Type",
+          "type": "string"
+        },
+        "byte_length": {
+          "exclusiveMinimum": 0,
+          "title": "Byte Length",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "content_digest",
+        "media_type",
+        "byte_length"
+      ],
+      "title": "ManagedArtifact",
+      "type": "object"
+    },
+    "ManifestArtifact": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "media_type": {
+          "title": "Media Type",
+          "type": "string"
+        },
+        "content_digest": {
+          "title": "Content Digest",
+          "type": "string"
+        },
+        "byte_length": {
+          "exclusiveMinimum": 0,
+          "title": "Byte Length",
+          "type": "integer"
+        },
+        "capture_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Capture Id"
+        },
+        "publication_plan_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Publication Plan Id"
+        },
+        "presentation_generation_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Presentation Generation Id"
+        },
+        "storage_key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Storage Key"
+        }
+      },
+      "required": [
+        "path",
+        "media_type",
+        "content_digest",
+        "byte_length"
+      ],
+      "title": "ManifestArtifact",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "state_version": {
+      "default": "0.2.0",
+      "enum": [
+        "0.1.0",
+        "0.2.0"
+      ],
+      "title": "State Version",
+      "type": "string"
+    },
+    "endpoint": {
+      "title": "Endpoint",
+      "type": "string"
+    },
+    "vault_path": {
+      "title": "Vault Path",
+      "type": "string"
+    },
+    "manifest_etag": {
+      "title": "Manifest Etag",
+      "type": "string"
+    },
+    "manifest_version": {
+      "default": "0.1.0",
+      "enum": [
+        "0.1.0",
+        "0.2.0"
+      ],
+      "title": "Manifest Version",
+      "type": "string"
+    },
+    "presentation_generation_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Presentation Generation Id"
+    },
+    "presentation_receipt_digest": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Presentation Receipt Digest"
+    },
+    "previous_generation_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Previous Generation Id"
+    },
+    "manifest_artifacts": {
+      "items": {
+        "$ref": "#/$defs/ManifestArtifact"
+      },
+      "title": "Manifest Artifacts",
+      "type": "array"
+    },
+    "managed_artifacts": {
+      "additionalProperties": {
+        "$ref": "#/$defs/ManagedArtifact"
+      },
+      "title": "Managed Artifacts",
+      "type": "object"
+    },
+    "unresolved_conflict_paths": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Unresolved Conflict Paths",
+      "type": "array"
+    },
+    "pending_cleanup_artifacts": {
+      "additionalProperties": {
+        "$ref": "#/$defs/ManagedArtifact"
+      },
+      "title": "Pending Cleanup Artifacts",
+      "type": "object"
+    }
+  },
+  "required": [
+    "endpoint",
+    "vault_path",
+    "manifest_etag",
+    "manifest_artifacts",
+    "managed_artifacts"
+  ],
+  "title": "SyncState",
+  "type": "object"
+}

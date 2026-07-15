@@ -33,6 +33,13 @@ ConceptType = Literal[
     "other",
 ]
 
+RelationType = Literal[
+    "subtype_of", "part_of", "associated_with", "may_cause", "may_be_complicated_by",
+    "has_manifestation", "investigated_by", "diagnosed_by", "differential_with",
+    "treated_by", "indicated_for", "contraindicated_with", "affects_anatomy",
+    "measured_by", "biomarker_for",
+]
+
 
 class ExternalIdentifiers(DomainModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -63,7 +70,7 @@ class ConceptRelation(DomainModel):
     schema_version: Literal["1.2.0"] = "1.2.0"
     relation_id: RelationId
     source_concept_id: ConceptId
-    relation_type: str = Field(min_length=1)
+    relation_type: RelationType
     target_concept_id: ConceptId
     supporting_claim_ids: tuple[ClaimId, ...] = ()
     confidence: float | None = Field(default=None, ge=0, le=1)

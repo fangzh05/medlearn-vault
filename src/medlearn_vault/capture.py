@@ -620,7 +620,13 @@ def concept_candidate_blocker(name: str) -> str | None:
         return "CONTEXT_DEPENDENT_CONCEPT"
     if any(token in value for token in ("、", "，", ",", "与")):
         return "COMPOSITE_CONCEPT_CANDIDATE"
-    if any(token in value for token in ("治疗", "处理", "目标", "边界", "分层", "诊断")):
+    contextual = (
+        "相关", "所致", "并发", "诊断金标准", "诊断标准", "诊断边界", "鉴别诊断", "典型分布",
+        "治疗原则", "形成机制", "作用机制", "发病机制", "病理机制", "临床意义", "为什么升高",
+        "提示什么", "考试陷阱", "治疗", "处理", "目标", "边界", "分层", "诊断", "评分", "分布",
+        "活动", "损害",
+    )
+    if any(token in value for token in contextual):
         return "LEARNING_TOPIC_NOT_CONCEPT"
     return None
 
