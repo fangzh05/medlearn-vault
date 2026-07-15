@@ -1005,6 +1005,36 @@ def test_r2_failure_is_sanitized_in_control_records() -> None:
     assert "COPD" not in job.model_dump_json()
 
 
+def test_failed_proposal_job_can_retry_after_transient_or_code_failure() -> None:
+    store = MemoryStore()
+    inputs, _ = seed_job(store, copd_envelope(), job_id="job-retry-failed")
+    probe_store = MemoryStore()
+    probe_inputs, _ = seed_job(probe_store, copd_envelope(), job_id="job-retry-probe")
+    expected = ProposalOrchestrator(probe_store, ROOT).run(
+        probe_inputs, bundle_path="examples/copd", workflow_run_id="run-probe", now=NOW
+    )
+    store.fail_create_once = f"v1/proposals/{expected.proposal_id}.json"
+    orchestrator = ProposalOrchestrator(store, ROOT)
+
+    with pytest.raises(WorkflowError, match="CONTROL_STORE_FAILURE"):
+        orchestrator.run(
+            inputs, bundle_path="examples/copd", workflow_run_id="run-failed", now=NOW
+        )
+
+    failed = JobRecord.model_validate_json(store.objects[f"v1/jobs/{inputs.job_id}.json"].body)
+    assert failed.status == "failed"
+    result = orchestrator.run(
+        inputs,
+        bundle_path="examples/copd",
+        workflow_run_id="run-retry",
+        now=NOW + timedelta(minutes=1),
+    )
+    assert result.status == "succeeded"
+    repaired = JobRecord.model_validate_json(store.objects[f"v1/jobs/{inputs.job_id}.json"].body)
+    assert repaired.status == "succeeded"
+    assert repaired.error_code is None
+
+
 def test_s3_adapter_uses_only_fixed_control_bucket_and_conditions() -> None:
     calls: list[dict[str, object]] = []
 
