@@ -45,6 +45,11 @@ from medlearn_vault.domain import (
 )
 from medlearn_vault.handoff import LearningSegment, MedLearnHandoff
 from medlearn_vault.identifiers import normalize_text
+from medlearn_vault.presentation_publisher import (
+    PresentationArtifact,
+    PresentationCurrentPointer,
+    PresentationGenerationReceipt,
+)
 from medlearn_vault.preview import (
     PreviewBuildError,
     PreviewRequest,
@@ -72,7 +77,7 @@ from medlearn_vault.sync_client import scheduled_pull as scheduled_pull_service
 from medlearn_vault.sync_client import (
     status as sync_status_service,
 )
-from medlearn_vault.sync_models import SyncError
+from medlearn_vault.sync_models import Manifest, SyncError, SyncState
 from medlearn_vault.windows_rollout import (
     install_schedule,
     install_windows,
@@ -143,6 +148,11 @@ CONTROL_SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "proposal_execution": ProposalExecutionRecord,
     "vault_publication_plan": VaultPublicationPlan,
     "vault_publication_receipt": VaultPublicationReceipt,
+    "presentation_artifact": PresentationArtifact,
+    "presentation_generation_receipt": PresentationGenerationReceipt,
+    "presentation_current_pointer": PresentationCurrentPointer,
+    "manifest_0_2": Manifest,
+    "sync_state_0_2": SyncState,
 }
 
 
@@ -832,10 +842,7 @@ def workflow_publish_vault(
     source_job_id: str,
 ) -> None:
     """Publish exact planned artifact bytes to medlearn-vault (create-only)."""
-    from medlearn_vault.vault_writer import (
-        S3VaultObjectStore,
-        VaultPublicationWriter,
-    )
+    from medlearn_vault.vault_writer import S3VaultObjectStore, VaultPublicationWriter
 
     try:
         control_store = S3ReadOnlyObjectStore(
@@ -864,6 +871,29 @@ def workflow_publish_vault(
         f"created_count={len(result.created_paths)} "
         f"reused_count={len(result.reused_paths)} "
         f"receipt_status={result.receipt_status}"
+    )
+
+
+@workflow_app.command("publish-presentation")
+def workflow_publish_presentation(bundle_path: str) -> None:
+    """Build one complete reader-facing snapshot and CAS-activate it."""
+    from medlearn_vault.presentation_publisher import PresentationPublisher, S3PresentationStore
+
+    try:
+        result = PresentationPublisher(
+            S3PresentationStore(
+                os.environ.get("VAULT_R2_ENDPOINT", ""),
+                os.environ.get("VAULT_R2_ACCESS_KEY_ID", ""),
+                os.environ.get("VAULT_R2_SECRET_ACCESS_KEY", ""),
+            ),
+            Path.cwd(),
+        ).run(bundle_path)
+    except WorkflowError as exc:
+        typer.echo(f"error_code={exc.code}", err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(
+        f"status=published presentation_generation_id={result.presentation_generation_id} "
+        f"artifact_count={len(result.artifacts)}"
     )
 
 

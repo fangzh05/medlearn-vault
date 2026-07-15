@@ -188,7 +188,8 @@ def validate_endpoint(endpoint: str) -> str:
         or not parsed.hostname
         or parsed.username
         or parsed.password
-        or port is None and ":" in parsed.netloc.rsplit("]", 1)[-1]
+        or port is None
+        and ":" in parsed.netloc.rsplit("]", 1)[-1]
         or parsed.query
         or parsed.fragment
         or parsed.path not in {"", "/"}
@@ -294,7 +295,13 @@ def _manifest(
             if state is None or exc.read() or exc.headers.get("ETag") != state.manifest_etag:
                 raise SyncError("SYNC_MANIFEST_PROTOCOL_ERROR") from exc
             return (
-                Manifest(manifest_version="0.1.0", artifacts=state.manifest_artifacts),
+                Manifest(
+                    manifest_version=state.manifest_version,
+                    presentation_generation_id=state.presentation_generation_id,
+                    presentation_receipt_digest=state.presentation_receipt_digest,
+                    previous_generation_id=state.previous_generation_id,
+                    artifacts=state.manifest_artifacts,
+                ),
                 state.manifest_etag,
                 "not_modified",
             )
@@ -343,11 +350,88 @@ def _manifest(
 def _check_rollback(previous: SyncState | None, manifest: Manifest) -> None:
     if previous is None:
         return
+    if previous.manifest_version == "0.2.0":
+        if manifest.manifest_version != "0.2.0":
+            raise SyncError("SYNC_PRESENTATION_ROLLBACK")
+        if (
+            manifest.presentation_generation_id == previous.presentation_generation_id
+            and manifest.presentation_receipt_digest == previous.presentation_receipt_digest
+        ):
+            return
+        if manifest.presentation_generation_id == previous.presentation_generation_id:
+            raise SyncError("SYNC_PRESENTATION_ROLLBACK")
+        if manifest.previous_generation_id != previous.presentation_generation_id:
+            raise SyncError("SYNC_PRESENTATION_ROLLBACK")
+        return
+    if manifest.manifest_version == "0.2.0":
+        # A legacy state has no presentation lineage.  Its first complete
+        # presentation generation is therefore a monotonic upgrade.
+        return
     now = {a.path: a for a in manifest.artifacts}
     for old in previous.manifest_artifacts:
         new = now.get(old.path)
+        if new is None and _legacy_path(old.path):
+            continue
         if new is None or new.model_dump() != old.model_dump():
             raise SyncError("SYNC_MANIFEST_ROLLBACK")
+
+
+def _legacy_path(path: str) -> bool:
+    return path.startswith(
+        ("MedLearn/Data/Captures/", "MedLearn/Captures/", "MedLearn/Views/Captures/")
+    )
+
+
+def _pending_cleanup(state: SyncState | None, manifest: Manifest) -> dict[str, ManagedArtifact]:
+    """Carry incomplete cleanup forward and add paths removed by this manifest."""
+    if state is None:
+        return {}
+    retained = {item.path for item in manifest.artifacts}
+    pending = {
+        path: managed
+        for path, managed in state.pending_cleanup_artifacts.items()
+        if path not in retained
+    }
+    pending.update(
+        {
+            path: managed
+            for path, managed in state.managed_artifacts.items()
+            if path not in retained
+        }
+    )
+    return dict(sorted(pending.items()))
+
+
+def _cleanup_obsolete(
+    root: Path, pending: dict[str, ManagedArtifact]
+) -> tuple[dict[str, ManagedArtifact], list[str]]:
+    """Best-effort cleanup after the new state is durable.
+
+    A failure intentionally leaves the state at the new generation with the
+    remaining candidates recorded.  The next pull checks each path again;
+    no old generation bytes are restored.
+    """
+    remaining: dict[str, ManagedArtifact] = {}
+    conflicts: list[str] = []
+    for path, managed in pending.items():
+        target = root.joinpath(*PurePosixPath(path).parts)
+        _validate_target_parent(root, target)
+        if not _path_exists(target):
+            continue
+        if _is_reparse(target) or not target.is_file():
+            remaining[path] = managed
+            conflicts.append(path)
+            continue
+        if not _managed_file_matches(target, managed):
+            remaining[path] = managed
+            conflicts.append(path)
+            continue
+        try:
+            target.unlink()
+        except OSError as exc:
+            remaining[path] = managed
+            raise SyncError("SYNC_LOCAL_WRITE_FAILURE") from exc
+    return remaining, conflicts
 
 
 def _target(root: Path, artifact: ManifestArtifact) -> Path:
@@ -389,6 +473,13 @@ def _file_matches(path: Path, artifact: ManifestArtifact) -> bool:
     return (
         length == artifact.byte_length and "sha256:" + digest.hexdigest() == artifact.content_digest
     )
+
+
+def _managed_file_matches(path: Path, managed: ManagedArtifact) -> bool:
+    if _is_reparse(path) or not path.is_file():
+        return False
+    body = path.read_bytes()
+    return len(body) == managed.byte_length and _digest(body) == managed.content_digest
 
 
 def _download(
@@ -452,6 +543,27 @@ def _atomic_create(root: Path, target: Path, body: bytes, artifact: ManifestArti
             return "unchanged" if _file_matches(target, artifact) else "conflict"
         except OSError as exc:
             raise SyncError("SYNC_LOCAL_WRITE_FAILURE") from exc
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _atomic_replace(root: Path, target: Path, body: bytes, artifact: ManifestArtifact) -> None:
+    _validate_target_parent(root, target)
+    fd, name = tempfile.mkstemp(
+        prefix=f".{target.name}.medlearn-", suffix=".tmp", dir=target.parent
+    )
+    temporary = Path(name)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(body)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if not _file_matches(temporary, artifact):
+            raise SyncError("SYNC_LOCAL_WRITE_FAILURE")
+        _validate_target_parent(root, target)
+        os.replace(temporary, target)
+    except OSError as exc:
+        raise SyncError("SYNC_LOCAL_WRITE_FAILURE") from exc
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -563,6 +675,7 @@ def pull(
         downloaded = unchanged = conflicts = would_download = total = 0
         conflict_paths: list[str] = []
         managed: dict[str, ManagedArtifact] = {}
+        pending: list[tuple[str, ManifestArtifact, Path]] = []
         for artifact in manifest.artifacts:
             target = _target(root, artifact)
             if _path_exists(target):
@@ -581,34 +694,57 @@ def pull(
                     )
                     continue
                 if target.is_file():
+                    previous = state.managed_artifacts.get(artifact.path) if state else None
+                    if (
+                        manifest.manifest_version == "0.2.0"
+                        and previous is not None
+                        and _managed_file_matches(target, previous)
+                    ):
+                        pending.append(("replace", artifact, target))
+                        would_download += 1
+                        continue
                     conflicts += 1
                     conflict_paths.append(artifact.path)
                     continue
                 raise SyncError("SYNC_LOCAL_PATH_UNSAFE")
             would_download += 1
-            if dry_run:
-                continue
-            result = _atomic_create(
-                root, target, _download(config, token, artifact, timeout, total), artifact
-            )
-            total += artifact.byte_length
-            if result == "downloaded":
-                downloaded += 1
-                managed[artifact.path] = ManagedArtifact(
-                    content_digest=artifact.content_digest,
-                    media_type=artifact.media_type,
-                    byte_length=artifact.byte_length,
-                )
-            elif result == "unchanged":
-                unchanged += 1
-                managed[artifact.path] = ManagedArtifact(
-                    content_digest=artifact.content_digest,
-                    media_type=artifact.media_type,
-                    byte_length=artifact.byte_length,
-                )
-            else:
-                conflicts += 1
-                conflict_paths.append(artifact.path)
+            pending.append(("create", artifact, target))
+        # Transaction boundary: every remote byte is verified before any visible write/deletion.
+        staged: list[tuple[str, ManifestArtifact, Path, bytes]] = []
+        if not dry_run:
+            for operation, artifact, target in pending:
+                body = _download(config, token, artifact, timeout, total)
+                total += artifact.byte_length
+                staged.append((operation, artifact, target, body))
+        if not dry_run:
+            for operation, artifact, target, body in staged:
+                if operation == "replace":
+                    _atomic_replace(root, target, body, artifact)
+                    downloaded += 1
+                    managed[artifact.path] = ManagedArtifact(
+                        content_digest=artifact.content_digest,
+                        media_type=artifact.media_type,
+                        byte_length=artifact.byte_length,
+                    )
+                    continue
+                result = _atomic_create(root, target, body, artifact)
+                if result == "downloaded":
+                    downloaded += 1
+                    managed[artifact.path] = ManagedArtifact(
+                        content_digest=artifact.content_digest,
+                        media_type=artifact.media_type,
+                        byte_length=artifact.byte_length,
+                    )
+                elif result == "unchanged":
+                    unchanged += 1
+                    managed[artifact.path] = ManagedArtifact(
+                        content_digest=artifact.content_digest,
+                        media_type=artifact.media_type,
+                        byte_length=artifact.byte_length,
+                    )
+                else:
+                    conflicts += 1
+                    conflict_paths.append(artifact.path)
         if dry_run:
             _atomic_json(
                 item.rollout,
@@ -620,16 +756,41 @@ def pull(
                 ),
             )
         else:
-            _atomic_json(
-                item.state,
-                SyncState(
-                    endpoint=config.endpoint,
-                    vault_path=config.vault_path,
-                    manifest_etag=etag,
-                    manifest_artifacts=manifest.artifacts,
-                    managed_artifacts=managed,
-                ),
+            pending_cleanup = _pending_cleanup(state, manifest)
+            committed_state = SyncState(
+                endpoint=config.endpoint,
+                vault_path=config.vault_path,
+                manifest_etag=etag,
+                manifest_version=manifest.manifest_version,
+                presentation_generation_id=manifest.presentation_generation_id,
+                presentation_receipt_digest=manifest.presentation_receipt_digest,
+                previous_generation_id=manifest.previous_generation_id,
+                manifest_artifacts=manifest.artifacts,
+                managed_artifacts=managed,
+                unresolved_conflict_paths=sorted(set(conflict_paths)),
+                pending_cleanup_artifacts=pending_cleanup,
             )
+            # This is the commit point.  Cleanup is deliberately afterwards:
+            # its failure leaves a usable B state whose pending paths can be
+            # retried from a 304 response without rolling back to A.
+            _atomic_json(item.state, committed_state)
+            remaining_cleanup, cleanup_conflicts = _cleanup_obsolete(root, pending_cleanup)
+            conflicts += len(cleanup_conflicts)
+            conflict_paths.extend(cleanup_conflicts)
+            if (
+                remaining_cleanup != pending_cleanup
+                or cleanup_conflicts
+                or committed_state.unresolved_conflict_paths != sorted(set(conflict_paths))
+            ):
+                _atomic_json(
+                    item.state,
+                    committed_state.model_copy(
+                        update={
+                            "unresolved_conflict_paths": sorted(set(conflict_paths)),
+                            "pending_cleanup_artifacts": remaining_cleanup,
+                        }
+                    ),
+                )
             _atomic_json(
                 item.rollout,
                 RolloutState(

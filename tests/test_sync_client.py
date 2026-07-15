@@ -11,7 +11,14 @@ from urllib.error import HTTPError, URLError
 import pytest
 
 from medlearn_vault import sync_client
-from medlearn_vault.sync_models import Manifest, ManifestArtifact, SyncError, SyncState
+from medlearn_vault.sync_models import (
+    ManagedArtifact,
+    Manifest,
+    ManifestArtifact,
+    RolloutState,
+    SyncError,
+    SyncState,
+)
 
 CAPTURE = "capture_" + "a" * 32
 PLAN = "publication_plan_" + "b" * 32
@@ -26,6 +33,62 @@ def artifact(path: str, media_type: str, body: bytes) -> ManifestArtifact:
         byte_length=len(body),
         capture_id=CAPTURE,
         publication_plan_id=PLAN,
+    )
+
+
+def presentation_artifact(path: str, body: bytes, generation: str) -> ManifestArtifact:
+    return ManifestArtifact(
+        path=path,
+        media_type="text/markdown; charset=utf-8",
+        content_digest="sha256:" + hashlib.sha256(body).hexdigest(),
+        byte_length=len(body),
+        presentation_generation_id=generation,
+    )
+
+
+def presentation_manifest(
+    generation: str, items: list[ManifestArtifact], previous: str | None = None
+) -> Manifest:
+    return Manifest(
+        manifest_version="0.2.0",
+        presentation_generation_id=generation,
+        presentation_receipt_digest="sha256:" + generation.removeprefix("presentation_") * 2,
+        previous_generation_id=previous,
+        artifacts=sorted(items, key=lambda item: item.path),
+    )
+
+
+def managed(item: ManifestArtifact) -> ManagedArtifact:
+    return ManagedArtifact(
+        content_digest=item.content_digest, media_type=item.media_type, byte_length=item.byte_length
+    )
+
+
+def seed_ready_state(
+    config: sync_client.SyncConfig, home: sync_client.SyncPaths, manifest: Manifest
+) -> None:
+    sync_client._atomic_json(
+        home.state,
+        SyncState(
+            endpoint=config.endpoint,
+            vault_path=config.vault_path,
+            manifest_etag=ETAG,
+            manifest_version=manifest.manifest_version,
+            presentation_generation_id=manifest.presentation_generation_id,
+            presentation_receipt_digest=manifest.presentation_receipt_digest,
+            previous_generation_id=manifest.previous_generation_id,
+            manifest_artifacts=manifest.artifacts,
+            managed_artifacts={item.path: managed(item) for item in manifest.artifacts},
+        ),
+    )
+    sync_client._atomic_json(
+        home.rollout,
+        RolloutState(
+            endpoint=config.endpoint,
+            vault_path=config.vault_path,
+            dry_run_succeeded=True,
+            first_pull_completed=True,
+        ),
     )
 
 
@@ -174,6 +237,286 @@ def test_dry_run_does_not_create_directories(
     assert not (root / "MedLearn").exists()
     assert not sync_client.paths().state.exists()
     assert sync_client.paths().lock.exists()
+
+
+@pytest.mark.parametrize("edited", [False, True])
+def test_reader_projection_migrates_only_untouched_legacy_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, edited: bool
+) -> None:
+    monkeypatch.setenv("MEDLEARN_HOME", str(tmp_path / "home"))
+    root = vault(tmp_path)
+    config = sync_client.configure("https://example.test", root)
+    legacy_body = b"# canonical\n"
+    legacy = artifact(
+        f"MedLearn/Captures/2026/07/{CAPTURE}.md", "text/markdown; charset=utf-8", legacy_body
+    )
+    legacy_target = root / legacy.path
+    legacy_target.parent.mkdir(parents=True)
+    legacy_target.write_bytes(b"local edit\n" if edited else legacy_body)
+    home = sync_client.paths()
+    sync_client._atomic_json(
+        home.state,
+        SyncState(
+            endpoint=config.endpoint,
+            vault_path=config.vault_path,
+            manifest_etag=ETAG,
+            manifest_version="0.1.0",
+            manifest_artifacts=[legacy],
+            managed_artifacts={
+                legacy.path: ManagedArtifact(
+                    content_digest=legacy.content_digest,
+                    media_type=legacy.media_type,
+                    byte_length=legacy.byte_length,
+                )
+            },
+        ),
+    )
+    sync_client._atomic_json(
+        home.rollout,
+        RolloutState(
+            endpoint=config.endpoint,
+            vault_path=config.vault_path,
+            dry_run_succeeded=True,
+            first_pull_completed=True,
+        ),
+    )
+    reader_body = "# 房室结\n".encode()
+    reader = ManifestArtifact(
+        path="MedLearn/概念/房室结.md",
+        media_type="text/markdown; charset=utf-8",
+        content_digest="sha256:" + hashlib.sha256(reader_body).hexdigest(),
+        byte_length=len(reader_body),
+        presentation_generation_id="presentation_" + "c" * 32,
+    )
+    manifest = Manifest(
+        manifest_version="0.2.0",
+        presentation_generation_id=reader.presentation_generation_id,
+        presentation_receipt_digest="sha256:" + "d" * 64,
+        artifacts=[reader],
+    )
+    monkeypatch.setattr(sync_client, "load_token", lambda _: "x" * 32)
+    monkeypatch.setattr(sync_client, "_manifest", lambda *_: (manifest, ETAG, "downloaded"))
+    monkeypatch.setattr(sync_client, "_download", lambda *_: reader_body)
+    result = sync_client.pull(p=home)
+    assert (root / reader.path).read_bytes() == reader_body
+    if edited:
+        assert legacy_target.read_bytes() == b"local edit\n"
+        assert result["conflict_paths"] == [legacy.path]
+    else:
+        assert not legacy_target.exists()
+
+
+def test_forward_transition_stages_before_writing_and_resumes_after_interruption(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed B download cannot change A; a partial install is reusable on retry."""
+    monkeypatch.setenv("MEDLEARN_HOME", str(tmp_path / "home"))
+    root = vault(tmp_path)
+    config = sync_client.configure("https://example.test", root)
+    home = sync_client.paths()
+    generation_a = "presentation_" + "a" * 32
+    generation_b = "presentation_" + "b" * 32
+    old_body, replace_body, create_body = b"# A\n", b"# B\n", b"# new\n"
+    old = presentation_artifact("MedLearn/概念/旧.md", old_body, generation_a)
+    replace = presentation_artifact("MedLearn/概念/旧.md", replace_body, generation_b)
+    create = presentation_artifact("MedLearn/概念/新.md", create_body, generation_b)
+    manifest_a = presentation_manifest(generation_a, [old])
+    manifest_b = presentation_manifest(generation_b, [replace, create], generation_a)
+    target = root / old.path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(old_body)
+    seed_ready_state(config, home, manifest_a)
+    monkeypatch.setattr(sync_client, "load_token", lambda _: "x" * 32)
+    monkeypatch.setattr(sync_client, "_manifest", lambda *_: (manifest_b, ETAG, "downloaded"))
+    calls = 0
+
+    def fail_second_download(*_: object) -> bytes:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return replace_body
+        raise SyncError("SYNC_NETWORK_FAILURE")
+
+    monkeypatch.setattr(sync_client, "_download", fail_second_download)
+    with pytest.raises(SyncError, match="SYNC_NETWORK_FAILURE"):
+        sync_client.pull(p=home)
+    assert target.read_bytes() == old_body
+    assert not (root / create.path).exists()
+    state_after_download_failure = sync_client.load_state(config, home, required=True)
+    assert state_after_download_failure.presentation_generation_id == generation_a
+
+    installed: list[str] = []
+
+    def download(*args: object) -> bytes:
+        item = args[2]
+        assert isinstance(item, ManifestArtifact)
+        installed.append(item.path)
+        return {replace.path: replace_body, create.path: create_body}[item.path]
+
+    monkeypatch.setattr(sync_client, "_download", download)
+    original_replace = sync_client._atomic_replace
+    interrupted = False
+
+    def replace_once(*args: object) -> None:
+        nonlocal interrupted
+        original_replace(*args)  # type: ignore[arg-type]
+        if not interrupted:
+            interrupted = True
+            raise SyncError("SYNC_LOCAL_WRITE_FAILURE")
+
+    monkeypatch.setattr(sync_client, "_atomic_replace", replace_once)
+    with pytest.raises(SyncError, match="SYNC_LOCAL_WRITE_FAILURE"):
+        sync_client.pull(p=home)
+    assert target.read_bytes() == replace_body
+    state_after_install_failure = sync_client.load_state(config, home, required=True)
+    assert state_after_install_failure.presentation_generation_id == generation_a
+    monkeypatch.setattr(sync_client, "_atomic_replace", original_replace)
+    installed.clear()
+    result = sync_client.pull(p=home)
+    assert result["unchanged_count"] == 2
+    assert installed == []
+    state_after_retry = sync_client.load_state(config, home, required=True)
+    assert state_after_retry.presentation_generation_id == generation_b
+
+
+def test_forward_state_commit_precedes_cleanup_and_preserves_all_local_conflicts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MEDLEARN_HOME", str(tmp_path / "home"))
+    root = vault(tmp_path)
+    config = sync_client.configure("https://example.test", root)
+    home = sync_client.paths()
+    generation_a = "presentation_" + "a" * 32
+    generation_b = "presentation_" + "b" * 32
+    same_body, old_body, new_body = b"# same\n", b"# old\n", b"# new\n"
+    edited_old, stale, stale_edited = b"# edited old\n", b"# stale\n", b"# stale edited\n"
+    same_a = presentation_artifact("MedLearn/概念/相同.md", same_body, generation_a)
+    old_a = presentation_artifact("MedLearn/概念/替换.md", old_body, generation_a)
+    edited_a = presentation_artifact("MedLearn/概念/保留.md", old_body, generation_a)
+    stale_a = presentation_artifact("MedLearn/概念/过期.md", stale, generation_a)
+    stale_edit_a = presentation_artifact("MedLearn/概念/过期已编辑.md", stale, generation_a)
+    manifest_a = presentation_manifest(
+        generation_a, [same_a, old_a, edited_a, stale_a, stale_edit_a]
+    )
+    same_b = presentation_artifact("MedLearn/概念/相同.md", same_body, generation_b)
+    replace_b = presentation_artifact("MedLearn/概念/替换.md", new_body, generation_b)
+    edited_b = presentation_artifact("MedLearn/概念/保留.md", new_body, generation_b)
+    create_b = presentation_artifact("MedLearn/概念/新增.md", new_body, generation_b)
+    collision_b = presentation_artifact("MedLearn/概念/碰撞.md", new_body, generation_b)
+    manifest_b = presentation_manifest(
+        generation_b, [collision_b, create_b, edited_b, replace_b, same_b], generation_a
+    )
+    for item, body in (
+        (same_a, same_body),
+        (old_a, old_body),
+        (edited_a, edited_old),
+        (stale_a, stale),
+        (stale_edit_a, stale_edited),
+    ):
+        target = root / item.path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(body)
+    collision_target = root / collision_b.path
+    collision_target.parent.mkdir(parents=True, exist_ok=True)
+    collision_target.write_bytes(b"# user collision\n")
+    seed_ready_state(config, home, manifest_a)
+    monkeypatch.setattr(sync_client, "load_token", lambda _: "x" * 32)
+    monkeypatch.setattr(sync_client, "_manifest", lambda *_: (manifest_b, ETAG, "downloaded"))
+    monkeypatch.setattr(
+        sync_client,
+        "_download",
+        lambda _, __, item, ___, ____: {
+            replace_b.path: new_body,
+            create_b.path: new_body,
+        }[item.path],
+    )
+    result = sync_client.pull(p=home)
+    assert (root / replace_b.path).read_bytes() == new_body
+    assert (root / same_b.path).read_bytes() == same_body
+    assert (root / create_b.path).read_bytes() == new_body
+    assert (root / edited_b.path).read_bytes() == edited_old
+    assert collision_target.read_bytes() == b"# user collision\n"
+    assert not (root / stale_a.path).exists()
+    assert (root / stale_edit_a.path).read_bytes() == stale_edited
+    assert result["conflict_paths"] == sorted([collision_b.path, edited_b.path, stale_edit_a.path])
+    state_b = sync_client.load_state(config, home, required=True)
+    assert state_b.presentation_generation_id == generation_b
+    assert set(state_b.managed_artifacts) == {same_b.path, replace_b.path, create_b.path}
+    assert state_b.unresolved_conflict_paths == result["conflict_paths"]
+    assert set(state_b.pending_cleanup_artifacts) == {stale_edit_a.path}
+
+    monkeypatch.setattr(sync_client, "_manifest", lambda *_: (manifest_b, ETAG, "not_modified"))
+    repeat = sync_client.pull(p=home)
+    assert repeat["downloaded_count"] == 0
+    assert (root / edited_b.path).read_bytes() == edited_old
+    assert collision_target.read_bytes() == b"# user collision\n"
+    with pytest.raises(SyncError, match="SYNC_PRESENTATION_ROLLBACK"):
+        sync_client._check_rollback(state_b, manifest_a)
+
+
+def test_state_write_and_cleanup_failures_leave_a_retryable_b_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MEDLEARN_HOME", str(tmp_path / "home"))
+    root = vault(tmp_path)
+    config = sync_client.configure("https://example.test", root)
+    home = sync_client.paths()
+    generation_a = "presentation_" + "a" * 32
+    generation_b = "presentation_" + "b" * 32
+    old_body, new_body = b"# A\n", b"# B\n"
+    old = presentation_artifact("MedLearn/概念/条目.md", old_body, generation_a)
+    stale = presentation_artifact("MedLearn/概念/旧条目.md", old_body, generation_a)
+    manifest_a = presentation_manifest(generation_a, [old, stale])
+    replacement = presentation_artifact("MedLearn/概念/条目.md", new_body, generation_b)
+    manifest_b = presentation_manifest(generation_b, [replacement], generation_a)
+    for item in (old, stale):
+        target = root / item.path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(old_body)
+    seed_ready_state(config, home, manifest_a)
+    monkeypatch.setattr(sync_client, "load_token", lambda _: "x" * 32)
+    monkeypatch.setattr(sync_client, "_manifest", lambda *_: (manifest_b, ETAG, "downloaded"))
+    monkeypatch.setattr(sync_client, "_download", lambda *_: new_body)
+    original_atomic_json = sync_client._atomic_json
+
+    def fail_b_state(path: Path, model: object) -> None:
+        if (
+            path == home.state
+            and isinstance(model, SyncState)
+            and model.presentation_generation_id == generation_b
+        ):
+            raise SyncError("SYNC_STATE_FAILURE")
+        original_atomic_json(path, model)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(sync_client, "_atomic_json", fail_b_state)
+    with pytest.raises(SyncError, match="SYNC_STATE_FAILURE"):
+        sync_client.pull(p=home)
+    assert (root / replacement.path).read_bytes() == new_body
+    assert (root / stale.path).read_bytes() == old_body
+    state_after_state_failure = sync_client.load_state(config, home, required=True)
+    assert state_after_state_failure.presentation_generation_id == generation_a
+    monkeypatch.setattr(sync_client, "_atomic_json", original_atomic_json)
+
+    original_cleanup = sync_client._cleanup_obsolete
+    cleanup_failed = False
+
+    def fail_cleanup(*args: object) -> tuple[dict[str, ManagedArtifact], list[str]]:
+        nonlocal cleanup_failed
+        if not cleanup_failed:
+            cleanup_failed = True
+            raise SyncError("SYNC_LOCAL_WRITE_FAILURE")
+        return original_cleanup(*args)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(sync_client, "_cleanup_obsolete", fail_cleanup)
+    with pytest.raises(SyncError, match="SYNC_LOCAL_WRITE_FAILURE"):
+        sync_client.pull(p=home)
+    state_after_cleanup_failure = sync_client.load_state(config, home, required=True)
+    assert state_after_cleanup_failure.presentation_generation_id == generation_b
+    assert (root / stale.path).read_bytes() == old_body
+    monkeypatch.setattr(sync_client, "_cleanup_obsolete", original_cleanup)
+    result = sync_client.pull(p=home)
+    assert result["downloaded_count"] == 0
+    assert not (root / stale.path).exists()
 
 
 def test_manifest_accepts_canonical_document_and_maps_network_failures(
