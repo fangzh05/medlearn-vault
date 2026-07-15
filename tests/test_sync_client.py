@@ -11,7 +11,14 @@ from urllib.error import HTTPError, URLError
 import pytest
 
 from medlearn_vault import sync_client
-from medlearn_vault.sync_models import Manifest, ManifestArtifact, SyncError, SyncState
+from medlearn_vault.sync_models import (
+    ManagedArtifact,
+    Manifest,
+    ManifestArtifact,
+    RolloutState,
+    SyncError,
+    SyncState,
+)
 
 CAPTURE = "capture_" + "a" * 32
 PLAN = "publication_plan_" + "b" * 32
@@ -174,6 +181,68 @@ def test_dry_run_does_not_create_directories(
     assert not (root / "MedLearn").exists()
     assert not sync_client.paths().state.exists()
     assert sync_client.paths().lock.exists()
+
+
+@pytest.mark.parametrize("edited", [False, True])
+def test_reader_projection_migrates_only_untouched_legacy_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, edited: bool
+) -> None:
+    monkeypatch.setenv("MEDLEARN_HOME", str(tmp_path / "home"))
+    root = vault(tmp_path)
+    config = sync_client.configure("https://example.test", root)
+    legacy_body = b"# canonical\n"
+    legacy = artifact(
+        f"MedLearn/Captures/2026/07/{CAPTURE}.md", "text/markdown; charset=utf-8", legacy_body
+    )
+    legacy_target = root / legacy.path
+    legacy_target.parent.mkdir(parents=True)
+    legacy_target.write_bytes(b"local edit\n" if edited else legacy_body)
+    home = sync_client.paths()
+    sync_client._atomic_json(
+        home.state,
+        SyncState(
+            endpoint=config.endpoint,
+            vault_path=config.vault_path,
+            manifest_etag=ETAG,
+            manifest_version="0.1.0",
+            manifest_artifacts=[legacy],
+            managed_artifacts={
+                legacy.path: ManagedArtifact(
+                    content_digest=legacy.content_digest,
+                    media_type=legacy.media_type,
+                    byte_length=legacy.byte_length,
+                )
+            },
+        ),
+    )
+    sync_client._atomic_json(
+        home.rollout,
+        RolloutState(
+            endpoint=config.endpoint,
+            vault_path=config.vault_path,
+            dry_run_succeeded=True,
+            first_pull_completed=True,
+        ),
+    )
+    reader_body = "# 房室结\n".encode()
+    reader = ManifestArtifact(
+        path="MedLearn/概念/房室结.md",
+        media_type="text/markdown; charset=utf-8",
+        content_digest="sha256:" + hashlib.sha256(reader_body).hexdigest(),
+        byte_length=len(reader_body),
+        presentation_generation_id="presentation_" + "c" * 32,
+    )
+    manifest = Manifest(manifest_version="0.2.0", artifacts=[reader])
+    monkeypatch.setattr(sync_client, "load_token", lambda _: "x" * 32)
+    monkeypatch.setattr(sync_client, "_manifest", lambda *_: (manifest, ETAG, "downloaded"))
+    monkeypatch.setattr(sync_client, "_download", lambda *_: reader_body)
+    result = sync_client.pull(p=home)
+    assert (root / reader.path).read_bytes() == reader_body
+    if edited:
+        assert legacy_target.read_bytes() == b"local edit\n"
+        assert result["conflict_paths"] == [legacy.path]
+    else:
+        assert not legacy_target.exists()
 
 
 def test_manifest_accepts_canonical_document_and_maps_network_failures(

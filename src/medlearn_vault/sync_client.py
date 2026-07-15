@@ -188,7 +188,8 @@ def validate_endpoint(endpoint: str) -> str:
         or not parsed.hostname
         or parsed.username
         or parsed.password
-        or port is None and ":" in parsed.netloc.rsplit("]", 1)[-1]
+        or port is None
+        and ":" in parsed.netloc.rsplit("]", 1)[-1]
         or parsed.query
         or parsed.fragment
         or parsed.path not in {"", "/"}
@@ -294,7 +295,9 @@ def _manifest(
             if state is None or exc.read() or exc.headers.get("ETag") != state.manifest_etag:
                 raise SyncError("SYNC_MANIFEST_PROTOCOL_ERROR") from exc
             return (
-                Manifest(manifest_version="0.1.0", artifacts=state.manifest_artifacts),
+                Manifest(
+                    manifest_version=state.manifest_version, artifacts=state.manifest_artifacts
+                ),
                 state.manifest_etag,
                 "not_modified",
             )
@@ -346,8 +349,48 @@ def _check_rollback(previous: SyncState | None, manifest: Manifest) -> None:
     now = {a.path: a for a in manifest.artifacts}
     for old in previous.manifest_artifacts:
         new = now.get(old.path)
+        if new is None and _legacy_path(old.path):
+            continue
         if new is None or new.model_dump() != old.model_dump():
             raise SyncError("SYNC_MANIFEST_ROLLBACK")
+
+
+def _legacy_path(path: str) -> bool:
+    return path.startswith(
+        ("MedLearn/Data/Captures/", "MedLearn/Captures/", "MedLearn/Views/Captures/")
+    )
+
+
+def _remove_untouched_legacy(root: Path, state: SyncState | None, manifest: Manifest) -> list[str]:
+    """Remove only previously managed, byte-identical legacy artifacts.
+
+    The state write remains the commit point; a later retry safely repeats a
+    deletion after an interrupted run, while a local edit is preserved.
+    """
+    if state is None:
+        return []
+    retained = {item.path for item in manifest.artifacts}
+    conflicts: list[str] = []
+    for path, managed in state.managed_artifacts.items():
+        if path in retained or not _legacy_path(path):
+            continue
+        target = root.joinpath(*PurePosixPath(path).parts)
+        _validate_target_parent(root, target)
+        if not _path_exists(target):
+            continue
+        if _is_reparse(target) or not target.is_file():
+            conflicts.append(path)
+            continue
+        body = target.read_bytes()
+        digest = hashlib.sha256(body).hexdigest()
+        if len(body) != managed.byte_length or "sha256:" + digest != managed.content_digest:
+            conflicts.append(path)
+            continue
+        try:
+            target.unlink()
+        except OSError as exc:
+            raise SyncError("SYNC_LOCAL_WRITE_FAILURE") from exc
+    return conflicts
 
 
 def _target(root: Path, artifact: ManifestArtifact) -> Path:
@@ -561,7 +604,10 @@ def pull(
         manifest, etag, manifest_status = _manifest(config, token, state, timeout)
         _check_rollback(state, manifest)
         downloaded = unchanged = conflicts = would_download = total = 0
-        conflict_paths: list[str] = []
+        conflict_paths: list[str] = (
+            _remove_untouched_legacy(root, state, manifest) if not dry_run else []
+        )
+        conflicts = len(conflict_paths)
         managed: dict[str, ManagedArtifact] = {}
         for artifact in manifest.artifacts:
             target = _target(root, artifact)
@@ -626,6 +672,7 @@ def pull(
                     endpoint=config.endpoint,
                     vault_path=config.vault_path,
                     manifest_etag=etag,
+                    manifest_version=manifest.manifest_version,
                     manifest_artifacts=manifest.artifacts,
                     managed_artifacts=managed,
                 ),

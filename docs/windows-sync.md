@@ -5,6 +5,15 @@ the authenticated Worker manifest under `MedLearn/` in one existing Obsidian Vau
 the whole Vault, uploads, deletes, bidirectionally syncs, force-overwrites, or changes `.obsidian`,
 attachments, plugins, themes, workspace state, iCloud metadata, or unrelated notes.
 
+### Reader-first graph migration (0.16.0)
+
+When the authenticated manifest switches to the reader-first projection, only Markdown under
+`MedLearn/学习记录/` and `MedLearn/概念/` is materialized. The legacy
+`MedLearn/Data/Captures/`, `MedLearn/Captures/`, and `MedLearn/Views/Captures/` paths are removed
+only when the exact file is still recorded as managed and its bytes match the saved digest. A local
+edit is never overwritten or deleted: it is preserved and returned in `conflict_paths`. The client
+does not touch `.obsidian` settings. See [Obsidian concept graph](obsidian-concept-graph.md).
+
 Back up the real Vault before first production use. Use a temporary Vault while learning this flow.
 iCloud is external to MedLearn: a successful pull means the local iCloud-backed Vault was written,
 not that iCloud has already delivered the file to an iPhone or iPad.

@@ -734,8 +734,9 @@ interface VaultReceipt {
 }
 
 interface ManifestArtifact extends VaultReceiptArtifact {
-  capture_id: string;
-  publication_plan_id: string;
+  capture_id?: string;
+  publication_plan_id?: string;
+  presentation_generation_id?: string;
 }
 
 interface VaultManifest {
@@ -743,12 +744,22 @@ interface VaultManifest {
   artifacts: ManifestArtifact[];
 }
 
+interface PresentationReceipt {
+  presentation_version: string;
+  presentation_generation_id: string;
+  artifacts: VaultReceiptArtifact[];
+}
+
 const RECEIPT_PREFIX = "v1/publications/";
+const PRESENTATION_PREFIX = "v1/presentations/";
 const DIGEST_RE = /^sha256:[a-f0-9]{64}$/;
 const PLAN_ID_RE = /^publication_plan_[a-f0-9]{32}$/;
 const CAPTURE_ID_RE = /^capture_[a-f0-9]{32}$/;
+const PRESENTATION_ID_RE = /^presentation_[a-f0-9]{32}$/;
 const RECEIPT_KEY_RE = /^v1\/publications\/(publication_plan_[a-f0-9]{32})\.json$/;
+const PRESENTATION_KEY_RE = /^v1\/presentations\/(presentation_[a-f0-9]{32})\.json$/;
 const RECEIPT_KEYS = ["receipt_version", "publication_plan_id", "publication_plan_object_digest", "capture_id", "artifacts"] as const;
+const PRESENTATION_KEYS = ["presentation_version", "presentation_generation_id", "artifacts"] as const;
 const ARTIFACT_KEYS = ["path", "media_type", "content_digest", "byte_length"] as const;
 
 function canonicalJsonBytes(obj: unknown): Uint8Array {
@@ -889,6 +900,89 @@ export function buildManifest(receipts: VaultReceipt[]): { manifest: VaultManife
   return { manifest: { manifest_version: "0.1.0", artifacts } };
 }
 
+/** Presentation receipts are rebuildable and intentionally supersede the
+ * legacy immutable publication layout in the user-facing manifest. */
+export function buildPresentationManifest(receipts: PresentationReceipt[]): { manifest: VaultManifest; error?: string } {
+  const seen = new Map<string, ManifestArtifact>();
+  for (const receipt of [...receipts].sort((a, b) => a.presentation_generation_id.localeCompare(b.presentation_generation_id))) {
+    if (receipt.presentation_version !== "1.0.0" || !PRESENTATION_ID_RE.test(receipt.presentation_generation_id)) {
+      return { manifest: { manifest_version: "0.2.0", artifacts: [] }, error: "INVALID_PRESENTATION_RECEIPT" };
+    }
+    for (const artifact of receipt.artifacts) {
+      if (
+        artifact.media_type !== "text/markdown; charset=utf-8" ||
+        !(artifact.path.startsWith("MedLearn/学习记录/") || artifact.path.startsWith("MedLearn/概念/")) ||
+        !artifact.path.endsWith(".md")
+      ) return { manifest: { manifest_version: "0.2.0", artifacts: [] }, error: "INVALID_PRESENTATION_RECEIPT" };
+      const existing = seen.get(artifact.path);
+      if (existing && (existing.content_digest !== artifact.content_digest || existing.byte_length !== artifact.byte_length)) {
+        return { manifest: { manifest_version: "0.2.0", artifacts: [] }, error: "VAULT_MANIFEST_CONFLICT" };
+      }
+      seen.set(artifact.path, { ...artifact, presentation_generation_id: receipt.presentation_generation_id });
+    }
+  }
+  return { manifest: { manifest_version: "0.2.0", artifacts: [...seen.values()].sort((a, b) => a.path.localeCompare(b.path)) } };
+}
+
+function validatePresentationReceipt(r: Record<string, unknown>): PresentationReceipt | null {
+  if (!hasExactKeys(r, PRESENTATION_KEYS) || r.presentation_version !== "1.0.0") return null;
+  if (typeof r.presentation_generation_id !== "string" || !PRESENTATION_ID_RE.test(r.presentation_generation_id)) return null;
+  if (!Array.isArray(r.artifacts) || r.artifacts.length === 0) return null;
+  const artifacts: VaultReceiptArtifact[] = [];
+  for (const artifact of r.artifacts) {
+    if (typeof artifact !== "object" || artifact === null || !hasExactKeys(artifact as Record<string, unknown>, ARTIFACT_KEYS)) return null;
+    const item = artifact as Record<string, unknown>;
+    if (
+      typeof item.path !== "string" ||
+      !item.path.startsWith("MedLearn/") ||
+      ( !item.path.startsWith("MedLearn/学习记录/") && !item.path.startsWith("MedLearn/概念/") ) ||
+      !item.path.endsWith(".md") || item.path.includes("\\") || item.path.includes("..") ||
+      item.media_type !== "text/markdown; charset=utf-8" ||
+      typeof item.content_digest !== "string" || !DIGEST_RE.test(item.content_digest) ||
+      typeof item.byte_length !== "number" || !Number.isInteger(item.byte_length) || item.byte_length < 1
+    ) return null;
+    artifacts.push(item as unknown as VaultReceiptArtifact);
+  }
+  return { presentation_version: "1.0.0", presentation_generation_id: r.presentation_generation_id, artifacts };
+}
+
+async function listAllPresentationReceipts(bucket: R2Bucket): Promise<{ receipts: PresentationReceipt[]; error?: string }> {
+  const receipts: PresentationReceipt[] = [];
+  let cursor: string | undefined;
+  do {
+    const result = await bucket.list({ prefix: PRESENTATION_PREFIX, cursor });
+    for (const obj of result.objects) {
+      const match = obj.key.match(PRESENTATION_KEY_RE);
+      if (!match) return { receipts: [], error: "INVALID_PRESENTATION_RECEIPT" };
+      const stored = await bucket.get(obj.key);
+      if (!stored || stored.httpMetadata?.contentType !== "application/json; charset=utf-8") return { receipts: [], error: "INVALID_PRESENTATION_RECEIPT" };
+      let body: Uint8Array;
+      let parsed: unknown;
+      try {
+        body = new Uint8Array(await stored.arrayBuffer());
+        parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(body));
+      } catch { return { receipts: [], error: "INVALID_PRESENTATION_RECEIPT" }; }
+      if (typeof parsed !== "object" || parsed === null) return { receipts: [], error: "INVALID_PRESENTATION_RECEIPT" };
+      const receipt = validatePresentationReceipt(parsed as Record<string, unknown>);
+      const canonical = canonicalJsonBytes(parsed);
+      if (!receipt || receipt.presentation_generation_id !== match[1] || body.length !== canonical.length || body.some((byte, index) => byte !== canonical[index])) {
+        return { receipts: [], error: "INVALID_PRESENTATION_RECEIPT" };
+      }
+      receipts.push(receipt);
+    }
+    cursor = result.truncated ? result.cursor : undefined;
+  } while (cursor);
+  return { receipts };
+}
+
+async function visibleManifest(bucket: R2Bucket): Promise<{ manifest: VaultManifest; error?: string }> {
+  const presentations = await listAllPresentationReceipts(bucket);
+  if (presentations.error) return { manifest: { manifest_version: "0.2.0", artifacts: [] }, error: presentations.error };
+  if (presentations.receipts.length) return buildPresentationManifest(presentations.receipts);
+  const legacy = await listAllReceipts(bucket);
+  return legacy.error ? { manifest: { manifest_version: "0.1.0", artifacts: [] }, error: legacy.error } : buildManifest(legacy.receipts);
+}
+
 function validateFilePath(path: string): string | null {
   if (!path || path.length === 0) return "INVALID_VAULT_PATH";
   if (path.length > 1024) return "INVALID_VAULT_PATH";
@@ -918,11 +1012,8 @@ async function routeVault(request: Request, env: Env, url: URL): Promise<Respons
 
   // GET /v1/vault/manifest
   if (request.method === "GET" && url.pathname === "/v1/vault/manifest") {
-    const { receipts, error } = await listAllReceipts(cfg.VAULT_BUCKET);
+    const { manifest, error } = await visibleManifest(cfg.VAULT_BUCKET);
     if (error) return secure(reply(503, { error }));
-
-    const { manifest, error: manifestError } = buildManifest(receipts);
-    if (manifestError) return secure(reply(503, { error: manifestError }));
 
     const bodyBytes = canonicalJsonBytes(manifest as unknown as Record<string, unknown>);
     const body = new TextDecoder().decode(bodyBytes);
@@ -961,11 +1052,8 @@ async function routeVault(request: Request, env: Env, url: URL): Promise<Respons
     if (pathError) return secure(reply(400, { error: pathError }));
 
     // Look up in manifest to confirm membership
-    const { receipts, error: listError } = await listAllReceipts(cfg.VAULT_BUCKET);
-    if (listError) return secure(reply(503, { error: listError }));
-
-    const { manifest, error: manifestError } = buildManifest(receipts);
-    if (manifestError) return secure(reply(503, { error: manifestError }));
+    const { manifest, error } = await visibleManifest(cfg.VAULT_BUCKET);
+    if (error) return secure(reply(503, { error }));
     const match = manifest.artifacts.find(a => a.path === rawPath);
     if (!match) return secure(reply(404, { error: "NOT_FOUND" }));
 
