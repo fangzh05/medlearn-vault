@@ -141,7 +141,8 @@ class Manifest(StrictModel):
                 and not PRESENTATION_RE.fullmatch(self.previous_generation_id)
             )
             or any(
-                item.presentation_generation_id != self.presentation_generation_id
+                item.presentation_generation_id is not None
+                and item.presentation_generation_id != self.presentation_generation_id
                 for item in self.artifacts
             )
         ):
