@@ -316,7 +316,14 @@ def preflight_learning_segment(payload: dict[str, Any]) -> LearningSegment:
     def group_roles(ids: object) -> set[str]:
         if not isinstance(ids, list):
             return set()
-        return {roles.get(item) for item in ids if roles.get(item) in {"user", "assistant"}}
+        grouped: set[str] = set()
+        for item in ids:
+            if not isinstance(item, str):
+                continue
+            role = roles.get(item)
+            if role in {"user", "assistant"}:
+                grouped.add(role)
+        return grouped
 
     def owned(ids: object, owner: str, collection: str, index: int, *, required: bool) -> list[str]:
         if not isinstance(ids, list):
