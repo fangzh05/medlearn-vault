@@ -368,13 +368,24 @@ def preflight_learning_segment(payload: dict[str, Any]) -> LearningSegment:
         question_roles = group_roles(record.get("question_local_ids"))
         if len(question_roles) > 1:
             raise SegmentPreflightError(
-                "assessment_attempts.question_local_ids", index, question_roles, "QUESTION_ROLE_AMBIGUOUS"
+                "assessment_attempts.question_local_ids",
+                index,
+                question_roles,
+                "QUESTION_ROLE_AMBIGUOUS",
             )
         record["learner_answer_local_ids"] = owned(
-            record.get("learner_answer_local_ids"), "user", "assessment_attempts", index, required=True
+            record.get("learner_answer_local_ids"),
+            "user",
+            "assessment_attempts",
+            index,
+            required=True,
         )
         record["feedback_local_ids"] = owned(
-            record.get("feedback_local_ids"), "assistant", "assessment_attempts", index, required=False
+            record.get("feedback_local_ids"),
+            "assistant",
+            "assessment_attempts",
+            index,
+            required=False,
         )
 
     local_ids = [item.get("local_id") for item in messages if isinstance(item, dict)]
