@@ -331,7 +331,9 @@ def _manifest(
         manifest = Manifest.model_validate_json(body)
         canonical = (
             json.dumps(
-                manifest.model_dump(mode="json"),
+                manifest.model_dump(
+                    mode="json", exclude_none=manifest.manifest_version == "0.2.0"
+                ),
                 ensure_ascii=False,
                 sort_keys=True,
                 separators=(",", ":"),
