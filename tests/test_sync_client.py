@@ -232,7 +232,12 @@ def test_reader_projection_migrates_only_untouched_legacy_files(
         byte_length=len(reader_body),
         presentation_generation_id="presentation_" + "c" * 32,
     )
-    manifest = Manifest(manifest_version="0.2.0", artifacts=[reader])
+    manifest = Manifest(
+        manifest_version="0.2.0",
+        presentation_generation_id=reader.presentation_generation_id,
+        presentation_receipt_digest="sha256:" + "d" * 64,
+        artifacts=[reader],
+    )
     monkeypatch.setattr(sync_client, "load_token", lambda _: "x" * 32)
     monkeypatch.setattr(sync_client, "_manifest", lambda *_: (manifest, ETAG, "downloaded"))
     monkeypatch.setattr(sync_client, "_download", lambda *_: reader_body)

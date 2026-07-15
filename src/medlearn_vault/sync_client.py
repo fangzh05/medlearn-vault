@@ -446,6 +446,13 @@ def _file_matches(path: Path, artifact: ManifestArtifact) -> bool:
     )
 
 
+def _managed_file_matches(path: Path, managed: ManagedArtifact) -> bool:
+    if _is_reparse(path) or not path.is_file():
+        return False
+    body = path.read_bytes()
+    return len(body) == managed.byte_length and _digest(body) == managed.content_digest
+
+
 def _download(
     config: SyncConfig, token: str, artifact: ManifestArtifact, timeout: float, total: int
 ) -> bytes:
@@ -507,6 +514,27 @@ def _atomic_create(root: Path, target: Path, body: bytes, artifact: ManifestArti
             return "unchanged" if _file_matches(target, artifact) else "conflict"
         except OSError as exc:
             raise SyncError("SYNC_LOCAL_WRITE_FAILURE") from exc
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _atomic_replace(root: Path, target: Path, body: bytes, artifact: ManifestArtifact) -> None:
+    _validate_target_parent(root, target)
+    fd, name = tempfile.mkstemp(
+        prefix=f".{target.name}.medlearn-", suffix=".tmp", dir=target.parent
+    )
+    temporary = Path(name)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(body)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if not _file_matches(temporary, artifact):
+            raise SyncError("SYNC_LOCAL_WRITE_FAILURE")
+        _validate_target_parent(root, target)
+        os.replace(temporary, target)
+    except OSError as exc:
+        raise SyncError("SYNC_LOCAL_WRITE_FAILURE") from exc
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -616,11 +644,9 @@ def pull(
         manifest, etag, manifest_status = _manifest(config, token, state, timeout)
         _check_rollback(state, manifest)
         downloaded = unchanged = conflicts = would_download = total = 0
-        conflict_paths: list[str] = (
-            _remove_untouched_legacy(root, state, manifest) if not dry_run else []
-        )
-        conflicts = len(conflict_paths)
+        conflict_paths: list[str] = []
         managed: dict[str, ManagedArtifact] = {}
+        pending: list[tuple[str, ManifestArtifact, Path]] = []
         for artifact in manifest.artifacts:
             target = _target(root, artifact)
             if _path_exists(target):
@@ -639,34 +665,61 @@ def pull(
                     )
                     continue
                 if target.is_file():
+                    previous = state.managed_artifacts.get(artifact.path) if state else None
+                    if (
+                        manifest.manifest_version == "0.2.0"
+                        and previous is not None
+                        and _managed_file_matches(target, previous)
+                    ):
+                        pending.append(("replace", artifact, target))
+                        would_download += 1
+                        continue
                     conflicts += 1
                     conflict_paths.append(artifact.path)
                     continue
                 raise SyncError("SYNC_LOCAL_PATH_UNSAFE")
             would_download += 1
-            if dry_run:
-                continue
-            result = _atomic_create(
-                root, target, _download(config, token, artifact, timeout, total), artifact
-            )
-            total += artifact.byte_length
-            if result == "downloaded":
-                downloaded += 1
-                managed[artifact.path] = ManagedArtifact(
-                    content_digest=artifact.content_digest,
-                    media_type=artifact.media_type,
-                    byte_length=artifact.byte_length,
-                )
-            elif result == "unchanged":
-                unchanged += 1
-                managed[artifact.path] = ManagedArtifact(
-                    content_digest=artifact.content_digest,
-                    media_type=artifact.media_type,
-                    byte_length=artifact.byte_length,
-                )
-            else:
-                conflicts += 1
-                conflict_paths.append(artifact.path)
+            pending.append(("create", artifact, target))
+        # Transaction boundary: every remote byte is verified before any visible write/deletion.
+        staged: list[tuple[str, ManifestArtifact, Path, bytes]] = []
+        if not dry_run:
+            for operation, artifact, target in pending:
+                body = _download(config, token, artifact, timeout, total)
+                total += artifact.byte_length
+                staged.append((operation, artifact, target, body))
+        if not dry_run:
+            for operation, artifact, target, body in staged:
+                if operation == "replace":
+                    _atomic_replace(root, target, body, artifact)
+                    downloaded += 1
+                    managed[artifact.path] = ManagedArtifact(
+                        content_digest=artifact.content_digest,
+                        media_type=artifact.media_type,
+                        byte_length=artifact.byte_length,
+                    )
+                    continue
+                result = _atomic_create(root, target, body, artifact)
+                if result == "downloaded":
+                    downloaded += 1
+                    managed[artifact.path] = ManagedArtifact(
+                        content_digest=artifact.content_digest,
+                        media_type=artifact.media_type,
+                        byte_length=artifact.byte_length,
+                    )
+                elif result == "unchanged":
+                    unchanged += 1
+                    managed[artifact.path] = ManagedArtifact(
+                        content_digest=artifact.content_digest,
+                        media_type=artifact.media_type,
+                        byte_length=artifact.byte_length,
+                    )
+                else:
+                    conflicts += 1
+                    conflict_paths.append(artifact.path)
+            # Deletes run only after every staged byte has been successfully installed.
+            legacy_conflicts = _remove_untouched_legacy(root, state, manifest)
+            conflicts += len(legacy_conflicts)
+            conflict_paths.extend(legacy_conflicts)
         if dry_run:
             _atomic_json(
                 item.rollout,
