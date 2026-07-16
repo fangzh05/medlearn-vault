@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import statistics
 import tempfile
 import uuid
@@ -124,6 +125,11 @@ def _atomic_write(path: Path, content: bytes) -> None:
         if temporary:
             temporary.unlink(missing_ok=True)
         raise PdfExtractionError("PDF_OUTPUT_WRITE_FAILED") from exc
+
+
+def _cleanup_tree(path: Path) -> None:
+    if path.exists():
+        shutil.rmtree(path, ignore_errors=True)
 
 
 def _output_dir(relative: Path, output_root: Path) -> Path:
@@ -263,12 +269,15 @@ def extract_pdf(
             for child in backup.iterdir():
                 child.unlink()
             backup.rmdir()
-    except OSError as exc:
-        if stage.exists():
-            for child in stage.iterdir():
-                child.unlink(missing_ok=True)
-            stage.rmdir()
-        raise PdfExtractionError("PDF_OUTPUT_WRITE_FAILED") from exc
+    except (PdfExtractionError, OSError):
+        _cleanup_tree(stage)
+        if backup.exists() and not destination.exists():
+            try:
+                os.replace(backup, destination)
+            except OSError:
+                pass
+        _cleanup_tree(backup)
+        raise
     return ExtractionResult(relative.as_posix(), report)
 
 

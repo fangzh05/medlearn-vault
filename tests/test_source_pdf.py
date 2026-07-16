@@ -6,6 +6,7 @@ import fitz  # type: ignore[import-untyped]
 import pytest
 from typer.testing import CliRunner
 
+import medlearn_vault.source_pdf as source_pdf
 from medlearn_vault.cli import app
 from medlearn_vault.source_pdf import PdfExtractionError, extract_input
 
@@ -88,3 +89,62 @@ def test_whitespace_only_page_is_empty(tmp_path: Path) -> None:
     extract_input(raw, output)
     record = json.loads((output / "book" / "pages.jsonl").read_text(encoding="utf-8"))
     assert record["text"] == "" and record["text_status"] == "empty"
+
+
+def test_staging_failure_cleans_and_force_preserves(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    raw, output = tmp_path / "raw", tmp_path / "generated"
+    raw.mkdir()
+    make_pdf(raw / "book.pdf", ["text"])
+    calls = 0
+    original = source_pdf._atomic_write
+
+    def fail_second(path: Path, content: bytes) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise PdfExtractionError("PDF_OUTPUT_WRITE_FAILED")
+        original(path, content)
+
+    monkeypatch.setattr(source_pdf, "_atomic_write", fail_second)
+    with pytest.raises(PdfExtractionError, match="PDF_OUTPUT_WRITE_FAILED"):
+        extract_input(raw, output, force=True)
+    assert not (output / "book").exists()
+    assert not list(output.glob(".medlearn-*")) if output.exists() else True
+
+    monkeypatch.setattr(source_pdf, "_atomic_write", original)
+    extract_input(raw, output)
+    before = {p.name: p.read_bytes() for p in (output / "book").iterdir()}
+    (output / "book" / "fulltext.txt").write_text("different\n", encoding="utf-8")
+    calls = 0
+    monkeypatch.setattr(source_pdf, "_atomic_write", fail_second)
+    with pytest.raises(PdfExtractionError, match="PDF_OUTPUT_WRITE_FAILED"):
+        extract_input(raw, output, force=True)
+    assert {p.name: p.read_bytes() for p in (output / "book").iterdir()} == before
+    assert not list(output.glob(".medlearn-*"))
+
+
+def test_commit_failure_restores_previous_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    raw, output = tmp_path / "raw", tmp_path / "generated"
+    raw.mkdir()
+    make_pdf(raw / "book.pdf", ["text"])
+    extract_input(raw, output)
+    before = {p.name: p.read_bytes() for p in (output / "book").iterdir()}
+    original_replace = source_pdf.os.replace
+    calls = 0
+
+    def fail_commit(source: str | Path, destination: str | Path) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("injected replace failure")
+        original_replace(source, destination)
+
+    monkeypatch.setattr(source_pdf.os, "replace", fail_commit)
+    with pytest.raises(PdfExtractionError, match="PDF_OUTPUT_WRITE_FAILED"):
+        extract_input(raw, output, force=True)
+    assert {p.name: p.read_bytes() for p in (output / "book").iterdir()} == before
+    assert not list(output.glob(".medlearn-*"))
