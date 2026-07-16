@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Literal, Protocol
@@ -22,7 +23,8 @@ class CompositionIssue:
 
 @dataclass(frozen=True)
 class CompositionContext:
-    source_job_id: str
+    source_job_id: str | None
+    source_record_id: str
     intake_digest: str
     discipline_id: str | None
     course_id: str | None
@@ -96,8 +98,20 @@ def _digest(raw: bytes) -> str:
     return "sha256:" + hashlib.sha256(raw).hexdigest()
 
 
+def _source_job_id(value: str | None) -> str | None:
+    if value is None:
+        return None
+    if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", value) is None:
+        raise ValueError("INVALID_SOURCE_JOB_ID")
+    return value
+
+
 def build_context(
-    raw: bytes, *, template: str, current_note: str | None = None
+    raw: bytes,
+    *,
+    template: str,
+    current_note: str | None = None,
+    source_job_id: str | None = None,
 ) -> CompositionContext:
     """Parse an IntakeEnvelope, Handoff, or LearningSegment without strict proposal resolution."""
     try:
@@ -113,7 +127,6 @@ def build_context(
         evidence = tuple(x.rationale for x in draft.learner_evidence_candidates)
         misconceptions = tuple(x.observed_error_logic for x in draft.misconception_candidates)
         questions = tuple(x.statement for x in draft.claim_candidates if x.claim_type == "question")
-        source_job_id = str(draft.context.session_id)
         discipline, course, chapter = (
             draft.context.discipline_id,
             draft.context.course_id,
@@ -136,13 +149,13 @@ def build_context(
         evidence = tuple(x.rationale for x in handoff.learner_evidence)
         misconceptions = tuple(x.observed_error_logic for x in handoff.misconceptions)
         questions = tuple(x.statement for x in handoff.unresolved_questions)
-        source_job_id = hashlib.sha256(handoff.session.title.encode("utf-8")).hexdigest()[:16]
         discipline, course, chapter = (
             handoff.session.discipline_id,
             handoff.session.course_id,
             handoff.session.chapter_id,
         )
-    if not content:
+    usable_content = bool(content or evidence or misconceptions or questions)
+    if not usable_content:
         raise ValueError("NO_USABLE_LEARNING_CONTENT")
     warnings: list[CompositionIssue] = []
     if not concepts:
@@ -169,9 +182,12 @@ def build_context(
             "warning", "STRICT_PROPOSAL_NOT_APPROVED", "preview does not approve publication"
         )
     )
-    target = validate_target_path(f"MedLearn/Inbox/{source_job_id}.md")
+    job_id = _source_job_id(source_job_id)
+    source_record_id = "preview_" + _digest(raw)[7:23]
+    target = validate_target_path(f"MedLearn/Inbox/{job_id or source_record_id}.md")
     return CompositionContext(
-        source_job_id,
+        job_id,
+        source_record_id,
         _digest(raw),
         discipline,
         course,

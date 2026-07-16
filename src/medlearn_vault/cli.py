@@ -210,6 +210,7 @@ def compose_preview_command(
     template: Annotated[Path, typer.Option("--template")],
     output: Annotated[Path, typer.Option("--output")],
     current_note: Annotated[Path | None, typer.Option("--current-note")] = None,
+    source_job_id: Annotated[str | None, typer.Option("--source-job-id")] = None,
     json_output: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
     """Write a deterministic local preview; this never writes Vault or R2."""
@@ -218,12 +219,13 @@ def compose_preview_command(
             intake.read_bytes(),
             template=template.read_text(encoding="utf-8"),
             current_note=(current_note.read_text(encoding="utf-8") if current_note else None),
+            source_job_id=source_job_id,
         )
         result = compose_preview(context)
+        output.write_text(result.markdown, encoding="utf-8", newline="\n")
     except (OSError, ValueError) as exc:
         _sync_output({"status": "error", "error_code": str(exc)}, json_output)
         raise typer.Exit(1) from exc
-    output.write_text(result.markdown, encoding="utf-8", newline="\n")
     payload: dict[str, object] = {
         "status": "composed",
         "target_path": result.target_path,

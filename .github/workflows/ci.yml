@@ -77,7 +77,7 @@ jobs:
       - name: Isolated Windows self-upgrade bootstrap acceptance
         shell: pwsh
         run: |
-          $headWheel = Get-ChildItem wheelhouse\medlearn_vault-0.16.1-*.whl | Select-Object -First 1
+          $headWheel = Get-ChildItem wheelhouse\medlearn_vault-0.17.0-*.whl | Select-Object -First 1
           if ($null -eq $headWheel) { throw "head wheel not found" }
           $base = Join-Path $env:RUNNER_TEMP 'medlearn base A'
           $archive = Join-Path $env:RUNNER_TEMP 'medlearn-base.zip'
@@ -85,8 +85,8 @@ jobs:
           $stateHome = Join-Path $env:RUNNER_TEMP 'medlearn external state'
           git archive --format=zip HEAD -o $archive
           Expand-Archive -LiteralPath $archive -DestinationPath $base -Force
-          (Get-Content -Raw "$base\pyproject.toml").Replace('0.16.1', '0.16.0') | Set-Content -NoNewline "$base\pyproject.toml"
-          (Get-Content -Raw "$base\src\medlearn_vault\__init__.py").Replace('0.16.1', '0.16.0') | Set-Content -NoNewline "$base\src\medlearn_vault\__init__.py"
+          (Get-Content -Raw "$base\pyproject.toml").Replace('0.17.0', '0.16.0') | Set-Content -NoNewline "$base\pyproject.toml"
+          (Get-Content -Raw "$base\src\medlearn_vault\__init__.py").Replace('0.17.0', '0.16.0') | Set-Content -NoNewline "$base\src\medlearn_vault\__init__.py"
           python -m pip wheel --no-build-isolation --no-deps --wheel-dir wheelhouse $base
           $baseWheel = Get-ChildItem wheelhouse\medlearn_vault-0.16.0-*.whl | Select-Object -First 1
           if ($null -eq $baseWheel) { throw "base wheel not found" }
@@ -118,7 +118,7 @@ jobs:
             if ($rawText.ToCharArray() | Where-Object { [int][char]$_ -gt 127 }) { throw "installer JSON output was not ASCII-safe" }
             if ((Get-Content -Raw $stderrPath -ErrorAction SilentlyContinue) -match 'Traceback') { throw "installer wrote a traceback to stderr" }
             $headVersion = (& $installed --version | Out-String).Trim()
-            if ($headVersion -ne '0.16.1') { throw 'head version mismatch' }
+          if ($headVersion -ne '0.17.0') { throw 'head version mismatch' }
             & $installed --help | Out-Null
             & $installed doctor | Out-Null
             & (Join-Path $installRoot 'venv\Scripts\python.exe') -m pip check
