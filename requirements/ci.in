@@ -4,5 +4,6 @@ mypy>=1.14
 pydantic>=2.10,<3
 pytest>=8.3
 PyYAML>=6,<7
+PyMuPDF>=1.26,<2
 ruff>=0.9
 typer>=0.15,<1

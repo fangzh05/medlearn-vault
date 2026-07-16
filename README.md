@@ -1,5 +1,9 @@
 # MedLearn Vault
 
+## Private native PDF source extraction
+
+An optional, local-only native-text extractor is available as `medlearn sources extract-pdf`; it preserves PDF page order in JSONL/TXT inspection outputs and does not perform OCR, indexing, or publication. See [native PDF extraction](docs/native-pdf-extraction.md). Private PDFs and generated text must not be committed.
+
 [中文](#中文说明) · [English](#english)
 
 ## 中文说明

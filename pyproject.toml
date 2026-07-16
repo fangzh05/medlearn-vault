@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "medlearn-vault"
-version = "0.17.1"
+version = "0.18.0"
 description = "Local-first contracts for a cross-disciplinary medical learning vault / 跨学科医学学习知识库的本地优先契约层"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -12,6 +12,7 @@ dependencies = ["boto3>=1.35,<2", "pydantic>=2.10,<3", "typer>=0.15,<1"]
 
 [project.optional-dependencies]
 dev = ["mypy>=1.14", "pytest>=8.3", "PyYAML>=6,<7", "ruff>=0.9"]
+pdf = ["PyMuPDF>=1.26,<2"]
 
 [project.scripts]
 medlearn = "medlearn_vault.cli:app"
