@@ -6,7 +6,6 @@ import fitz  # type: ignore[import-untyped]
 import pytest
 from typer.testing import CliRunner
 
-import medlearn_vault.source_pdf as source_pdf
 from medlearn_vault.cli import app
 from medlearn_vault.source_pdf import PdfExtractionError, extract_input
 
@@ -89,4 +88,3 @@ def test_whitespace_only_page_is_empty(tmp_path: Path) -> None:
     extract_input(raw, output)
     record = json.loads((output / "book" / "pages.jsonl").read_text(encoding="utf-8"))
     assert record["text"] == "" and record["text_status"] == "empty"
-
