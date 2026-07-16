@@ -11,6 +11,7 @@ from medlearn_vault.chunking import (
     SourceSpan,
     _paragraph_ranges,
     _split_block,
+    _transaction,
     chunk_input,
     validate_config,
 )
@@ -250,3 +251,112 @@ def test_indivisible_sentence_uses_hard_split() -> None:
     units = _split_block(block, 10)
     assert "".join(unit.text for unit in units) == text
     assert any(unit.split_reason == "HARD_SPLIT" for unit in units)
+
+
+def test_small_final_merges_backward_and_gap_prevents_merge(tmp_path: Path) -> None:
+    source(tmp_path / "in", [("a" * 180 + "\n\n" + "b" * 30, "included")])
+    chunk_input(tmp_path / "in", tmp_path / "merged", validate_config(200, 300, 0))
+    assert len(rows(tmp_path / "merged", "chunks.jsonl")) == 1
+    source(tmp_path / "gap", [("a" * 220, "included"), ("", "excluded"), ("b" * 30, "included")])
+    chunk_input(tmp_path / "gap", tmp_path / "retained", validate_config(200, 300, 0))
+    report = json.loads((tmp_path / "retained" / "book" / "chunking-report.json").read_text())
+    assert report["small_final_chunk_count"] == 1
+
+
+def test_duplicate_heading_body_control(tmp_path: Path) -> None:
+    source(tmp_path / "plain", [("第一章总论\n\n第一章总论\n\nbody", "included")])
+    chunk_input(tmp_path / "plain", tmp_path / "suppressed", validate_config(200, 300, 0))
+    assert len(rows(tmp_path / "suppressed", "sections.jsonl")) == 2
+    source(tmp_path / "body", [("第一章总论\nbody\n第一章总论\nmore", "included")])
+    chunk_input(tmp_path / "body", tmp_path / "retained", validate_config(200, 300, 0))
+    assert len(rows(tmp_path / "retained", "sections.jsonl")) == 3
+
+
+def test_transaction_idempotency_conflict_stale_and_force(tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    _transaction(out, {"a": b"one"}, False)
+    _transaction(out, {"a": b"one"}, False)
+    with pytest.raises(ChunkingError, match="CHUNKING_OUTPUT_CONFLICT"):
+        _transaction(out, {"a": b"two"}, False)
+    (out / "stale").write_bytes(b"stale")
+    with pytest.raises(ChunkingError, match="CHUNKING_OUTPUT_CONFLICT"):
+        _transaction(out, {"a": b"one"}, False)
+    _transaction(out, {"a": b"two"}, True)
+    assert {path.name for path in out.iterdir()} == {"a"}
+
+
+@pytest.mark.parametrize("failure", ["mkdir", "mkdtemp", "write", "fsync"])
+def test_transaction_staging_failures_are_sanitized(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    out = tmp_path / "parent" / "out"
+    if failure == "mkdir":
+        monkeypatch.setattr(Path, "mkdir", lambda *args, **kwargs: (_ for _ in ()).throw(OSError()))
+    elif failure == "mkdtemp":
+        import medlearn_vault.chunking as module
+
+        monkeypatch.setattr(
+            module.tempfile, "mkdtemp", lambda *args, **kwargs: (_ for _ in ()).throw(OSError())
+        )
+    elif failure == "write":
+        original = Path.open
+        monkeypatch.setattr(
+            Path,
+            "open",
+            lambda self, *args, **kwargs: (
+                (_ for _ in ()).throw(OSError())
+                if ".medlearn-stage-" in str(self)
+                else original(self, *args, **kwargs)
+            ),
+        )
+    else:
+        monkeypatch.setattr(os, "fsync", lambda _fd: (_ for _ in ()).throw(OSError()))
+    with pytest.raises(ChunkingError, match="CHUNKING_OUTPUT_WRITE_FAILED"):
+        _transaction(out, {"a": b"one"}, False)
+    assert not out.exists()
+
+
+def test_transaction_restore_failure_preserves_backup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "old").write_bytes(b"old")
+    original = os.replace
+    calls = 0
+
+    def fail_commit_and_restore(src: object, dst: object) -> None:
+        nonlocal calls
+        calls += 1
+        if calls >= 2:
+            raise OSError("injected")
+        original(src, dst)
+
+    monkeypatch.setattr(os, "replace", fail_commit_and_restore)
+    with pytest.raises(ChunkingError, match="CHUNKING_OUTPUT_WRITE_FAILED"):
+        _transaction(out, {"a": b"new"}, True)
+    backups = list(tmp_path.glob(".medlearn-backup-*"))
+    assert len(backups) == 1 and (backups[0] / "old").read_bytes() == b"old"
+    assert not list(tmp_path.glob(".medlearn-stage-*"))
+
+
+def test_transaction_backup_cleanup_failure_is_sanitized(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "old").write_bytes(b"old")
+    original = __import__("shutil").rmtree
+
+    def fail_backup(path: object, *args: object, **kwargs: object) -> None:
+        if ".medlearn-backup-" in str(path):
+            raise OSError("injected")
+        original(path, *args, **kwargs)
+
+    import medlearn_vault.chunking as module
+
+    monkeypatch.setattr(module.shutil, "rmtree", fail_backup)
+    with pytest.raises(ChunkingError, match="CHUNKING_OUTPUT_WRITE_FAILED"):
+        _transaction(out, {"a": b"new"}, True)
+    assert (out / "a").read_bytes() == b"new"
+    assert len(list(tmp_path.glob(".medlearn-backup-*"))) == 1

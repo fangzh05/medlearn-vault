@@ -344,6 +344,27 @@ def _heading(line: str, edge: bool, isolated: bool) -> tuple[int, str] | None:
     return None
 
 
+def _canonical_heading(value: str) -> str:
+    return re.sub(r"[ \t]+", " ", value.strip()).casefold()
+
+
+def _has_substantive_between(
+    first: dict[str, Any], second: dict[str, Any], records: list[dict[str, Any]]
+) -> bool:
+    fragments: list[str] = []
+    for page in range(first["page"], second["page"] + 1):
+        text = records[page - 1]["normalized_text"]
+        start = first["end"] if page == first["page"] else 0
+        end = second["start"] if page == second["page"] else len(text)
+        fragments.append(text[start:end])
+    between = "".join(fragments)
+    for line in between.splitlines():
+        value = line.strip()
+        if value and not re.fullmatch(r"(?:[-— ]*\d+[-— ]*|第\d+页|\d+\s*/\s*\d+)", value):
+            return True
+    return False
+
+
 def _transaction(out: Path, files: dict[str, bytes], force: bool) -> None:
     try:
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -463,6 +484,80 @@ def _validate_output(
         raise ChunkingError("CHUNKING_FAILED") from exc
 
 
+def _apply_small_final_policy(
+    chunks: list[dict[str, Any]],
+    records: list[dict[str, Any]],
+    identity: dict[str, Any],
+    config: Config,
+) -> int:
+    threshold = max(1, config.target_chars // 3)
+    retained = 0
+    index = len(chunks) - 1
+    while index >= 0:
+        chunk = chunks[index]
+        is_group_final = (
+            index == len(chunks) - 1 or chunks[index + 1]["section_id"] != chunk["section_id"]
+        )
+        if is_group_final and chunk["primary_char_count"] < threshold:
+            previous = chunks[index - 1] if index > 0 else None
+            if (
+                previous is not None
+                and previous["section_id"] == chunk["section_id"]
+                and previous["hard_boundary_group_id"] == chunk["hard_boundary_group_id"]
+                and previous["primary_char_count"] + chunk["primary_char_count"] <= config.max_chars
+            ):
+                primary = [
+                    segment
+                    for candidate in (previous, chunk)
+                    for segment in candidate["source_segments"]
+                    if not segment["is_overlap"]
+                ]
+                text_parts: list[str] = []
+                segments: list[dict[str, Any]] = []
+                cursor = 0
+                for segment in primary:
+                    value = records[segment["pdf_page_number"] - 1]["normalized_text"][
+                        segment["page_char_start"] : segment["page_char_end"]
+                    ]
+                    text_parts.append(value)
+                    segments.append(
+                        {
+                            **segment,
+                            "chunk_char_start": cursor,
+                            "chunk_char_end": cursor + len(value),
+                            "is_overlap": False,
+                        }
+                    )
+                    cursor += len(value)
+                text = "".join(text_parts)
+                previous.update(
+                    text=text,
+                    text_sha256=_digest(text),
+                    char_count=len(text),
+                    primary_char_count=len(text),
+                    overlap_char_count=0,
+                    source_segments=segments,
+                    end_pdf_page_number=segments[-1]["pdf_page_number"],
+                    split_reason=chunk["split_reason"],
+                )
+                chunks.pop(index)
+            else:
+                if "SMALL_FINAL_CHUNK" not in chunk["warning_codes"]:
+                    chunk["warning_codes"].append("SMALL_FINAL_CHUNK")
+                retained += 1
+        index -= 1
+    for chunk_index, chunk in enumerate(chunks):
+        chunk["chunk_index"] = chunk_index
+        chunk["chunk_id"] = (
+            "chunk_"
+            + hashlib.sha256(
+                f"{identity['source_sha256']}|1|{config}|{chunk_index}|{chunk['section_id']}|"
+                f"{chunk['text_sha256']}|{chunk['source_segments']}".encode()
+            ).hexdigest()[:24]
+        )
+    return retained
+
+
 def chunk_source(source: Path, output: Path, config: Config, force: bool = False) -> dict[str, Any]:
     records, norm_report, page_bytes, report_bytes = _load(source)
     identity = records[0]
@@ -488,7 +583,10 @@ def chunk_source(source: Path, output: Path, config: Config, force: bool = False
                         "page": row["pdf_page_number"],
                         "line": index,
                         "start": start,
+                        "end": start + len(line),
                         "title": line.strip(),
+                        "canonical_title": _canonical_heading(line),
+                        "edge_candidate": edge,
                         "level": detected[0],
                         "rule": detected[1],
                     }
@@ -498,9 +596,12 @@ def chunk_source(source: Path, output: Path, config: Config, force: bool = False
     for heading in headings:
         if (
             kept
-            and heading["title"].casefold() == kept[-1]["title"].casefold()
+            and heading["canonical_title"] == kept[-1]["canonical_title"]
             and heading["level"] == kept[-1]["level"]
             and heading["page"] - kept[-1]["page"] <= 1
+            and heading["edge_candidate"]
+            and kept[-1]["edge_candidate"]
+            and not _has_substantive_between(kept[-1], heading, records)
         ):
             duplicate += 1
             continue
@@ -650,6 +751,7 @@ def chunk_source(source: Path, output: Path, config: Config, force: bool = False
                 "source_segments": segments,
                 "split_reason": reason,
                 "warning_codes": [],
+                "hard_boundary_group_id": current[0].hard_boundary_group_id,
             }
         )
         if allow_overlap and config.overlap_chars:
@@ -711,6 +813,7 @@ def chunk_source(source: Path, output: Path, config: Config, force: bool = False
                 if unit.split_reason in {"HARD_SPLIT", "OVERSIZED_PARAGRAPH"}:
                     flush(unit.split_reason, allow_overlap=unit.split_reason != "HARD_SPLIT")
     flush("SOURCE_END")
+    small_final_count = _apply_small_final_policy(chunks, records, identity, config)
     warnings = []
     if not headings:
         warnings.append("NO_EXPLICIT_HEADINGS_DETECTED")
@@ -726,6 +829,8 @@ def chunk_source(source: Path, output: Path, config: Config, force: bool = False
         warnings.append("HARD_SPLIT_REQUIRED")
     if any(chunk["char_count"] < max(1, config.target_chars // 3) for chunk in chunks):
         warnings.append("LOW_TEXT_CHUNKS_PRESENT")
+    if small_final_count:
+        warnings.append("SMALL_FINAL_CHUNK")
     _validate_output(records, sections, chunks)
     section_bytes = b"".join(_json(s) for s in sections)
     chunk_bytes = b"".join(_json(c) for c in chunks)
@@ -764,7 +869,7 @@ def chunk_source(source: Path, output: Path, config: Config, force: bool = False
         "maximum_chunk_characters": max(counts, default=0),
         "median_chunk_characters": median(counts) if counts else 0,
         "hard_split_count": sum(c["split_reason"] == "HARD_SPLIT" for c in chunks),
-        "small_final_chunk_count": 0,
+        "small_final_chunk_count": small_final_count,
         "excluded_page_gap_count": sum(
             row["page_status"] == "excluded"
             and (index == 0 or records[index - 1]["page_status"] != "excluded")

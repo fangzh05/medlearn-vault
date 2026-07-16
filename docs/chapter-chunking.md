@@ -26,3 +26,11 @@ Chunks preserve normalized text and page-local half-open provenance spans.
 Excluded pages have no chunks and form hard boundaries. Empty pages remain in
 accounting. Reports contain counts and hashes only; CLI summaries do not expose
 source text or titles.
+
+A final primary chunk smaller than `max(1, target_chars // 3)` is merged into
+the previous chunk when the same section and excluded-page boundary permits it
+and the merged primary size remains within `max_chars`; otherwise it is retained
+with `SMALL_FINAL_CHUNK`. `LOW_TEXT_CHUNKS_PRESENT` is emitted when any final
+chunk is below the same deterministic threshold. Adjacent duplicate headings
+are suppressed only when canonical title and level match, both candidates are
+page-edge lines, and no substantive body text occurs between them.
