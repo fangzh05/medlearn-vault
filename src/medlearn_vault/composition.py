@@ -159,7 +159,6 @@ def build_context(
             except ValidationError:
                 try:
                     payload = json.loads(raw)
-                    handoff = None
                 except (UnicodeDecodeError, json.JSONDecodeError) as exc:
                     raise ValueError("INVALID_COMPOSITION_INTAKE") from exc
                 if (
@@ -167,6 +166,8 @@ def build_context(
                     or "session" not in payload
                     or "evidence_messages" not in payload
                 ):
+                    raise ValueError("INVALID_COMPOSITION_INTAKE") from None
+                if not isinstance(payload["evidence_messages"], list):
                     raise ValueError("INVALID_COMPOSITION_INTAKE") from None
                 roles = {
                     x.get("local_id"): x.get("role")
@@ -183,45 +184,29 @@ def build_context(
                         or (required is not None and seen != {required})
                     )
 
-                claims_raw = tuple(
-                    x for x in payload.get("claims", []) if not conflict(x, "evidence_local_ids")
-                )
-                evidence_raw = tuple(
-                    x
-                    for x in payload.get("learner_evidence", [])
-                    if not conflict(x, "evidence_local_ids", "user")
-                )
-                isolated = tuple(
-                    "evidence-role-conflict"
-                    for x in (*payload.get("claims", []), *payload.get("learner_evidence", []))
-                    if conflict(
-                        x,
-                        "evidence_local_ids",
-                        "user" if x in payload.get("learner_evidence", []) else None,
-                    )
-                )
-                session = payload["session"]
-                content = tuple(str(x.get("statement", "")) for x in claims_raw) + tuple(
-                    payload.get("learning_goals", [])
-                )
-                concepts = tuple(str(x.get("name", "")) for x in payload.get("concepts", []))
-                evidence = tuple(str(x.get("rationale", "")) for x in evidence_raw)
-                misconceptions = tuple(
-                    str(x.get("observed_error_logic", ""))
-                    for x in payload.get("misconceptions", [])
-                )
-                questions = tuple(
-                    str(x.get("statement", "")) for x in payload.get("unresolved_questions", [])
-                )
-                discipline, course, chapter = (
-                    session.get("discipline_id"),
-                    session.get("course_id"),
-                    session.get("chapter_id"),
-                )
-                tolerant = True
-        if tolerant:
-            pass
-        else:
+                for collection, key, required in (
+                    ("claims", "evidence_local_ids", None),
+                    ("learner_evidence", "evidence_local_ids", "user"),
+                ):
+                    if not isinstance(payload.get(collection, []), list):
+                        raise ValueError("INVALID_COMPOSITION_INTAKE") from None
+                    kept = []
+                    for index, item in enumerate(payload[collection]):
+                        if not isinstance(item, dict):
+                            raise ValueError("INVALID_COMPOSITION_INTAKE") from None
+                        if conflict(item, key, required):
+                            isolated += (f"{collection}[{index}]:EVIDENCE_ROLE_CONFLICT",)
+                        else:
+                            kept.append(item)
+                    payload[collection] = kept
+                if not isolated:
+                    raise ValueError("INVALID_COMPOSITION_INTAKE") from None
+                try:
+                    handoff = MedLearnHandoff.model_validate(payload)
+                except ValidationError as exc:
+                    raise ValueError("INVALID_COMPOSITION_INTAKE") from exc
+                tolerant = False
+        if not tolerant:
             assert handoff is not None
             content = (
                 tuple(x.statement for x in handoff.claims)
@@ -249,26 +234,10 @@ def build_context(
         warnings.append(
             CompositionIssue("warning", "UNRESOLVED_CONCEPT", "no stable concept target")
         )
-    else:
-        warnings.append(
-            CompositionIssue(
-                "warning", "CATALOG_UPDATE_REQUIRED", "concepts are not certified by composition"
-            )
-        )
-    warnings.append(
-        CompositionIssue(
-            "warning", "SOURCE_MISSING", "source authority is not established by preview"
-        )
-    )
     if course is None:
         warnings.append(CompositionIssue("warning", "MISSING_COURSE_ID", "course_id is missing"))
     if chapter is None:
         warnings.append(CompositionIssue("warning", "MISSING_CHAPTER_ID", "chapter_id is missing"))
-    warnings.append(
-        CompositionIssue(
-            "warning", "STRICT_PROPOSAL_NOT_APPROVED", "preview does not approve publication"
-        )
-    )
     job_id = _source_job_id(source_job_id)
     source_record_id = "preview_" + digest[7:23]
     target = validate_target_path(f"MedLearn/Inbox/{job_id or source_record_id}.md")

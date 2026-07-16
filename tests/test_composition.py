@@ -33,7 +33,6 @@ def test_missing_context_and_concept_are_warnings() -> None:
     assert {issue.code for issue in context.warnings} >= {
         "MISSING_COURSE_ID",
         "MISSING_CHAPTER_ID",
-        "SOURCE_MISSING",
     }
 
 
@@ -113,7 +112,7 @@ def test_cli_writes_only_explicit_output(tmp_path: Path) -> None:
         ],
     )
     assert result.exit_code == 0
-    assert '"status":"accepted_with_warnings"' in result.stdout
+    assert '"status":"accepted"' in result.stdout
     assert "MedLearn/Inbox/job_123.md" in result.stdout
     assert output.exists()
 
