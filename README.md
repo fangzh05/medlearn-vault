@@ -1,5 +1,13 @@
 # MedLearn Vault
 
+## Deterministic chapter-aware chunking
+
+`medlearn sources chunk --input-root <source-root> --output-root <output-root>`
+builds local `sections.jsonl`, `chunks.jsonl`, and a privacy-safe report from
+normalized pages only. It is deterministic, page-mapped, transaction-safe, and
+does not perform OCR, indexing, retrieval, embeddings, or cloud processing. See
+[chapter chunking](docs/chapter-chunking.md).
+
 ## Private native PDF source extraction
 
 An optional, local-only native-text extractor is available as `medlearn sources extract-pdf`; it preserves PDF page order in JSONL/TXT inspection outputs and does not perform OCR, indexing, or publication. See [native PDF extraction](docs/native-pdf-extraction.md). Private PDFs and generated text must not be committed.
