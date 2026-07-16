@@ -47,6 +47,7 @@ from medlearn_vault.domain import (
 )
 from medlearn_vault.handoff import LearningSegment, MedLearnHandoff
 from medlearn_vault.identifiers import normalize_text
+from medlearn_vault.normalization import NormalizationError, normalize_input
 from medlearn_vault.presentation_publisher import (
     PresentationArtifact,
     PresentationCurrentPointer,
@@ -205,6 +206,44 @@ def _sync_output(value: dict[str, object], json_output: bool) -> None:
 def _sync_error(exc: SyncError, json_output: bool) -> NoReturn:
     _sync_output({"status": "error", "error_code": exc.code}, json_output)
     raise typer.Exit(3 if exc.code == "SYNC_LOCAL_CONFLICT" else 1) from exc
+
+
+@sources_app.command("normalize")
+def normalize_command(
+    input_root: Annotated[Path, typer.Option("--input-root")],
+    output_root: Annotated[Path, typer.Option("--output-root")],
+    exclusions: Annotated[Path | None, typer.Option("--exclusions")] = None,
+    force: Annotated[bool, typer.Option("--force")] = False,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    try:
+        files, unknown_sources = normalize_input(input_root, output_root, exclusions, force)
+        failed = sum("error_code" in item for item in files)
+        batch_warnings = ["UNKNOWN_EXCLUSION_SOURCE"] if unknown_sources else []
+        payload = {
+            "discovered_count": len(files),
+            "succeeded_count": len(files) - failed,
+            "warning_count": sum(bool(x.get("warning_codes")) for x in files) + len(batch_warnings),
+            "failed_count": failed,
+            "warning_codes": batch_warnings,
+            "unknown_exclusion_source_count": len(unknown_sources),
+            "sources": files,
+        }
+        typer.echo(
+            json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            if json_output
+            else " ".join(f"{k}={v}" for k, v in payload.items() if k != "sources")
+        )
+        if failed:
+            raise typer.Exit(1)
+    except NormalizationError as exc:
+        typer.echo(
+            json.dumps({"error_code": exc.code}, separators=(",", ":"))
+            if json_output
+            else f"error_code={exc.code}",
+            err=not json_output,
+        )
+        raise typer.Exit(1) from exc
 
 
 @sources_app.command("extract-pdf")
