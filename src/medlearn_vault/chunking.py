@@ -417,9 +417,20 @@ def _validate_output(
     records: list[dict[str, Any]], sections: list[dict[str, Any]], chunks: list[dict[str, Any]]
 ) -> None:
     try:
+        if not sections:
+            raise ValueError
+        root = sections[0]
+        if (
+            root["parent_section_id"] is not None
+            or root["level"] != 0
+            or root["start_pdf_page_number"] != 1
+            or root["end_pdf_page_number"] != len(records)
+        ):
+            raise ValueError
         if [section["section_index"] for section in sections] != list(range(len(sections))):
             raise ValueError
         known: set[str] = set()
+        previous_heading: tuple[int, int] = (0, -1)
         for section in sections:
             if section["section_id"] in known or (
                 section["parent_section_id"] is not None
@@ -434,13 +445,42 @@ def _validate_output(
                 <= len(records)
             ):
                 raise ValueError
+            if section is root:
+                continue
+            heading_page = section["heading_pdf_page_number"]
+            heading_offset = section["heading_char_offset"]
+            if not isinstance(heading_offset, int) or not (
+                section["start_pdf_page_number"] <= heading_page <= section["end_pdf_page_number"]
+                and 0 <= heading_offset < len(records[heading_page - 1]["normalized_text"])
+                and (heading_page, heading_offset) >= previous_heading
+            ):
+                raise ValueError
+            parent = next(s for s in sections if s["section_id"] == section["parent_section_id"])
+            if not (
+                parent["start_pdf_page_number"] <= section["start_pdf_page_number"]
+                and section["end_pdf_page_number"] <= parent["end_pdf_page_number"]
+            ):
+                raise ValueError
+            previous_heading = (heading_page, heading_offset)
         if [chunk["chunk_index"] for chunk in chunks] != list(range(len(chunks))):
             raise ValueError
         seen_ids: set[str] = set()
         actual_primary: list[tuple[int, int, int]] = []
         primary_text: dict[int, list[tuple[int, int]]] = {}
         section_map = {section["section_id"]: section for section in sections}
-        seen_primary: set[tuple[int, int, int]] = set()
+        seen_primary: dict[tuple[str, int], list[tuple[int, int, int]]] = {}
+
+        def deepest_section(page: int, offset: int) -> str:
+            active = [root]
+            for candidate in sections[1:]:
+                position = (candidate["heading_pdf_page_number"], candidate["heading_char_offset"])
+                if position > (page, offset):
+                    break
+                while active[-1]["level"] >= candidate["level"]:
+                    active.pop()
+                active.append(candidate)
+            return str(active[-1]["section_id"])
+
         for chunk in chunks:
             if chunk["chunk_id"] in seen_ids or chunk["primary_char_count"] <= 0:
                 raise ValueError
@@ -463,7 +503,12 @@ def _validate_output(
                 raise ValueError
             if chunk["char_count"] != chunk["primary_char_count"] + chunk["overlap_char_count"]:
                 raise ValueError
+            group = chunk["hard_boundary_group_id"]
+            if not isinstance(group, int):
+                raise ValueError
             cursor = 0
+            primary_section: str | None = None
+            previous_page: int | None = None
             for segment in chunk["source_segments"]:
                 page = segment["pdf_page_number"]
                 if (
@@ -478,19 +523,37 @@ def _validate_output(
                     or cstart != cursor
                 ):
                     raise ValueError
+                segment_group = segment["hard_boundary_group_id"]
+                if not isinstance(segment_group, int) or segment_group != group:
+                    raise ValueError
+                if previous_page is not None and any(
+                    row["page_status"] == "excluded" for row in records[previous_page:page - 1]
+                ):
+                    raise ValueError
                 if records[page - 1]["normalized_text"][start:end] != chunk["text"][cstart:cend]:
                     raise ValueError
                 cursor = cend
+                applicable = deepest_section(page, start)
+                if deepest_section(page, end - 1) != applicable:
+                    raise ValueError
                 if not segment["is_overlap"]:
+                    if applicable != chunk["section_id"]:
+                        raise ValueError
+                    primary_section = applicable
                     actual_primary.append((page, start, end))
                     primary_text.setdefault(page, []).append((start, end))
-                    seen_primary.add((page, start, end))
+                    seen_primary.setdefault((applicable, group), []).append((page, start, end))
                 else:
+                    if applicable != chunk["section_id"] or primary_section is not None:
+                        raise ValueError
                     if not any(
                         page == old_page and start >= old_start and end <= old_end
-                        for old_page, old_start, old_end in seen_primary
+                        for old_page, old_start, old_end in seen_primary.get(
+                            (applicable, group), []
+                        )
                     ):
                         raise ValueError
+                previous_page = page
             if cursor != len(chunk["text"]):
                 raise ValueError
             pages = [segment["pdf_page_number"] for segment in chunk["source_segments"]]
@@ -664,6 +727,7 @@ def chunk_source(source: Path, output: Path, config: Config, force: bool = False
         "title_sha256": _digest(root_title),
         "heading_pdf_page_number": None,
         "heading_line_index": None,
+        "heading_char_offset": None,
         "detection_rule": "SYNTHETIC_ROOT",
         "start_pdf_page_number": 1,
         "end_pdf_page_number": len(records),
@@ -691,6 +755,7 @@ def chunk_source(source: Path, output: Path, config: Config, force: bool = False
             "title_sha256": _digest(h["title"]),
             "heading_pdf_page_number": h["page"],
             "heading_line_index": h["line"],
+            "heading_char_offset": h["start"],
             "detection_rule": h["rule"],
             "start_pdf_page_number": h["page"],
             "end_pdf_page_number": len(records),

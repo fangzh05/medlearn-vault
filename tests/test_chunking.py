@@ -1,5 +1,6 @@
 import json
 import os
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,7 @@ from medlearn_vault.chunking import (
     _paragraph_ranges,
     _split_block,
     _transaction,
+    _validate_output,
     chunk_input,
     validate_config,
 )
@@ -270,6 +272,132 @@ def test_duplicate_heading_body_control(tmp_path: Path) -> None:
     source(tmp_path / "body", [("第一章总论\nbody\n第一章总论\nmore", "included")])
     chunk_input(tmp_path / "body", tmp_path / "retained", validate_config(200, 300, 0))
     assert len(rows(tmp_path / "retained", "sections.jsonl")) == 3
+
+
+def test_heading_offsets_assign_preheading_body_and_deepest_section(tmp_path: Path) -> None:
+    text = "前言内容\n第一章总论\n章节正文\n第一节基础\n小节正文"
+    source(tmp_path / "in", [(text, "included")])
+    chunk_input(tmp_path / "in", tmp_path / "out", validate_config(200, 300, 0))
+    sections = rows(tmp_path / "out", "sections.jsonl")
+    chunks = rows(tmp_path / "out", "chunks.jsonl")
+    primary = "".join(
+        "".join(
+            segment_text(chunk, segment)
+            for segment in chunk["source_segments"]
+            if not segment["is_overlap"]
+        )
+        for chunk in chunks
+    )
+    assert primary == text
+    assert chunks[0]["section_id"] == sections[0]["section_id"]
+    assert any(chunk["section_id"] == sections[1]["section_id"] for chunk in chunks)
+    assert any(chunk["section_id"] == sections[2]["section_id"] for chunk in chunks)
+
+
+def segment_text(chunk: dict[str, object], segment: dict[str, object]) -> str:
+    return str(chunk["text"])[int(segment["chunk_char_start"]) : int(segment["chunk_char_end"])]
+
+
+@pytest.mark.parametrize(
+    "text,expected_sections",
+    [
+        ("前言\n第一章总论\n正文", 2),
+        ("第一章总论\n正文", 2),
+        ("第一章甲\n正文\n第二章乙\n正文", 3),
+        ("第一章甲\n正文\n第一节基础\n正文", 3),
+    ],
+)
+def test_heading_offsets_inside_one_paragraph(
+    tmp_path: Path, text: str, expected_sections: int
+) -> None:
+    source(tmp_path / "in", [(text, "included")])
+    chunk_input(tmp_path / "in", tmp_path / "out", validate_config(200, 300, 0))
+    assert len(rows(tmp_path / "out", "sections.jsonl")) == expected_sections
+
+
+def test_small_final_policy_per_hard_boundary_group(tmp_path: Path) -> None:
+    source(tmp_path / "same", [("a" * 180 + "\n\n" + "b" * 30, "included")])
+    chunk_input(tmp_path / "same", tmp_path / "same-out", validate_config(200, 300, 0))
+    assert len(rows(tmp_path / "same-out", "chunks.jsonl")) == 1
+    source(tmp_path / "gap", [("a" * 220, "included"), ("", "excluded"), ("b" * 30, "included")])
+    chunk_input(tmp_path / "gap", tmp_path / "gap-out", validate_config(200, 300, 0))
+    chunks = rows(tmp_path / "gap-out", "chunks.jsonl")
+    report = json.loads((tmp_path / "gap-out" / "book" / "chunking-report.json").read_text())
+    assert len(chunks) == 2 and report["small_final_chunk_count"] == 1
+    assert chunks[0]["hard_boundary_group_id"] != chunks[1]["hard_boundary_group_id"]
+
+
+def valid_output(
+    tmp_path: Path,
+) -> tuple[list[dict[str, object]], list[dict[str, object]], list[dict[str, object]]]:
+    source(
+        tmp_path / "in",
+        [("前言\n第一章总论\n" + "\n\n".join("正文" * 30 for _ in range(8)), "included")],
+    )
+    chunk_input(tmp_path / "in", tmp_path / "out", validate_config(200, 300, 80))
+    book = tmp_path / "out" / "book"
+    input_path = tmp_path / "in" / "book" / "normalized-pages.jsonl"
+    records = [json.loads(line) for line in input_path.read_text().splitlines()]
+    return records, rows(book.parent, "sections.jsonl"), rows(book.parent, "chunks.jsonl")
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "unknown-section", "invalid-path", "invalid-parent-chain", "bad-start-page",
+        "bad-end-page", "segment-group", "mixed-groups", "future-overlap",
+        "other-section-overlap", "root-instead-child",
+        "primary-crosses-heading", "heading-outside-range", "child-outside-parent",
+    ],
+    ids=lambda value: value,
+)
+def test_validator_rejects_each_structural_corruption(tmp_path: Path, mutation: str) -> None:
+    records, sections, chunks = valid_output(tmp_path)
+    records, sections, chunks = deepcopy((records, sections, chunks))
+    child = sections[1]
+    child_chunk = next(chunk for chunk in chunks if chunk["section_id"] == child["section_id"])
+    if mutation == "unknown-section":
+        child_chunk["section_id"] = "missing"
+    elif mutation == "invalid-path":
+        child_chunk["section_path"] = [child["section_id"]]
+    elif mutation == "invalid-parent-chain":
+        child_chunk["section_path"] = [
+            sections[0]["section_id"], sections[0]["section_id"], child["section_id"]
+        ]
+    elif mutation == "bad-start-page":
+        child_chunk["start_pdf_page_number"] = 2
+    elif mutation == "bad-end-page":
+        child_chunk["end_pdf_page_number"] = 2
+    elif mutation == "segment-group":
+        child_chunk["source_segments"][0]["hard_boundary_group_id"] = 99
+    elif mutation == "mixed-groups":
+        child_chunk["source_segments"][-1]["hard_boundary_group_id"] = 99
+    elif mutation == "future-overlap":
+        overlap = next(
+            segment
+            for chunk in chunks
+            for segment in chunk["source_segments"]
+            if segment["is_overlap"]
+        )
+        overlap["is_overlap"] = False
+    elif mutation == "other-section-overlap":
+        overlap_chunk = next(
+            chunk for chunk in chunks if any(s["is_overlap"] for s in chunk["source_segments"])
+        )
+        overlap_chunk["section_id"] = sections[0]["section_id"]
+        overlap_chunk["section_path"] = [sections[0]["section_id"]]
+    elif mutation == "root-instead-child":
+        child_chunk["section_id"] = sections[0]["section_id"]
+        child_chunk["section_path"] = [sections[0]["section_id"]]
+    elif mutation == "primary-crosses-heading":
+        segment = child_chunk["source_segments"][-1]
+        segment["page_char_start"] = 0
+    elif mutation == "heading-outside-range":
+        child["start_pdf_page_number"] = 2
+    else:
+        child["end_pdf_page_number"] = 2
+    with pytest.raises(ChunkingError, match="CHUNKING_FAILED"):
+        _validate_output(records, sections, chunks)
 
 
 def test_transaction_idempotency_conflict_stale_and_force(tmp_path: Path) -> None:
