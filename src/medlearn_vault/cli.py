@@ -66,6 +66,7 @@ from medlearn_vault.publication import (
     render_learning_capture_markdown,
 )
 from medlearn_vault.source_pdf import ExtractionResult, PdfExtractionError, extract_input
+from medlearn_vault.normalization import NormalizationError, normalize_one
 from medlearn_vault.sync_client import (
     configure as sync_configure_service,
 )
@@ -205,6 +206,67 @@ def _sync_output(value: dict[str, object], json_output: bool) -> None:
 def _sync_error(exc: SyncError, json_output: bool) -> NoReturn:
     _sync_output({"status": "error", "error_code": exc.code}, json_output)
     raise typer.Exit(3 if exc.code == "SYNC_LOCAL_CONFLICT" else 1) from exc
+
+
+@sources_app.command("normalize")
+def normalize_command(
+    input_root: Annotated[Path, typer.Option("--input-root")],
+    output_root: Annotated[Path, typer.Option("--output-root")],
+    exclusions: Annotated[Path | None, typer.Option("--exclusions")] = None,
+    force: Annotated[bool, typer.Option("--force")] = False,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    try:
+        ex = json.loads(exclusions.read_text(encoding="utf-8")) if exclusions else {"sources": []}
+        mapping = {
+            x["source_relative_path"]: x["excluded_pdf_pages"] for x in ex.get("sources", [])
+        }
+        dirs = sorted(
+            {
+                p.parent
+                for p in input_root.rglob("pages.jsonl")
+                if (p.parent / "report.json").exists()
+            }
+        )
+        if not dirs:
+            raise NormalizationError("NORMALIZATION_INPUT_INVALID")
+        files = []
+        failed = 0
+        for src in dirs:
+            try:
+                files.append(
+                    normalize_one(src, output_root / src.relative_to(input_root), mapping, force)
+                )
+            except NormalizationError as exc:
+                failed += 1
+                files.append(
+                    {
+                        "source_relative_path": src.relative_to(input_root).as_posix(),
+                        "error_code": exc.code,
+                    }
+                )
+        payload = {
+            "discovered_count": len(dirs),
+            "succeeded_count": len(dirs) - failed,
+            "warning_count": sum(bool(x.get("warning_codes")) for x in files),
+            "failed_count": failed,
+            "sources": files,
+        }
+        typer.echo(
+            json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            if json_output
+            else " ".join(f"{k}={v}" for k, v in payload.items() if k != "sources")
+        )
+        if failed:
+            raise typer.Exit(1)
+    except NormalizationError as exc:
+        typer.echo(
+            json.dumps({"error_code": exc.code}, separators=(",", ":"))
+            if json_output
+            else f"error_code={exc.code}",
+            err=not json_output,
+        )
+        raise typer.Exit(1) from exc
 
 
 @sources_app.command("extract-pdf")
