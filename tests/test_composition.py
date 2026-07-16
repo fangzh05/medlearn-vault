@@ -11,6 +11,7 @@ from medlearn_vault.composition import (
     compose_preview,
     validate_target_path,
 )
+from medlearn_vault.handoff import LearningSegment, MedLearnHandoff
 
 FIXTURE = Path("examples/intake/manual-copd.json")
 HANDOFF = Path("examples/intake/project-handoff-synthetic.json")
@@ -33,7 +34,6 @@ def test_missing_context_and_concept_are_warnings() -> None:
     assert {issue.code for issue in context.warnings} >= {
         "MISSING_COURSE_ID",
         "MISSING_CHAPTER_ID",
-        "SOURCE_MISSING",
     }
 
 
@@ -113,7 +113,7 @@ def test_cli_writes_only_explicit_output(tmp_path: Path) -> None:
         ],
     )
     assert result.exit_code == 0
-    assert '"status":"composed"' in result.stdout
+    assert '"status":"accepted"' in result.stdout
     assert "MedLearn/Inbox/job_123.md" in result.stdout
     assert output.exists()
 
@@ -135,5 +135,42 @@ def test_cli_output_write_error_is_sanitized(tmp_path: Path) -> None:
         ],
     )
     assert result.exit_code == 1
-    assert "status=error" in result.stdout
+    assert "status=rejected error_code=COMPOSITION_OUTPUT_WRITE_FAILED" in result.stdout
     assert "Traceback" not in result.stdout
+
+
+def test_cli_digest_mismatch_is_rejected(tmp_path: Path) -> None:
+    template = tmp_path / "template.md"
+    template.write_text("# Template\n", encoding="utf-8")
+    result = CliRunner().invoke(
+        app,
+        [
+            "compose",
+            "preview",
+            "--intake",
+            str(FIXTURE),
+            "--template",
+            str(template),
+            "--output",
+            str(tmp_path / "out.md"),
+            "--expected-intake-digest",
+            "sha256:" + "0" * 64,
+        ],
+    )
+    assert result.exit_code == 1
+    assert "COMPOSITION_INPUT_DIGEST_MISMATCH" in result.stdout
+
+
+def test_learning_segment_uses_nested_strict_handoff() -> None:
+    handoff = MedLearnHandoff.model_validate_json(HANDOFF.read_bytes())
+    segment = LearningSegment(
+        learning_session_id="composition_segment_1",
+        segment_index=0,
+        first_evidence_marker=handoff.evidence_messages[0].local_id,
+        last_evidence_marker=handoff.evidence_messages[-1].local_id,
+        segment_message_count=len(handoff.evidence_messages),
+        coverage_status="complete",
+        handoff=handoff,
+    )
+    context = build_context(segment.model_dump_json().encode(), template="")
+    assert compose_preview(context).markdown

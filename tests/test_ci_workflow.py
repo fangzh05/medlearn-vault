@@ -37,7 +37,7 @@ def test_ci_workflow_is_pinned_reproducible_and_secret_free() -> None:
         "tests/test_windows_rollout.py"
     )
     assert targeted in windows_commands
-    assert "Get-ChildItem wheelhouse\\medlearn_vault-0.17.0-*.whl" in windows_commands
+    assert "Get-ChildItem wheelhouse\\medlearn_vault-0.17.1-*.whl" in windows_commands
     assert "$installed --version" in windows_commands
     assert "Isolated Windows self-upgrade bootstrap acceptance" in text
     assert "SYNC_INSTALL_SELF_UPGRADE_REQUIRES_BOOTSTRAP" in windows_commands

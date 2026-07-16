@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from dataclasses import dataclass
 from pathlib import PurePosixPath
@@ -34,6 +35,7 @@ class CompositionContext:
     learner_evidence: tuple[str, ...]
     misconceptions: tuple[str, ...]
     unresolved_questions: tuple[str, ...]
+    isolated_items: tuple[str, ...]
     warnings: tuple[CompositionIssue, ...]
     proposed_target_path: str
     template: str
@@ -45,6 +47,15 @@ class CompositionResult:
     markdown: str
     target_path: str
     warnings: tuple[CompositionIssue, ...]
+    isolated_items: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class CompositionValidationResult:
+    status: Literal["accepted", "accepted_with_warnings", "rejected"]
+    blockers: tuple[CompositionIssue, ...] = ()
+    warnings: tuple[CompositionIssue, ...] = ()
+    isolated_items: tuple[str, ...] = ()
 
 
 class NoteComposer(Protocol):
@@ -86,6 +97,7 @@ def validate_target_path(value: str) -> str:
     if (
         path.is_absolute()
         or "\\" in value
+        or "\0" in value
         or ".." in path.parts
         or not value.startswith("MedLearn/")
         or path.suffix != ".md"
@@ -112,8 +124,13 @@ def build_context(
     template: str,
     current_note: str | None = None,
     source_job_id: str | None = None,
+    expected_intake_digest: str | None = None,
 ) -> CompositionContext:
     """Parse an IntakeEnvelope, Handoff, or LearningSegment without strict proposal resolution."""
+    digest = _digest(raw)
+    if expected_intake_digest is not None and expected_intake_digest != digest:
+        raise ValueError("COMPOSITION_INPUT_DIGEST_MISMATCH")
+    isolated: tuple[str, ...] = ()
     try:
         envelope = IntakeEnvelope.model_validate_json(raw)
     except ValidationError:
@@ -133,62 +150,107 @@ def build_context(
             draft.context.chapter_id,
         )
     else:
+        tolerant = False
         try:
             handoff = MedLearnHandoff.model_validate_json(raw)
         except ValidationError:
             try:
                 handoff = LearningSegment.model_validate_json(raw).handoff
-            except ValidationError as exc:
-                raise ValueError("INVALID_COMPOSITION_INTAKE") from exc
-        content = (
-            tuple(x.statement for x in handoff.claims)
-            + tuple(x.explanation_text for x in handoff.generated_explanations)
-            + tuple(handoff.learning_goals)
-        )
-        concepts = tuple(x.name for x in handoff.concepts)
-        evidence = tuple(x.rationale for x in handoff.learner_evidence)
-        misconceptions = tuple(x.observed_error_logic for x in handoff.misconceptions)
-        questions = tuple(x.statement for x in handoff.unresolved_questions)
-        discipline, course, chapter = (
-            handoff.session.discipline_id,
-            handoff.session.course_id,
-            handoff.session.chapter_id,
-        )
+            except ValidationError:
+                try:
+                    payload = json.loads(raw)
+                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                    raise ValueError("INVALID_COMPOSITION_INTAKE") from exc
+                segment_input = isinstance(payload, dict) and "handoff" in payload
+                handoff_payload = payload.get("handoff") if segment_input else payload
+                if (
+                    not isinstance(handoff_payload, dict)
+                    or "session" not in handoff_payload
+                    or "evidence_messages" not in handoff_payload
+                ):
+                    raise ValueError("INVALID_COMPOSITION_INTAKE") from None
+                if not isinstance(handoff_payload["evidence_messages"], list):
+                    raise ValueError("INVALID_COMPOSITION_INTAKE") from None
+                roles = {
+                    x.get("local_id"): x.get("role")
+                    for x in handoff_payload.get("evidence_messages", [])
+                    if isinstance(x, dict)
+                }
+
+                def conflict(item: object, key: str, required: str | None = None) -> bool:
+                    refs = item.get(key, []) if isinstance(item, dict) else []
+                    seen = {roles.get(x) for x in refs}
+                    return (
+                        len(seen) != 1
+                        or None in seen
+                        or (required is not None and seen != {required})
+                    )
+
+                for collection, key, required in (
+                    ("claims", "evidence_local_ids", None),
+                    ("learner_evidence", "evidence_local_ids", "user"),
+                ):
+                    if not isinstance(handoff_payload.get(collection, []), list):
+                        raise ValueError("INVALID_COMPOSITION_INTAKE") from None
+                    kept = []
+                    for index, item in enumerate(handoff_payload[collection]):
+                        if not isinstance(item, dict):
+                            raise ValueError("INVALID_COMPOSITION_INTAKE") from None
+                        if conflict(item, key, required):
+                            isolated += (f"{collection}[{index}]:EVIDENCE_ROLE_CONFLICT",)
+                        else:
+                            kept.append(item)
+                    handoff_payload[collection] = kept
+                if not isolated:
+                    raise ValueError("INVALID_COMPOSITION_INTAKE") from None
+                try:
+                    handoff = (
+                        LearningSegment.model_validate(payload).handoff
+                        if segment_input
+                        else MedLearnHandoff.model_validate(handoff_payload)
+                    )
+                except ValidationError as exc:
+                    raise ValueError("INVALID_COMPOSITION_INTAKE") from exc
+                tolerant = False
+        if not tolerant:
+            assert handoff is not None
+            content = (
+                tuple(x.statement for x in handoff.claims)
+                + tuple(x.explanation_text for x in handoff.generated_explanations)
+                + tuple(handoff.learning_goals)
+            )
+            concepts = tuple(x.name for x in handoff.concepts)
+            evidence = tuple(x.rationale for x in handoff.learner_evidence)
+            misconceptions = tuple(x.observed_error_logic for x in handoff.misconceptions)
+            questions = tuple(x.statement for x in handoff.unresolved_questions)
+            discipline, course, chapter = (
+                handoff.session.discipline_id,
+                handoff.session.course_id,
+                handoff.session.chapter_id,
+            )
     usable_content = bool(content or evidence or misconceptions or questions)
     if not usable_content:
         raise ValueError("NO_USABLE_LEARNING_CONTENT")
     warnings: list[CompositionIssue] = []
+    if isolated:
+        warnings.append(
+            CompositionIssue("warning", "EVIDENCE_ROLE_CONFLICT", "conflicted items isolated")
+        )
     if not concepts:
         warnings.append(
             CompositionIssue("warning", "UNRESOLVED_CONCEPT", "no stable concept target")
         )
-    else:
-        warnings.append(
-            CompositionIssue(
-                "warning", "CATALOG_UPDATE_REQUIRED", "concepts are not certified by composition"
-            )
-        )
-    warnings.append(
-        CompositionIssue(
-            "warning", "SOURCE_MISSING", "source authority is not established by preview"
-        )
-    )
     if course is None:
         warnings.append(CompositionIssue("warning", "MISSING_COURSE_ID", "course_id is missing"))
     if chapter is None:
         warnings.append(CompositionIssue("warning", "MISSING_CHAPTER_ID", "chapter_id is missing"))
-    warnings.append(
-        CompositionIssue(
-            "warning", "STRICT_PROPOSAL_NOT_APPROVED", "preview does not approve publication"
-        )
-    )
     job_id = _source_job_id(source_job_id)
-    source_record_id = "preview_" + _digest(raw)[7:23]
+    source_record_id = "preview_" + digest[7:23]
     target = validate_target_path(f"MedLearn/Inbox/{job_id or source_record_id}.md")
     return CompositionContext(
         job_id,
         source_record_id,
-        _digest(raw),
+        digest,
         discipline,
         course,
         chapter,
@@ -197,6 +259,7 @@ def build_context(
         evidence,
         misconceptions,
         questions,
+        isolated,
         tuple(warnings),
         target,
         template,
@@ -211,5 +274,16 @@ def compose_preview(
     if not markdown.strip():
         raise ValueError("EMPTY_COMPOSER_OUTPUT")
     return CompositionResult(
-        markdown, validate_target_path(context.proposed_target_path), context.warnings
+        markdown,
+        validate_target_path(context.proposed_target_path),
+        context.warnings,
+        context.isolated_items,
+    )
+
+
+def validate_composition(context: CompositionContext) -> CompositionValidationResult:
+    return CompositionValidationResult(
+        "accepted_with_warnings" if context.warnings else "accepted",
+        warnings=context.warnings,
+        isolated_items=context.isolated_items,
     )
