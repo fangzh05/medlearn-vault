@@ -65,6 +65,7 @@ from medlearn_vault.publication import (
     capture_identity,
     render_learning_capture_markdown,
 )
+from medlearn_vault.source_pdf import ExtractionResult, PdfExtractionError, extract_input
 from medlearn_vault.sync_client import (
     configure as sync_configure_service,
 )
@@ -119,6 +120,7 @@ catalog_app = typer.Typer(help="Prepare manually reviewed catalog patches")
 workflow_app = typer.Typer(help="Run cloud control-plane workflows")
 sync_app = typer.Typer(help="Synchronize published artifacts to a local Obsidian Vault")
 sync_schedule_app = typer.Typer(help="Manage the optional Windows Scheduled Task")
+sources_app = typer.Typer(help="Extract private local source PDFs without OCR")
 app.add_typer(schema_app, name="schema")
 app.add_typer(concept_app, name="concept")
 app.add_typer(bundle_app, name="bundle")
@@ -128,6 +130,7 @@ app.add_typer(composition_app, name="compose")
 app.add_typer(catalog_app, name="catalog")
 app.add_typer(workflow_app, name="workflow")
 app.add_typer(sync_app, name="sync")
+app.add_typer(sources_app, name="sources")
 sync_app.add_typer(sync_schedule_app, name="schedule")
 
 SCHEMA_MODELS: dict[str, type[BaseModel]] = {
@@ -202,6 +205,60 @@ def _sync_output(value: dict[str, object], json_output: bool) -> None:
 def _sync_error(exc: SyncError, json_output: bool) -> NoReturn:
     _sync_output({"status": "error", "error_code": exc.code}, json_output)
     raise typer.Exit(3 if exc.code == "SYNC_LOCAL_CONFLICT" else 1) from exc
+
+
+@sources_app.command("extract-pdf")
+def extract_pdf_command(
+    input_path: Annotated[Path, typer.Option("--input")],
+    output_root: Annotated[Path, typer.Option("--output-root")],
+    force: Annotated[bool, typer.Option("--force")] = False,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Extract local native PDF text to page JSONL, inspection TXT, and report JSON."""
+    try:
+        results = extract_input(input_path, output_root, force)
+    except PdfExtractionError as exc:
+        value = {"error_code": exc.code}
+        typer.echo(
+            json.dumps(value, separators=(",", ":")) if json_output else f"error_code={exc.code}",
+            err=not json_output,
+        )
+        raise typer.Exit(1) from exc
+    files: list[dict[str, object]] = []
+    failed = warnings = 0
+    keys = (
+        "source_relative_path",
+        "total_pages",
+        "pages_with_text",
+        "empty_pages",
+        "low_text_pages",
+        "total_characters",
+        "extraction_status",
+        "warning_codes",
+    )
+    for result in results:
+        if isinstance(result, ExtractionResult):
+            if result.report["extraction_status"] == "success_with_warnings":
+                warnings += 1
+            files.append({key: result.report[key] for key in keys})
+        else:
+            failed += 1
+            files.append(dict(result))
+    payload = {
+        "discovered_count": len(results),
+        "succeeded_count": len(results) - failed,
+        "warning_count": warnings,
+        "failed_count": failed,
+        "files": files,
+    }
+    if json_output:
+        typer.echo(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
+    else:
+        typer.echo(" ".join(f"{key}={value}" for key, value in payload.items() if key != "files"))
+        for item in files:
+            typer.echo(" ".join(f"{key}={value}" for key, value in item.items()))
+    if failed:
+        raise typer.Exit(1)
 
 
 @composition_app.command("preview")
