@@ -337,7 +337,7 @@ def valid_output(
     chunk_input(tmp_path / "in", tmp_path / "out", validate_config(200, 300, 80))
     book = tmp_path / "out" / "book"
     input_path = tmp_path / "in" / "book" / "normalized-pages.jsonl"
-    records = [json.loads(line) for line in input_path.read_text().splitlines()]
+    records = [json.loads(line) for line in input_path.read_text(encoding="utf-8").splitlines()]
     return records, rows(book.parent, "sections.jsonl"), rows(book.parent, "chunks.jsonl")
 
 
