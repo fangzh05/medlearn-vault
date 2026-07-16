@@ -427,15 +427,36 @@ def _validate_output(
             ):
                 raise ValueError
             known.add(section["section_id"])
+            if not (
+                1
+                <= section["start_pdf_page_number"]
+                <= section["end_pdf_page_number"]
+                <= len(records)
+            ):
+                raise ValueError
         if [chunk["chunk_index"] for chunk in chunks] != list(range(len(chunks))):
             raise ValueError
         seen_ids: set[str] = set()
         actual_primary: list[tuple[int, int, int]] = []
         primary_text: dict[int, list[tuple[int, int]]] = {}
+        section_map = {section["section_id"]: section for section in sections}
+        seen_primary: set[tuple[int, int, int]] = set()
         for chunk in chunks:
             if chunk["chunk_id"] in seen_ids or chunk["primary_char_count"] <= 0:
                 raise ValueError
             seen_ids.add(chunk["chunk_id"])
+            chunk_section: dict[str, Any] | None = section_map.get(chunk["section_id"])
+            path_ids = chunk["section_path"]
+            if (
+                chunk_section is None
+                or not path_ids
+                or path_ids[0] != sections[0]["section_id"]
+                or path_ids[-1] != chunk["section_id"]
+            ):
+                raise ValueError
+            for parent_id, child_id in zip(path_ids, path_ids[1:], strict=False):
+                if section_map[child_id]["parent_section_id"] != parent_id:
+                    raise ValueError
             if chunk["char_count"] != len(chunk["text"]) or chunk["text_sha256"] != _digest(
                 chunk["text"]
             ):
@@ -463,7 +484,20 @@ def _validate_output(
                 if not segment["is_overlap"]:
                     actual_primary.append((page, start, end))
                     primary_text.setdefault(page, []).append((start, end))
+                    seen_primary.add((page, start, end))
+                else:
+                    if not any(
+                        page == old_page and start >= old_start and end <= old_end
+                        for old_page, old_start, old_end in seen_primary
+                    ):
+                        raise ValueError
             if cursor != len(chunk["text"]):
+                raise ValueError
+            pages = [segment["pdf_page_number"] for segment in chunk["source_segments"]]
+            if (chunk["start_pdf_page_number"], chunk["end_pdf_page_number"]) != (
+                min(pages),
+                max(pages),
+            ):
                 raise ValueError
         expected = [
             (row["pdf_page_number"], 0, len(row["normalized_text"]))
@@ -496,7 +530,9 @@ def _apply_small_final_policy(
     while index >= 0:
         chunk = chunks[index]
         is_group_final = (
-            index == len(chunks) - 1 or chunks[index + 1]["section_id"] != chunk["section_id"]
+            index == len(chunks) - 1
+            or chunks[index + 1]["section_id"] != chunk["section_id"]
+            or chunks[index + 1]["hard_boundary_group_id"] != chunk["hard_boundary_group_id"]
         )
         if is_group_final and chunk["primary_char_count"] < threshold:
             previous = chunks[index - 1] if index > 0 else None
@@ -712,14 +748,19 @@ def chunk_source(source: Path, output: Path, config: Config, force: bool = False
                     "chunk_char_start": cursor,
                     "chunk_char_end": cursor + len(unit.text),
                     "is_overlap": is_overlap,
+                    "hard_boundary_group_id": unit.hard_boundary_group_id,
                 }
             )
             cursor += len(unit.text)
         path = []
-        node: dict[str, Any] | None = current_section
-        while node is not None:
-            path.append(node)
-            node = next((s for s in sections if s["section_id"] == node["parent_section_id"]), None)
+        path_node: dict[str, Any] | None = current_section
+        while path_node is not None:
+            path.append(path_node)
+            parent_candidate: dict[str, Any] | None = next(
+                (s for s in sections if s["section_id"] == path_node["parent_section_id"]),
+                None,
+            )
+            path_node = parent_candidate
         path.reverse()
         index = len(chunks)
         cid = (
@@ -778,40 +819,44 @@ def chunk_source(source: Path, output: Path, config: Config, force: bool = False
             continue
         text = row["normalized_text"]
         for paragraph_index, (start, end) in enumerate(_paragraph_ranges(text)):
-            candidate_section = next(
-                (
-                    section
-                    for (heading_page, heading_start), section in heading_starts.items()
-                    if heading_page == page and start <= heading_start < end
-                ),
-                None,
+            heading_offsets = sorted(
+                (heading_start, section)
+                for (heading_page, heading_start), section in heading_starts.items()
+                if heading_page == page and start <= heading_start < end
             )
-            if (
-                candidate_section is not None
-                and candidate_section["section_id"] != current_section["section_id"]
-            ):
-                flush("SECTION_END")
-                pending_overlap = []
-                current_section = candidate_section
-            block = ParagraphBlock(
-                SourceSpan(page, start, end),
-                paragraph_index,
-                text[start:end],
-                _digest(text[start:end]),
-                current_section["section_id"],
-                sum(r["page_status"] == "excluded" for r in records[:page]),
-            )
-            for unit in _split_block(block, config.max_chars):
-                primary_size = sum(len(item.text) for item in current)
-                projected = primary_size + len(unit.text)
-                if current and (
-                    projected > config.max_chars
-                    or (primary_size >= config.target_chars and projected > config.target_chars)
+            boundaries = [start, *(offset for offset, _ in heading_offsets), end]
+            for sub_start, sub_end in zip(boundaries, boundaries[1:], strict=False):
+                if sub_start >= sub_end:
+                    continue
+                candidate_section = next(
+                    (section for offset, section in heading_offsets if offset == sub_start), None
+                )
+                if (
+                    candidate_section is not None
+                    and candidate_section["section_id"] != current_section["section_id"]
                 ):
-                    flush("TARGET_REACHED", allow_overlap=True)
-                current.append(unit)
-                if unit.split_reason in {"HARD_SPLIT", "OVERSIZED_PARAGRAPH"}:
-                    flush(unit.split_reason, allow_overlap=unit.split_reason != "HARD_SPLIT")
+                    flush("SECTION_END")
+                    pending_overlap = []
+                    current_section = candidate_section
+                block = ParagraphBlock(
+                    SourceSpan(page, sub_start, sub_end),
+                    paragraph_index,
+                    text[sub_start:sub_end],
+                    _digest(text[sub_start:sub_end]),
+                    current_section["section_id"],
+                    sum(r["page_status"] == "excluded" for r in records[:page]),
+                )
+                for unit in _split_block(block, config.max_chars):
+                    primary_size = sum(len(item.text) for item in current)
+                    projected = primary_size + len(unit.text)
+                    if current and (
+                        projected > config.max_chars
+                        or (primary_size >= config.target_chars and projected > config.target_chars)
+                    ):
+                        flush("TARGET_REACHED", allow_overlap=True)
+                    current.append(unit)
+                    if unit.split_reason in {"HARD_SPLIT", "OVERSIZED_PARAGRAPH"}:
+                        flush(unit.split_reason, allow_overlap=unit.split_reason != "HARD_SPLIT")
     flush("SOURCE_END")
     small_final_count = _apply_small_final_policy(chunks, records, identity, config)
     warnings = []
