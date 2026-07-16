@@ -108,8 +108,8 @@ def test_staging_failure_cleans_and_force_preserves(
         original(path, content)
 
     monkeypatch.setattr(source_pdf, "_atomic_write", fail_second)
-    with pytest.raises(PdfExtractionError, match="PDF_OUTPUT_WRITE_FAILED"):
-        extract_input(raw, output, force=True)
+    result = extract_input(raw, output, force=True)
+    assert result == [{"source_relative_path": "book.pdf", "error_code": "PDF_OUTPUT_WRITE_FAILED"}]
     assert not (output / "book").exists()
     assert not list(output.glob(".medlearn-*")) if output.exists() else True
 
@@ -119,8 +119,8 @@ def test_staging_failure_cleans_and_force_preserves(
     (output / "book" / "fulltext.txt").write_text("different\n", encoding="utf-8")
     calls = 0
     monkeypatch.setattr(source_pdf, "_atomic_write", fail_second)
-    with pytest.raises(PdfExtractionError, match="PDF_OUTPUT_WRITE_FAILED"):
-        extract_input(raw, output, force=True)
+    result = extract_input(raw, output, force=True)
+    assert result == [{"source_relative_path": "book.pdf", "error_code": "PDF_OUTPUT_WRITE_FAILED"}]
     assert {p.name: p.read_bytes() for p in (output / "book").iterdir()} == before
     assert not list(output.glob(".medlearn-*"))
 
@@ -144,7 +144,7 @@ def test_commit_failure_restores_previous_output(
         original_replace(source, destination)
 
     monkeypatch.setattr(source_pdf.os, "replace", fail_commit)
-    with pytest.raises(PdfExtractionError, match="PDF_OUTPUT_WRITE_FAILED"):
-        extract_input(raw, output, force=True)
+    result = extract_input(raw, output, force=True)
+    assert result == [{"source_relative_path": "book.pdf", "error_code": "PDF_OUTPUT_WRITE_FAILED"}]
     assert {p.name: p.read_bytes() for p in (output / "book").iterdir()} == before
     assert not list(output.glob(".medlearn-*"))
