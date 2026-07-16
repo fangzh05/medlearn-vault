@@ -1,7 +1,9 @@
 """Deterministic, conservative normalization of extracted PDF page JSONL."""
 
 from __future__ import annotations
-import hashlib, json, os, re, shutil, tempfile
+
+import hashlib
+import json
 from pathlib import Path
 from typing import Any
 
@@ -72,7 +74,6 @@ def normalize_one(
     if unknown:
         raise NormalizationError("NORMALIZATION_INPUT_INVALID")
     outrows = []
-    removed = 0
     for r in rows:
         text = "" if r["pdf_page_number"] in excluded else _norm(r.get("text", ""))
         status = (

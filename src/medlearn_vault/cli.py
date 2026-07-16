@@ -47,6 +47,7 @@ from medlearn_vault.domain import (
 )
 from medlearn_vault.handoff import LearningSegment, MedLearnHandoff
 from medlearn_vault.identifiers import normalize_text
+from medlearn_vault.normalization import NormalizationError, normalize_one
 from medlearn_vault.presentation_publisher import (
     PresentationArtifact,
     PresentationCurrentPointer,
@@ -66,7 +67,6 @@ from medlearn_vault.publication import (
     render_learning_capture_markdown,
 )
 from medlearn_vault.source_pdf import ExtractionResult, PdfExtractionError, extract_input
-from medlearn_vault.normalization import NormalizationError, normalize_one
 from medlearn_vault.sync_client import (
     configure as sync_configure_service,
 )
