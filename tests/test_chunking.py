@@ -5,7 +5,15 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from medlearn_vault.chunking import ChunkingError, chunk_input, validate_config
+from medlearn_vault.chunking import (
+    ChunkingError,
+    ParagraphBlock,
+    SourceSpan,
+    _paragraph_ranges,
+    _split_block,
+    chunk_input,
+    validate_config,
+)
 from medlearn_vault.cli import app
 
 
@@ -113,7 +121,7 @@ def test_bad_normalized_count_is_blocker(tmp_path: Path) -> None:
 
 
 def test_overlap_is_measured_and_zero_overlap_is_empty(tmp_path: Path) -> None:
-    pages = [("段落甲\n" * 120 + "段落乙\n" * 120, "included")]
+    pages = [("\n\n".join("段落甲" * 12 for _ in range(8)), "included")]
     source(tmp_path / "in", pages)
     chunk_input(tmp_path / "in", tmp_path / "overlap", validate_config(200, 300, 80))
     with_overlap = rows(tmp_path / "overlap", "chunks.jsonl")
@@ -172,12 +180,15 @@ def test_transaction_replace_failure_restores_existing_output(
 
 
 def test_target_changes_boundaries_and_no_space_chinese_headings(tmp_path: Path) -> None:
-    source(tmp_path / "in", [("第一章总论\n" + "段落甲\n" * 180, "included")])
+    source(
+        tmp_path / "in",
+        [("第一章总论\n\n" + "\n\n".join("段落甲" * 20 for _ in range(8)), "included")],
+    )
     chunk_input(tmp_path / "in", tmp_path / "small", validate_config(200, 500, 0))
     chunk_input(tmp_path / "in", tmp_path / "large", validate_config(400, 500, 0))
-    assert len(rows(tmp_path / "small", "chunks.jsonl")) > len(
-        rows(tmp_path / "large", "chunks.jsonl")
-    )
+    small = rows(tmp_path / "small", "chunks.jsonl")
+    large = rows(tmp_path / "large", "chunks.jsonl")
+    assert [chunk["text_sha256"] for chunk in small] != [chunk["text_sha256"] for chunk in large]
     assert len(rows(tmp_path / "small", "sections.jsonl")) == 2
 
 
@@ -211,3 +222,31 @@ def test_excluded_gap_runs(tmp_path: Path, excluded: list[int], expected: int) -
     chunk_input(tmp_path / "in", tmp_path / "out", validate_config(200, 300, 0))
     report = json.loads((tmp_path / "out" / "book" / "chunking-report.json").read_text())
     assert report["excluded_page_gap_count"] == expected
+
+
+def test_paragraph_ranges_reconstruct_blank_delimiters() -> None:
+    text = "first\ninternal\n\nsecond\n\n\nthird"
+    ranges = _paragraph_ranges(text)
+    assert "".join(text[start:end] for start, end in ranges) == text
+    assert text[ranges[0][0] : ranges[0][1]].endswith("\n\n")
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["甲。乙！丙？", "First. Second! Third?", '甲。" Next!（尾？）'],
+)
+def test_sentence_splitting_reconstructs_exact_text(text: str) -> None:
+    block = ParagraphBlock(SourceSpan(1, 0, len(text)), 0, text, "sha256:x", "sec", 0)
+    units = _split_block(block, 8)
+    assert "".join(unit.text for unit in units) == text
+    assert all(
+        unit.span.page_char_end - unit.span.page_char_start == len(unit.text) for unit in units
+    )
+
+
+def test_indivisible_sentence_uses_hard_split() -> None:
+    text = "x" * 25 + "."
+    block = ParagraphBlock(SourceSpan(1, 0, len(text)), 0, text, "sha256:x", "sec", 0)
+    units = _split_block(block, 10)
+    assert "".join(unit.text for unit in units) == text
+    assert any(unit.split_reason == "HARD_SPLIT" for unit in units)

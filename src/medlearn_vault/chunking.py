@@ -34,6 +34,111 @@ class Config:
     overlap_chars: int = 160
 
 
+@dataclass(frozen=True)
+class SourceSpan:
+    pdf_page_number: int
+    page_char_start: int
+    page_char_end: int
+
+
+@dataclass(frozen=True)
+class ParagraphBlock:
+    span: SourceSpan
+    paragraph_index: int
+    text: str
+    text_sha256: str
+    section_id: str
+    hard_boundary_group_id: int
+
+
+@dataclass(frozen=True)
+class SplitUnit:
+    span: SourceSpan
+    text: str
+    section_id: str
+    hard_boundary_group_id: int
+    split_reason: str | None = None
+
+
+def _paragraph_ranges(text: str) -> list[tuple[int, int]]:
+    """Partition a page exactly, retaining blank-line delimiters in the prior block."""
+    if not text:
+        return []
+    ends = [match.end() for match in re.finditer(r"(?:\r?\n[ \t]*){2,}", text)]
+    starts = [0, *ends]
+    stops = [*ends, len(text)]
+    return [(start, stop) for start, stop in zip(starts, stops, strict=True) if stop > start]
+
+
+def _sentence_ranges(text: str) -> list[tuple[int, int]]:
+    closing = "”’\"'）)]】》」』"
+    ranges: list[tuple[int, int]] = []
+    start = 0
+    index = 0
+    while index < len(text):
+        if text[index] in "。！？.!?":
+            end = index + 1
+            while end < len(text) and text[end] in closing:
+                end += 1
+            while end < len(text) and text[end].isspace():
+                end += 1
+            ranges.append((start, end))
+            start = end
+            index = end
+        else:
+            index += 1
+    if start < len(text):
+        ranges.append((start, len(text)))
+    return ranges or [(0, len(text))]
+
+
+def _split_block(block: ParagraphBlock, max_chars: int) -> list[SplitUnit]:
+    if len(block.text) <= max_chars:
+        return [SplitUnit(block.span, block.text, block.section_id, block.hard_boundary_group_id)]
+    output: list[SplitUnit] = []
+    pending_start: int | None = None
+    pending_end = 0
+    for start, end in _sentence_ranges(block.text):
+        if end - start > max_chars:
+            if pending_start is not None:
+                output.append(_unit(block, pending_start, pending_end, "OVERSIZED_PARAGRAPH"))
+                pending_start = None
+            cursor = start
+            while cursor < end:
+                stop = min(cursor + max_chars, end)
+                reason = (
+                    "HARD_SPLIT"
+                    if stop < end or end - cursor > max_chars
+                    else "OVERSIZED_PARAGRAPH"
+                )
+                output.append(_unit(block, cursor, stop, reason))
+                cursor = stop
+        elif pending_start is None:
+            pending_start, pending_end = start, end
+        elif end - pending_start <= max_chars:
+            pending_end = end
+        else:
+            output.append(_unit(block, pending_start, pending_end, "OVERSIZED_PARAGRAPH"))
+            pending_start, pending_end = start, end
+    if pending_start is not None:
+        output.append(_unit(block, pending_start, pending_end, "OVERSIZED_PARAGRAPH"))
+    return output
+
+
+def _unit(block: ParagraphBlock, start: int, end: int, reason: str) -> SplitUnit:
+    return SplitUnit(
+        SourceSpan(
+            block.span.pdf_page_number,
+            block.span.page_char_start + start,
+            block.span.page_char_start + end,
+        ),
+        block.text[start:end],
+        block.section_id,
+        block.hard_boundary_group_id,
+        reason,
+    )
+
+
 def _digest(value: bytes | str) -> str:
     if isinstance(value, str):
         value = value.encode()
@@ -114,7 +219,10 @@ def _load(source: Path) -> tuple[list[dict[str, Any]], dict[str, Any], bytes, by
     try:
         pages = (source / "normalized-pages.jsonl").read_bytes()
         report_bytes = (source / "normalization-report.json").read_bytes()
-        records = [json.loads(line) for line in pages.decode("utf-8").splitlines()]
+        decoded_lines = pages.decode("utf-8").splitlines()
+        if not decoded_lines or any(not line.strip() for line in decoded_lines):
+            raise ValueError
+        records = [json.loads(line) for line in decoded_lines]
         report = json.loads(report_bytes)
     except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
         raise ChunkingError("CHUNKING_INPUT_INVALID") from exc
@@ -134,7 +242,10 @@ def _load(source: Path) -> tuple[list[dict[str, Any]], dict[str, Any], bytes, by
             raise ChunkingError("CHUNKING_SOURCE_IDENTITY_MISMATCH")
     if records[0].get("normalization_version") != "1":
         raise ChunkingError("CHUNKING_UNSUPPORTED_NORMALIZATION_VERSION")
-    if records[0].get("extraction_version") != "1":
+    report_extraction = report.get("extraction_version", report.get("supported_extraction_version"))
+    if report_extraction != "1" or any(
+        record.get("extraction_version") != "1" for record in records
+    ):
         raise ChunkingError("CHUNKING_SOURCE_IDENTITY_MISMATCH")
     _safe_basename(records[0]["source_file"])
     _safe_relative(records[0]["source_relative_path"])
@@ -142,7 +253,14 @@ def _load(source: Path) -> tuple[list[dict[str, Any]], dict[str, Any], bytes, by
         r"sha256:[0-9a-f]{64}", records[0]["source_sha256"]
     ):
         raise ChunkingError("CHUNKING_SOURCE_IDENTITY_MISMATCH")
-    expected = report.get("output_digests", {}).get("normalized-pages.jsonl")
+    digests = report.get("output_digests", {})
+    if not isinstance(digests, dict):
+        raise ChunkingError("CHUNKING_INPUT_INVALID")
+    expected = digests.get("normalized-pages.jsonl")
+    if expected is not None and (
+        not isinstance(expected, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", expected)
+    ):
+        raise ChunkingError("CHUNKING_INPUT_INVALID")
     if expected is not None and expected != _digest(pages):
         raise ChunkingError("CHUNKING_INPUT_INVALID")
     for record in records:
@@ -161,6 +279,23 @@ def _load(source: Path) -> tuple[list[dict[str, Any]], dict[str, Any], bytes, by
         if status == "excluded" and record.get("exclusion_reason") not in REASONS:
             raise ChunkingError("CHUNKING_INPUT_INVALID")
         if status != "excluded" and record.get("exclusion_reason") is not None:
+            raise ChunkingError("CHUNKING_INPUT_INVALID")
+        _safe_basename(record.get("source_file"))
+        _safe_relative(record.get("source_relative_path"))
+    status = report.get("normalization_status")
+    if status is not None and status not in {"success", "success_with_warnings", "failed"}:
+        raise ChunkingError("CHUNKING_INPUT_INVALID")
+    if status == "failed":
+        raise ChunkingError("CHUNKING_INPUT_INVALID")
+    for key, page_status in (
+        ("included_pages", "included"),
+        ("empty_pages", "empty"),
+        ("excluded_pages", "excluded"),
+    ):
+        if key in report and (
+            type(report[key]) is not int
+            or report[key] != sum(r["page_status"] == page_status for r in records)
+        ):
             raise ChunkingError("CHUNKING_INPUT_INVALID")
     return records, report, pages, report_bytes
 
@@ -255,6 +390,77 @@ def _transaction(out: Path, files: dict[str, bytes], force: bool) -> None:
             except OSError:
                 pass
         raise ChunkingError("CHUNKING_OUTPUT_WRITE_FAILED") from exc
+
+
+def _validate_output(
+    records: list[dict[str, Any]], sections: list[dict[str, Any]], chunks: list[dict[str, Any]]
+) -> None:
+    try:
+        if [section["section_index"] for section in sections] != list(range(len(sections))):
+            raise ValueError
+        known: set[str] = set()
+        for section in sections:
+            if section["section_id"] in known or (
+                section["parent_section_id"] is not None
+                and section["parent_section_id"] not in known
+            ):
+                raise ValueError
+            known.add(section["section_id"])
+        if [chunk["chunk_index"] for chunk in chunks] != list(range(len(chunks))):
+            raise ValueError
+        seen_ids: set[str] = set()
+        actual_primary: list[tuple[int, int, int]] = []
+        primary_text: dict[int, list[tuple[int, int]]] = {}
+        for chunk in chunks:
+            if chunk["chunk_id"] in seen_ids or chunk["primary_char_count"] <= 0:
+                raise ValueError
+            seen_ids.add(chunk["chunk_id"])
+            if chunk["char_count"] != len(chunk["text"]) or chunk["text_sha256"] != _digest(
+                chunk["text"]
+            ):
+                raise ValueError
+            if chunk["char_count"] != chunk["primary_char_count"] + chunk["overlap_char_count"]:
+                raise ValueError
+            cursor = 0
+            for segment in chunk["source_segments"]:
+                page = segment["pdf_page_number"]
+                if (
+                    not (1 <= page <= len(records))
+                    or records[page - 1]["page_status"] == "excluded"
+                ):
+                    raise ValueError
+                start, end = segment["page_char_start"], segment["page_char_end"]
+                cstart, cend = segment["chunk_char_start"], segment["chunk_char_end"]
+                if (
+                    not (0 <= start < end <= len(records[page - 1]["normalized_text"]))
+                    or cstart != cursor
+                ):
+                    raise ValueError
+                if records[page - 1]["normalized_text"][start:end] != chunk["text"][cstart:cend]:
+                    raise ValueError
+                cursor = cend
+                if not segment["is_overlap"]:
+                    actual_primary.append((page, start, end))
+                    primary_text.setdefault(page, []).append((start, end))
+            if cursor != len(chunk["text"]):
+                raise ValueError
+        expected = [
+            (row["pdf_page_number"], 0, len(row["normalized_text"]))
+            for row in records
+            if row["page_status"] == "included"
+        ]
+        collapsed: list[tuple[int, int, int]] = []
+        for page, spans in primary_text.items():
+            ordered = sorted(spans)
+            if ordered[0][0] != 0 or any(
+                left[1] != right[0] for left, right in zip(ordered, ordered[1:], strict=False)
+            ):
+                raise ValueError
+            collapsed.append((page, 0, ordered[-1][1]))
+        if collapsed != expected or actual_primary != sorted(actual_primary):
+            raise ValueError
+    except (KeyError, TypeError, ValueError, IndexError) as exc:
+        raise ChunkingError("CHUNKING_FAILED") from exc
 
 
 def chunk_source(source: Path, output: Path, config: Config, force: bool = False) -> dict[str, Any]:
@@ -374,7 +580,8 @@ def chunk_source(source: Path, output: Path, config: Config, force: bool = False
         section["excluded_page_count"] = sum(row["page_status"] == "excluded" for row in span)
         section["empty_page_count"] = sum(row["page_status"] == "empty" for row in span)
     chunks: list[dict[str, Any]] = []
-    current: list[tuple[int, int, str, bool]] = []
+    current: list[SplitUnit] = []
+    pending_overlap: list[SplitUnit] = []
     current_section: dict[str, Any] = root
     excluded_gap = False
     heading_starts: dict[tuple[int, int], dict[str, Any]] = {
@@ -387,27 +594,26 @@ def chunk_source(source: Path, output: Path, config: Config, force: bool = False
     }
 
     def flush(reason: str, allow_overlap: bool = False) -> None:
-        nonlocal current
+        nonlocal current, pending_overlap
         if not current:
             return
-        if not any(not piece[3] for piece in current):
-            current = []
-            return
-        text = "".join(x[2] for x in current)
+        combined = [*pending_overlap, *current]
+        text = "".join(unit.text for unit in combined)
         segments = []
         cursor = 0
-        for page, start, value, is_overlap in current:
+        for position, unit in enumerate(combined):
+            is_overlap = position < len(pending_overlap)
             segments.append(
                 {
-                    "pdf_page_number": page,
-                    "page_char_start": start,
-                    "page_char_end": start + len(value),
+                    "pdf_page_number": unit.span.pdf_page_number,
+                    "page_char_start": unit.span.page_char_start,
+                    "page_char_end": unit.span.page_char_end,
                     "chunk_char_start": cursor,
-                    "chunk_char_end": cursor + len(value),
+                    "chunk_char_end": cursor + len(unit.text),
                     "is_overlap": is_overlap,
                 }
             )
-            cursor += len(value)
+            cursor += len(unit.text)
         path = []
         node: dict[str, Any] | None = current_section
         while node is not None:
@@ -437,8 +643,8 @@ def chunk_source(source: Path, output: Path, config: Config, force: bool = False
                 "text": text,
                 "text_sha256": _digest(text),
                 "char_count": len(text),
-                "primary_char_count": sum(len(x[2]) for x in current if not x[3]),
-                "overlap_char_count": sum(len(x[2]) for x in current if x[3]),
+                "primary_char_count": sum(len(unit.text) for unit in current),
+                "overlap_char_count": sum(len(unit.text) for unit in pending_overlap),
                 "start_pdf_page_number": segments[0]["pdf_page_number"],
                 "end_pdf_page_number": segments[-1]["pdf_page_number"],
                 "source_segments": segments,
@@ -447,42 +653,63 @@ def chunk_source(source: Path, output: Path, config: Config, force: bool = False
             }
         )
         if allow_overlap and config.overlap_chars:
-            tail: list[tuple[int, int, str, bool]] = []
+            tail: list[SplitUnit] = []
             size = 0
-            for piece in reversed(current):
-                if piece[3] or size + len(piece[2]) > config.overlap_chars:
+            for unit in reversed(current):
+                if size + len(unit.text) > config.overlap_chars:
                     break
-                tail.append((piece[0], piece[1], piece[2], True))
-                size += len(piece[2])
-            current = list(reversed(tail))
+                tail.append(unit)
+                size += len(unit.text)
+            pending_overlap = list(reversed(tail))
         else:
-            current = []
+            pending_overlap = []
+        current = []
 
     for row in records:
         page = row["pdf_page_number"]
         if row["page_status"] == "excluded":
             flush("EXCLUDED_PAGE_GAP")
+            pending_overlap = []
             excluded_gap = True
             continue
         if row["page_status"] != "included":
             continue
-        for start, line in _line_data(row["normalized_text"]):
-            candidate_section = heading_starts.get((page, start))
-            if candidate_section is not None:
+        text = row["normalized_text"]
+        for paragraph_index, (start, end) in enumerate(_paragraph_ranges(text)):
+            candidate_section = next(
+                (
+                    section
+                    for (heading_page, heading_start), section in heading_starts.items()
+                    if heading_page == page and start <= heading_start < end
+                ),
+                None,
+            )
+            if (
+                candidate_section is not None
+                and candidate_section["section_id"] != current_section["section_id"]
+            ):
                 flush("SECTION_END")
+                pending_overlap = []
                 current_section = candidate_section
-            value = line
-            primary_size = sum(len(piece[2]) for piece in current if not piece[3])
-            if current and primary_size >= config.target_chars:
-                flush("TARGET_REACHED", allow_overlap=True)
-            if current and sum(len(x[2]) for x in current) + len(value) > config.max_chars:
-                flush("TARGET_REACHED", allow_overlap=True)
-            while len(value) > config.max_chars:
-                current.append((page, start, value[: config.max_chars], False))
-                flush("HARD_SPLIT")
-                start += config.max_chars
-                value = value[config.max_chars :]
-            current.append((page, start, value, False))
+            block = ParagraphBlock(
+                SourceSpan(page, start, end),
+                paragraph_index,
+                text[start:end],
+                _digest(text[start:end]),
+                current_section["section_id"],
+                sum(r["page_status"] == "excluded" for r in records[:page]),
+            )
+            for unit in _split_block(block, config.max_chars):
+                primary_size = sum(len(item.text) for item in current)
+                projected = primary_size + len(unit.text)
+                if current and (
+                    projected > config.max_chars
+                    or (primary_size >= config.target_chars and projected > config.target_chars)
+                ):
+                    flush("TARGET_REACHED", allow_overlap=True)
+                current.append(unit)
+                if unit.split_reason in {"HARD_SPLIT", "OVERSIZED_PARAGRAPH"}:
+                    flush(unit.split_reason, allow_overlap=unit.split_reason != "HARD_SPLIT")
     flush("SOURCE_END")
     warnings = []
     if not headings:
@@ -495,6 +722,11 @@ def chunk_source(source: Path, output: Path, config: Config, force: bool = False
         warnings.append("HEADING_LEVEL_JUMP")
     if excluded_gap:
         warnings.append("EXCLUDED_PAGE_GAP_PRESENT")
+    if any(chunk["split_reason"] == "HARD_SPLIT" for chunk in chunks):
+        warnings.append("HARD_SPLIT_REQUIRED")
+    if any(chunk["char_count"] < max(1, config.target_chars // 3) for chunk in chunks):
+        warnings.append("LOW_TEXT_CHUNKS_PRESENT")
+    _validate_output(records, sections, chunks)
     section_bytes = b"".join(_json(s) for s in sections)
     chunk_bytes = b"".join(_json(c) for c in chunks)
     counts = [c["char_count"] for c in chunks]
