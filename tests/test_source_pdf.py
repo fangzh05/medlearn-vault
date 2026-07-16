@@ -75,5 +75,16 @@ def test_no_pdf_and_unsafe_destination_are_rejected(tmp_path: Path) -> None:
     with pytest.raises(PdfExtractionError, match="PDF_NOT_FOUND"):
         extract_input(raw, tmp_path / "generated")
     make_pdf(raw / "book.pdf", ["text"])
+    unsafe = raw / "generated"
     with pytest.raises(PdfExtractionError, match="PDF_OUTPUT_PATH_UNSAFE"):
-        extract_input(raw, raw / "generated")
+        extract_input(raw, unsafe)
+    assert not unsafe.exists()
+
+
+def test_whitespace_only_page_is_empty(tmp_path: Path) -> None:
+    raw, output = tmp_path / "raw", tmp_path / "generated"
+    raw.mkdir()
+    make_pdf(raw / "book.pdf", ["   \n\t"])
+    extract_input(raw, output)
+    record = json.loads((output / "book" / "pages.jsonl").read_text(encoding="utf-8"))
+    assert record["text"] == "" and record["text_status"] == "empty"

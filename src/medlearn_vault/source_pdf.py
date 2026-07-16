@@ -8,6 +8,7 @@ import os
 import re
 import statistics
 import tempfile
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -50,6 +51,21 @@ def _resolve(path: Path, code: str = "PDF_OUTPUT_PATH_UNSAFE") -> Path:
         raise PdfExtractionError(code) from exc
 
 
+def _planned_resolve(path: Path) -> Path:
+    """Resolve a not-yet-created path through its nearest existing parent."""
+    tail: list[str] = []
+    probe = path
+    while not probe.exists():
+        tail.append(probe.name)
+        probe = probe.parent
+    return _resolve(probe).joinpath(*reversed(tail))
+
+
+def _is_link_or_junction(path: Path) -> bool:
+    junction = getattr(path, "is_junction", None)
+    return path.is_symlink() or bool(junction and junction())
+
+
 def discover_pdfs(input_path: Path) -> list[Path]:
     if not input_path.exists():
         raise PdfExtractionError("PDF_NOT_FOUND")
@@ -62,10 +78,12 @@ def discover_pdfs(input_path: Path) -> list[Path]:
     root = _resolve(input_path)
     found: list[Path] = []
     for current, directories, files in os.walk(root, followlinks=False):
-        directories[:] = [name for name in directories if not (Path(current) / name).is_symlink()]
+        directories[:] = [
+            name for name in directories if not _is_link_or_junction(Path(current) / name)
+        ]
         for name in files:
             candidate = Path(current) / name
-            if name.lower().endswith(".pdf") and not candidate.is_symlink():
+            if name.lower().endswith(".pdf") and not _is_link_or_junction(candidate):
                 resolved = candidate.resolve()
                 if _inside(resolved, root):
                     found.append(resolved)
@@ -141,7 +159,9 @@ def extract_pdf(
         counts: list[int] = []
         empty = low = replacements = 0
         for number, page in enumerate(document, 1):
-            text = _normalise(page.get_text("text", sort=True))
+            text = _normalise(page.get_text("text", sort=False))
+            if not text.strip():
+                text = ""
             char_count, nonspace = len(text), len(re.sub(r"\s+", "", text))
             if text:
                 counts.append(char_count)
@@ -215,16 +235,40 @@ def extract_pdf(
         "fulltext.txt": fulltext_bytes,
         "report.json": _json_bytes(report),
     }
-    if (
-        any(
-            (destination / name).exists() and (destination / name).read_bytes() != content
-            for name, content in output.items()
-        )
-        and not force
-    ):
+    existing = destination.exists()
+    identical = existing and all(
+        (destination / name).is_file() and (destination / name).read_bytes() == content
+        for name, content in output.items()
+    )
+    if identical:
+        return ExtractionResult(relative.as_posix(), report)
+    if existing and not force:
         raise PdfExtractionError("PDF_OUTPUT_CONFLICT")
-    for name, content in output.items():
-        _atomic_write(destination / name, content)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    stage = destination.parent / f".medlearn-stage-{uuid.uuid4().hex}"
+    backup = destination.parent / f".medlearn-backup-{uuid.uuid4().hex}"
+    try:
+        stage.mkdir()
+        for name, content in output.items():
+            _atomic_write(stage / name, content)
+        if existing:
+            os.replace(destination, backup)
+        try:
+            os.replace(stage, destination)
+        except OSError:
+            if existing and backup.exists():
+                os.replace(backup, destination)
+            raise
+        if backup.exists():
+            for child in backup.iterdir():
+                child.unlink()
+            backup.rmdir()
+    except OSError as exc:
+        if stage.exists():
+            for child in stage.iterdir():
+                child.unlink(missing_ok=True)
+            stage.rmdir()
+        raise PdfExtractionError("PDF_OUTPUT_WRITE_FAILED") from exc
     return ExtractionResult(relative.as_posix(), report)
 
 
@@ -235,10 +279,11 @@ def extract_input(
     if not pdfs:
         raise PdfExtractionError("PDF_NOT_FOUND")
     source = _resolve(input_path.parent if input_path.is_file() else input_path)
-    output_root.mkdir(parents=True, exist_ok=True)
-    destination = _resolve(output_root)
+    destination = _planned_resolve(output_root)
     if source == destination or _inside(destination, source) or _inside(source, destination):
         raise PdfExtractionError("PDF_OUTPUT_PATH_UNSAFE")
+    output_root.mkdir(parents=True, exist_ok=True)
+    destination = _resolve(output_root)
     results: list[ExtractionResult | dict[str, str]] = []
     for pdf in pdfs:
         try:
