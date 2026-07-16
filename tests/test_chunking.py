@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -109,3 +110,62 @@ def test_bad_normalized_count_is_blocker(tmp_path: Path) -> None:
     (book / "normalized-pages.jsonl").write_text(json.dumps(data) + "\n", encoding="utf-8")
     results = chunk_input(tmp_path / "in", tmp_path / "out", validate_config(200, 300, 0))
     assert results[0]["error_code"] == "CHUNKING_INPUT_INVALID"
+
+
+def test_overlap_is_measured_and_zero_overlap_is_empty(tmp_path: Path) -> None:
+    pages = [("段落甲\n" * 120 + "段落乙\n" * 120, "included")]
+    source(tmp_path / "in", pages)
+    chunk_input(tmp_path / "in", tmp_path / "overlap", validate_config(200, 300, 80))
+    with_overlap = rows(tmp_path / "overlap", "chunks.jsonl")
+    assert any(int(chunk["overlap_char_count"]) > 0 for chunk in with_overlap[1:])
+    assert all(
+        int(chunk["primary_char_count"]) + int(chunk["overlap_char_count"])
+        == int(chunk["char_count"])
+        for chunk in with_overlap
+    )
+    chunk_input(tmp_path / "in", tmp_path / "zero", validate_config(200, 300, 0))
+    assert all(
+        int(chunk["overlap_char_count"]) == 0 for chunk in rows(tmp_path / "zero", "chunks.jsonl")
+    )
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("page_status", "bad"),
+        ("source_file", "dir/book.pdf"),
+        ("source_relative_path", "../book.pdf"),
+    ],
+)
+def test_malformed_metadata_is_blocker(tmp_path: Path, field: str, value: str) -> None:
+    book = source(tmp_path / "in", [("text", "included")])
+    record = json.loads((book / "normalized-pages.jsonl").read_text())
+    record[field] = value
+    (book / "normalized-pages.jsonl").write_text(json.dumps(record) + "\n", encoding="utf-8")
+    results = chunk_input(tmp_path / "in", tmp_path / "out", validate_config(200, 300, 0))
+    assert "error_code" in results[0]
+
+
+def test_transaction_replace_failure_restores_existing_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    book = source(tmp_path / "in", [("text " * 100, "included")])
+    destination = tmp_path / "out" / "book"
+    destination.mkdir(parents=True)
+    (destination / "old").write_text("old")
+    original = os.replace
+    calls = 0
+
+    def fail_second(src: object, dst: object) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("injected")
+        original(src, dst)
+
+    monkeypatch.setattr(os, "replace", fail_second)
+    from medlearn_vault.chunking import chunk_source
+
+    with pytest.raises(ChunkingError, match="CHUNKING_OUTPUT_WRITE_FAILED"):
+        chunk_source(book, destination, validate_config(200, 300, 0), force=True)
+    assert (destination / "old").read_text() == "old"

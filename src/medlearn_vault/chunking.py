@@ -359,7 +359,7 @@ def chunk_source(source: Path, output: Path, config: Config, force: bool = False
         sections.append(sec)
         stack.append(sec)
     chunks: list[dict[str, Any]] = []
-    current: list[tuple[int, int, str]] = []
+    current: list[tuple[int, int, str, bool]] = []
     current_section: dict[str, Any] = root
     excluded_gap = False
     heading_starts: dict[tuple[int, int], dict[str, Any]] = {
@@ -371,14 +371,14 @@ def chunk_source(source: Path, output: Path, config: Config, force: bool = False
         for h in headings
     }
 
-    def flush(reason: str) -> None:
+    def flush(reason: str, allow_overlap: bool = False) -> None:
         nonlocal current
         if not current:
             return
         text = "".join(x[2] for x in current)
         segments = []
         cursor = 0
-        for page, start, value in current:
+        for page, start, value, is_overlap in current:
             segments.append(
                 {
                     "pdf_page_number": page,
@@ -386,7 +386,7 @@ def chunk_source(source: Path, output: Path, config: Config, force: bool = False
                     "page_char_end": start + len(value),
                     "chunk_char_start": cursor,
                     "chunk_char_end": cursor + len(value),
-                    "is_overlap": False,
+                    "is_overlap": is_overlap,
                 }
             )
             cursor += len(value)
@@ -419,8 +419,8 @@ def chunk_source(source: Path, output: Path, config: Config, force: bool = False
                 "text": text,
                 "text_sha256": _digest(text),
                 "char_count": len(text),
-                "primary_char_count": len(text),
-                "overlap_char_count": 0,
+                "primary_char_count": sum(len(x[2]) for x in current if not x[3]),
+                "overlap_char_count": sum(len(x[2]) for x in current if x[3]),
                 "start_pdf_page_number": segments[0]["pdf_page_number"],
                 "end_pdf_page_number": segments[-1]["pdf_page_number"],
                 "source_segments": segments,
@@ -428,7 +428,17 @@ def chunk_source(source: Path, output: Path, config: Config, force: bool = False
                 "warning_codes": [],
             }
         )
-        current = []
+        if allow_overlap and config.overlap_chars:
+            tail: list[tuple[int, int, str, bool]] = []
+            size = 0
+            for piece in reversed(current):
+                if piece[3] or size + len(piece[2]) > config.overlap_chars:
+                    break
+                tail.append((piece[0], piece[1], piece[2], True))
+                size += len(piece[2])
+            current = list(reversed(tail))
+        else:
+            current = []
 
     for row in records:
         page = row["pdf_page_number"]
@@ -445,13 +455,13 @@ def chunk_source(source: Path, output: Path, config: Config, force: bool = False
                 current_section = candidate_section
             value = line
             if current and sum(len(x[2]) for x in current) + len(value) > config.max_chars:
-                flush("TARGET_REACHED")
+                flush("TARGET_REACHED", allow_overlap=True)
             while len(value) > config.max_chars:
-                current.append((page, start, value[: config.max_chars]))
+                current.append((page, start, value[: config.max_chars], False))
                 flush("HARD_SPLIT")
                 start += config.max_chars
                 value = value[config.max_chars :]
-            current.append((page, start, value))
+            current.append((page, start, value, False))
     flush("SOURCE_END")
     warnings = []
     if not headings:
@@ -495,8 +505,8 @@ def chunk_source(source: Path, output: Path, config: Config, force: bool = False
         "duplicate_headings_suppressed": duplicate,
         "section_count": len(sections),
         "chunk_count": len(chunks),
-        "total_primary_characters": sum(counts),
-        "total_overlap_characters": 0,
+        "total_primary_characters": sum(c["primary_char_count"] for c in chunks),
+        "total_overlap_characters": sum(c["overlap_char_count"] for c in chunks),
         "minimum_chunk_characters": min(counts, default=0),
         "maximum_chunk_characters": max(counts, default=0),
         "median_chunk_characters": median(counts) if counts else 0,
