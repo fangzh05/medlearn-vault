@@ -50,7 +50,7 @@ def _norm(s: str) -> str:
 
 
 def normalize_one(
-    src: Path, out: Path, exclusions: dict[str, list[int]], force=False
+    src: Path, out: Path, exclusions: dict[str, list[int]], force: bool = False
 ) -> dict[str, Any]:
     try:
         raw = (src / "pages.jsonl").read_bytes()
