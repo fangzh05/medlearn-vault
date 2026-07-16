@@ -1,3 +1,3 @@
 """MedLearn Vault public package."""
 
-__version__ = "0.19.0"
+__version__ = "0.20.0"

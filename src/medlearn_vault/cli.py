@@ -34,6 +34,7 @@ from medlearn_vault.catalog_update import (
     render_catalog_update_markdown,
     write_catalog_patch,
 )
+from medlearn_vault.chunking import ChunkingError, chunk_input, validate_config
 from medlearn_vault.composition import build_context, compose_preview, validate_composition
 from medlearn_vault.domain import (
     ChapterDossier,
@@ -237,6 +238,45 @@ def normalize_command(
         if failed:
             raise typer.Exit(1)
     except NormalizationError as exc:
+        typer.echo(
+            json.dumps({"error_code": exc.code}, separators=(",", ":"))
+            if json_output
+            else f"error_code={exc.code}",
+            err=not json_output,
+        )
+        raise typer.Exit(1) from exc
+
+
+@sources_app.command("chunk")
+def chunk_command(
+    input_root: Annotated[Path, typer.Option("--input-root")],
+    output_root: Annotated[Path, typer.Option("--output-root")],
+    target_chars: Annotated[int, typer.Option("--target-chars")] = 1600,
+    max_chars: Annotated[int, typer.Option("--max-chars")] = 2200,
+    overlap_chars: Annotated[int, typer.Option("--overlap-chars")] = 160,
+    force: Annotated[bool, typer.Option("--force")] = False,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Build deterministic local sections and page-mapped chunks from normalized pages only."""
+    try:
+        config = validate_config(target_chars, max_chars, overlap_chars)
+        sources = chunk_input(input_root, output_root, config, force)
+        failed = sum("error_code" in item for item in sources)
+        payload = {
+            "discovered_count": len(sources),
+            "succeeded_count": len(sources) - failed,
+            "warning_count": sum(bool(x.get("warning_codes")) for x in sources),
+            "failed_count": failed,
+            "sources": sources,
+        }
+        typer.echo(
+            json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            if json_output
+            else " ".join(f"{k}={v}" for k, v in payload.items() if k != "sources")
+        )
+        if failed:
+            raise typer.Exit(1)
+    except ChunkingError as exc:
         typer.echo(
             json.dumps({"error_code": exc.code}, separators=(",", ":"))
             if json_output

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "medlearn-vault"
-version = "0.19.0"
+version = "0.20.0"
 description = "Local-first contracts for a cross-disciplinary medical learning vault / 跨学科医学学习知识库的本地优先契约层"
 readme = "README.md"
 requires-python = ">=3.12"
