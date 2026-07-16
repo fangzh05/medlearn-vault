@@ -11,6 +11,7 @@ from medlearn_vault.composition import (
     compose_preview,
     validate_target_path,
 )
+from medlearn_vault.handoff import LearningSegment, MedLearnHandoff
 
 FIXTURE = Path("examples/intake/manual-copd.json")
 HANDOFF = Path("examples/intake/project-handoff-synthetic.json")
@@ -158,3 +159,18 @@ def test_cli_digest_mismatch_is_rejected(tmp_path: Path) -> None:
     )
     assert result.exit_code == 1
     assert "COMPOSITION_INPUT_DIGEST_MISMATCH" in result.stdout
+
+
+def test_learning_segment_uses_nested_strict_handoff() -> None:
+    handoff = MedLearnHandoff.model_validate_json(HANDOFF.read_bytes())
+    segment = LearningSegment(
+        learning_session_id="composition_segment_1",
+        segment_index=0,
+        first_evidence_marker=handoff.evidence_messages[0].local_id,
+        last_evidence_marker=handoff.evidence_messages[-1].local_id,
+        segment_message_count=len(handoff.evidence_messages),
+        coverage_status="complete",
+        handoff=handoff,
+    )
+    context = build_context(segment.model_dump_json().encode(), template="")
+    assert compose_preview(context).markdown

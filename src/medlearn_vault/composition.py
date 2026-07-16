@@ -161,17 +161,19 @@ def build_context(
                     payload = json.loads(raw)
                 except (UnicodeDecodeError, json.JSONDecodeError) as exc:
                     raise ValueError("INVALID_COMPOSITION_INTAKE") from exc
+                segment_input = isinstance(payload, dict) and "handoff" in payload
+                handoff_payload = payload.get("handoff") if segment_input else payload
                 if (
-                    not isinstance(payload, dict)
-                    or "session" not in payload
-                    or "evidence_messages" not in payload
+                    not isinstance(handoff_payload, dict)
+                    or "session" not in handoff_payload
+                    or "evidence_messages" not in handoff_payload
                 ):
                     raise ValueError("INVALID_COMPOSITION_INTAKE") from None
-                if not isinstance(payload["evidence_messages"], list):
+                if not isinstance(handoff_payload["evidence_messages"], list):
                     raise ValueError("INVALID_COMPOSITION_INTAKE") from None
                 roles = {
                     x.get("local_id"): x.get("role")
-                    for x in payload.get("evidence_messages", [])
+                    for x in handoff_payload.get("evidence_messages", [])
                     if isinstance(x, dict)
                 }
 
@@ -188,21 +190,25 @@ def build_context(
                     ("claims", "evidence_local_ids", None),
                     ("learner_evidence", "evidence_local_ids", "user"),
                 ):
-                    if not isinstance(payload.get(collection, []), list):
+                    if not isinstance(handoff_payload.get(collection, []), list):
                         raise ValueError("INVALID_COMPOSITION_INTAKE") from None
                     kept = []
-                    for index, item in enumerate(payload[collection]):
+                    for index, item in enumerate(handoff_payload[collection]):
                         if not isinstance(item, dict):
                             raise ValueError("INVALID_COMPOSITION_INTAKE") from None
                         if conflict(item, key, required):
                             isolated += (f"{collection}[{index}]:EVIDENCE_ROLE_CONFLICT",)
                         else:
                             kept.append(item)
-                    payload[collection] = kept
+                    handoff_payload[collection] = kept
                 if not isolated:
                     raise ValueError("INVALID_COMPOSITION_INTAKE") from None
                 try:
-                    handoff = MedLearnHandoff.model_validate(payload)
+                    handoff = (
+                        LearningSegment.model_validate(payload).handoff
+                        if segment_input
+                        else MedLearnHandoff.model_validate(handoff_payload)
+                    )
                 except ValidationError as exc:
                     raise ValueError("INVALID_COMPOSITION_INTAKE") from exc
                 tolerant = False
