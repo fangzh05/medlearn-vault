@@ -34,6 +34,7 @@ from medlearn_vault.catalog_update import (
     render_catalog_update_markdown,
     write_catalog_patch,
 )
+from medlearn_vault.composition import build_context, compose_preview
 from medlearn_vault.domain import (
     ChapterDossier,
     ConceptEntity,
@@ -113,6 +114,7 @@ concept_app = typer.Typer(help="Validate concept entities")
 bundle_app = typer.Typer(help="Validate contract bundles")
 preview_app = typer.Typer(help="Render deterministic previews")
 capture_app = typer.Typer(help="Validate and review capture proposals")
+composition_app = typer.Typer(help="Create local-only note-composition previews")
 catalog_app = typer.Typer(help="Prepare manually reviewed catalog patches")
 workflow_app = typer.Typer(help="Run cloud control-plane workflows")
 sync_app = typer.Typer(help="Synchronize published artifacts to a local Obsidian Vault")
@@ -122,6 +124,7 @@ app.add_typer(concept_app, name="concept")
 app.add_typer(bundle_app, name="bundle")
 app.add_typer(preview_app, name="preview")
 app.add_typer(capture_app, name="capture")
+app.add_typer(composition_app, name="compose")
 app.add_typer(catalog_app, name="catalog")
 app.add_typer(workflow_app, name="workflow")
 app.add_typer(sync_app, name="sync")
@@ -199,6 +202,34 @@ def _sync_output(value: dict[str, object], json_output: bool) -> None:
 def _sync_error(exc: SyncError, json_output: bool) -> NoReturn:
     _sync_output({"status": "error", "error_code": exc.code}, json_output)
     raise typer.Exit(3 if exc.code == "SYNC_LOCAL_CONFLICT" else 1) from exc
+
+
+@composition_app.command("preview")
+def compose_preview_command(
+    intake: Annotated[Path, typer.Option("--intake")],
+    template: Annotated[Path, typer.Option("--template")],
+    output: Annotated[Path, typer.Option("--output")],
+    current_note: Annotated[Path | None, typer.Option("--current-note")] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Write a deterministic local preview; this never writes Vault or R2."""
+    try:
+        context = build_context(
+            intake.read_bytes(),
+            template=template.read_text(encoding="utf-8"),
+            current_note=(current_note.read_text(encoding="utf-8") if current_note else None),
+        )
+        result = compose_preview(context)
+    except (OSError, ValueError) as exc:
+        _sync_output({"status": "error", "error_code": str(exc)}, json_output)
+        raise typer.Exit(1) from exc
+    output.write_text(result.markdown, encoding="utf-8", newline="\n")
+    payload: dict[str, object] = {
+        "status": "composed",
+        "target_path": result.target_path,
+        "warning_count": len(result.warnings),
+    }
+    _sync_output(payload, json_output)
 
 
 @sync_app.command("configure")
