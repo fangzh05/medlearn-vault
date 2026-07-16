@@ -34,7 +34,7 @@ from medlearn_vault.catalog_update import (
     render_catalog_update_markdown,
     write_catalog_patch,
 )
-from medlearn_vault.composition import build_context, compose_preview
+from medlearn_vault.composition import build_context, compose_preview, validate_composition
 from medlearn_vault.domain import (
     ChapterDossier,
     ConceptEntity,
@@ -211,6 +211,7 @@ def compose_preview_command(
     output: Annotated[Path, typer.Option("--output")],
     current_note: Annotated[Path | None, typer.Option("--current-note")] = None,
     source_job_id: Annotated[str | None, typer.Option("--source-job-id")] = None,
+    expected_intake_digest: Annotated[str | None, typer.Option("--expected-intake-digest")] = None,
     json_output: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
     """Write a deterministic local preview; this never writes Vault or R2."""
@@ -220,17 +221,27 @@ def compose_preview_command(
             template=template.read_text(encoding="utf-8"),
             current_note=(current_note.read_text(encoding="utf-8") if current_note else None),
             source_job_id=source_job_id,
+            expected_intake_digest=expected_intake_digest,
         )
         result = compose_preview(context)
         output.write_text(result.markdown, encoding="utf-8", newline="\n")
     except (OSError, ValueError) as exc:
-        _sync_output({"status": "error", "error_code": str(exc)}, json_output)
+        code = "COMPOSITION_OUTPUT_WRITE_FAILED" if isinstance(exc, OSError) else str(exc)
+        _sync_output({"status": "rejected", "error_code": code}, json_output)
         raise typer.Exit(1) from exc
+    validation = validate_composition(context)
     payload: dict[str, object] = {
-        "status": "composed",
+        "status": validation.status,
+        "source_record_id": context.source_record_id,
         "target_path": result.target_path,
         "warning_count": len(result.warnings),
+        "isolated_count": len(result.isolated_items),
     }
+    if context.source_job_id is not None:
+        payload["source_job_id"] = context.source_job_id
+    if json_output:
+        payload["warning_codes"] = [item.code for item in result.warnings]
+        payload["blocker_codes"] = []
     _sync_output(payload, json_output)
 
 
