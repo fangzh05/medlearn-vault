@@ -169,3 +169,45 @@ def test_transaction_replace_failure_restores_existing_output(
     with pytest.raises(ChunkingError, match="CHUNKING_OUTPUT_WRITE_FAILED"):
         chunk_source(book, destination, validate_config(200, 300, 0), force=True)
     assert (destination / "old").read_text() == "old"
+
+
+def test_target_changes_boundaries_and_no_space_chinese_headings(tmp_path: Path) -> None:
+    source(tmp_path / "in", [("第一章总论\n" + "段落甲\n" * 180, "included")])
+    chunk_input(tmp_path / "in", tmp_path / "small", validate_config(200, 500, 0))
+    chunk_input(tmp_path / "in", tmp_path / "large", validate_config(400, 500, 0))
+    assert len(rows(tmp_path / "small", "chunks.jsonl")) > len(
+        rows(tmp_path / "large", "chunks.jsonl")
+    )
+    assert len(rows(tmp_path / "small", "sections.jsonl")) == 2
+
+
+def test_pending_overlap_does_not_emit_at_section_or_gap(tmp_path: Path) -> None:
+    source(
+        tmp_path / "in",
+        [("甲\n" * 160, "included"), ("第一章总论\n乙\n" * 80, "included"), ("", "excluded")],
+    )
+    chunk_input(tmp_path / "in", tmp_path / "out", validate_config(200, 300, 80))
+    chunks = rows(tmp_path / "out", "chunks.jsonl")
+    assert all(int(chunk["primary_char_count"]) > 0 for chunk in chunks)
+    assert all(
+        int(chunk["primary_char_count"]) + int(chunk["overlap_char_count"])
+        == int(chunk["char_count"])
+        for chunk in chunks
+    )
+
+
+@pytest.mark.parametrize("excluded,expected", [([3], 1), ([3, 4, 5], 1), ([3, 5], 2)])
+def test_excluded_gap_runs(tmp_path: Path, excluded: list[int], expected: int) -> None:
+    source(
+        tmp_path / "in",
+        [
+            (
+                "x" * 250 if page not in excluded else "",
+                "excluded" if page in excluded else "included",
+            )
+            for page in range(1, 7)
+        ],
+    )
+    chunk_input(tmp_path / "in", tmp_path / "out", validate_config(200, 300, 0))
+    report = json.loads((tmp_path / "out" / "book" / "chunking-report.json").read_text())
+    assert report["excluded_page_gap_count"] == expected

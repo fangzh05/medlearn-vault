@@ -192,8 +192,8 @@ def _heading(line: str, edge: bool, isolated: bool) -> tuple[int, str] | None:
         return None
     patterns = (
         (r"^第[一二三四五六七八九十百千\d]+篇\b", 1, "EXPLICIT_PART"),
-        (r"^(?:第[一二三四五六七八九十百千\d]+章|chapter\s+[ivxlcdm\d]+)\b", 1, "EXPLICIT_CHAPTER"),
-        (r"^(?:第[一二三四五六七八九十百千\d]+节|section\s+\d+)\b", 2, "EXPLICIT_SECTION"),
+        (r"^(?:第[一二三四五六七八九十百千\d]+章|chapter\s+[ivxlcdm\d]+)", 1, "EXPLICIT_CHAPTER"),
+        (r"^(?:第[一二三四五六七八九十百千\d]+节|section\s+\d+)", 2, "EXPLICIT_SECTION"),
         (r"^[一二三四五六七八九十]+、\S+", 2, "NUMBERED_LEVEL_2"),
         (r"^[（(][一二三四五六七八九十]+[）)]\s*\S+", 3, "NUMBERED_LEVEL_3"),
         (r"^\d+(?:\.\d+){1,2}\s*\S+", 4, "NUMBERED_LEVEL_4"),
@@ -358,6 +358,21 @@ def chunk_source(source: Path, output: Path, config: Config, force: bool = False
         )
         sections.append(sec)
         stack.append(sec)
+    for index, section in enumerate(sections[1:], 1):
+        next_peer = next(
+            (other for other in sections[index + 1 :] if other["level"] <= section["level"]),
+            None,
+        )
+        section["end_pdf_page_number"] = (
+            next_peer["heading_pdf_page_number"] - 1 if next_peer is not None else len(records)
+        )
+        section["end_pdf_page_number"] = max(
+            section["start_pdf_page_number"], section["end_pdf_page_number"]
+        )
+        span = records[section["start_pdf_page_number"] - 1 : section["end_pdf_page_number"]]
+        section["included_page_count"] = sum(row["page_status"] == "included" for row in span)
+        section["excluded_page_count"] = sum(row["page_status"] == "excluded" for row in span)
+        section["empty_page_count"] = sum(row["page_status"] == "empty" for row in span)
     chunks: list[dict[str, Any]] = []
     current: list[tuple[int, int, str, bool]] = []
     current_section: dict[str, Any] = root
@@ -374,6 +389,9 @@ def chunk_source(source: Path, output: Path, config: Config, force: bool = False
     def flush(reason: str, allow_overlap: bool = False) -> None:
         nonlocal current
         if not current:
+            return
+        if not any(not piece[3] for piece in current):
+            current = []
             return
         text = "".join(x[2] for x in current)
         segments = []
@@ -454,6 +472,9 @@ def chunk_source(source: Path, output: Path, config: Config, force: bool = False
                 flush("SECTION_END")
                 current_section = candidate_section
             value = line
+            primary_size = sum(len(piece[2]) for piece in current if not piece[3])
+            if current and primary_size >= config.target_chars:
+                flush("TARGET_REACHED", allow_overlap=True)
             if current and sum(len(x[2]) for x in current) + len(value) > config.max_chars:
                 flush("TARGET_REACHED", allow_overlap=True)
             while len(value) > config.max_chars:
@@ -512,7 +533,11 @@ def chunk_source(source: Path, output: Path, config: Config, force: bool = False
         "median_chunk_characters": median(counts) if counts else 0,
         "hard_split_count": sum(c["split_reason"] == "HARD_SPLIT" for c in chunks),
         "small_final_chunk_count": 0,
-        "excluded_page_gap_count": sum(r["page_status"] == "excluded" for r in records),
+        "excluded_page_gap_count": sum(
+            row["page_status"] == "excluded"
+            and (index == 0 or records[index - 1]["page_status"] != "excluded")
+            for index, row in enumerate(records)
+        ),
         "pages_represented_in_chunks": sorted(
             {s["pdf_page_number"] for c in chunks for s in c["source_segments"]}
         ),
