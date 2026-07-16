@@ -67,6 +67,7 @@ from medlearn_vault.publication import (
     capture_identity,
     render_learning_capture_markdown,
 )
+from medlearn_vault.source_index import SourceIndexError, build_index, search_index, snippet
 from medlearn_vault.source_pdf import ExtractionResult, PdfExtractionError, extract_input
 from medlearn_vault.sync_client import (
     configure as sync_configure_service,
@@ -134,6 +135,63 @@ app.add_typer(workflow_app, name="workflow")
 app.add_typer(sync_app, name="sync")
 app.add_typer(sources_app, name="sources")
 sync_app.add_typer(sync_schedule_app, name="schedule")
+
+
+def _source_index_error(exc: SourceIndexError, json_output: bool) -> NoReturn:
+    typer.echo(
+        json.dumps({"error_code": exc.code}, separators=(",", ":"))
+        if json_output
+        else f"error_code={exc.code}",
+        err=not json_output,
+    )
+    raise typer.Exit(1) from exc
+
+
+@sources_app.command("index")
+def sources_index(
+    input_root: Annotated[Path, typer.Option("--input-root")],
+    output: Annotated[Path, typer.Option("--output")],
+    force: Annotated[bool, typer.Option("--force")] = False,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Build a local-only SQLite index from chunking outputs."""
+    try:
+        result = build_index(input_root, output, __version__, force)
+    except SourceIndexError as exc:
+        _source_index_error(exc, json_output)
+    typer.echo(
+        json.dumps(result, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        if json_output
+        else " ".join(f"{key}={value}" for key, value in result.items() if key != "source_failures")
+    )
+    if result["source_failures"]:
+        raise typer.Exit(1)
+
+
+@sources_app.command("search")
+def sources_search(
+    query: Annotated[str, typer.Argument()],
+    index: Annotated[Path, typer.Option("--index")],
+    limit: Annotated[int, typer.Option("--limit")] = 10,
+    source: Annotated[str | None, typer.Option("--source")] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Run deterministic lexical search over a local source index."""
+    try:
+        result = search_index(index, query, limit, source)
+    except SourceIndexError as exc:
+        _source_index_error(exc, json_output)
+    if json_output:
+        typer.echo(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
+        return
+    for row in result["results"]:
+        typer.echo(
+            f"{row['rank']}. score={row['score']} source={row['source_relative_path']} "
+            f"pages={row['start_pdf_page_number']}-{row['end_pdf_page_number']}"
+        )
+        typer.echo(" / ".join(row["section_titles"]))
+        typer.echo(snippet(row["text"], result["normalized_query"]))
+
 
 SCHEMA_MODELS: dict[str, type[BaseModel]] = {
     "concept_entity": ConceptEntity,
