@@ -1,4 +1,6 @@
+import hashlib
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -7,14 +9,76 @@ from typer.testing import CliRunner
 from medlearn_vault.cli import app
 from medlearn_vault.composition import (
     CompositionContext,
+    attach_retrieval,
     build_context,
     compose_preview,
     validate_target_path,
 )
 from medlearn_vault.handoff import LearningSegment, MedLearnHandoff
+from medlearn_vault.source_index import build_index
 
 FIXTURE = Path("examples/intake/manual-copd.json")
 HANDOFF = Path("examples/intake/project-handoff-synthetic.json")
+
+
+def _source(root: Path, name: str, text: str) -> None:
+    directory = root / name
+    directory.mkdir(parents=True)
+    identity = {
+        "source_relative_path": f"synthetic/{name}",
+        "source_file": name,
+        "source_sha256": "sha256:" + "a" * 64,
+    }
+    chunk = {
+        **identity,
+        "chunking_version": "1",
+        "structure_version": "1",
+        "normalization_version": "1",
+        "chunk_id": f"chunk_{name}",
+        "chunk_index": 0,
+        "section_id": "section_1",
+        "section_path": ["section_1"],
+        "section_titles": ["Synthetic section"],
+        "start_pdf_page_number": 2,
+        "end_pdf_page_number": 3,
+        "text": text,
+        "text_sha256": "sha256:" + hashlib.sha256(text.encode()).hexdigest(),
+        "char_count": len(text),
+    }
+    (directory / "sections.jsonl").write_text(
+        json.dumps({"section_id": "section_1", "title": "Synthetic section"}) + "\n",
+        encoding="utf-8",
+    )
+    chunks = json.dumps(chunk) + "\n"
+    (directory / "chunks.jsonl").write_text(chunks, encoding="utf-8")
+    digest = "sha256:" + hashlib.sha256((directory / "chunks.jsonl").read_bytes()).hexdigest()
+    (directory / "chunking-report.json").write_text(
+        json.dumps(
+            {
+                **identity,
+                "chunking_version": "1",
+                "structure_version": "1",
+                "supported_normalization_version": "1",
+                "chunk_count": 1,
+                "output_digests": {"chunks.jsonl": digest},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _context_with_concepts(*concepts: str) -> CompositionContext:
+    return replace(
+        build_context(FIXTURE.read_bytes(), template="# Template"), concept_candidates=concepts
+    )
+
+
+def _index(tmp_path: Path, *texts: str) -> Path:
+    for number, text in enumerate(texts):
+        _source(tmp_path / "input", f"source_{number}.pdf", text)
+    index = tmp_path / "index.sqlite3"
+    build_index(tmp_path / "input", index, "0.22.0")
+    return index
 
 
 def test_intake_composes_deterministically_and_uses_inbox() -> None:
@@ -174,3 +238,183 @@ def test_learning_segment_uses_nested_strict_handoff() -> None:
     )
     context = build_context(segment.model_dump_json().encode(), template="")
     assert compose_preview(context).markdown
+
+
+def test_retrieval_attaches_sources_digest_and_markdown(tmp_path: Path) -> None:
+    index = _index(tmp_path, "alpha exact synthetic text", "alpha another synthetic text")
+    context = attach_retrieval(_context_with_concepts(" alpha "), index)
+    assert len(context.retrieved_sources) == 2
+    assert context.retrieval_digest and context.retrieval_digest.startswith("sha256:")
+    assert "SOURCE_MISSING" not in {item.code for item in context.warnings}
+    markdown = compose_preview(context).markdown
+    assert "## Retrieved source context" in markdown and "alpha exact synthetic text" in markdown
+    assert "- Pages: `2-3`" in markdown and "- Retrieval query: `alpha`" in markdown
+
+
+def test_retrieval_queries_first_three_in_order_and_deduplicates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = _context_with_concepts(" A  B ", "a b", "Second", "Third", "Fourth")
+    calls: list[tuple[str, int]] = []
+
+    def fake_search(index: Path, query: str, limit: int = 10) -> dict[str, object]:
+        calls.append((query, limit))
+        row = {
+            "rank": 1,
+            "score": 1,
+            "chunk_id": "shared" if query != "Second" else "second",
+            "source_relative_path": "synthetic/a.pdf",
+            "source_file": "a.pdf",
+            "section_id": "s",
+            "section_titles": ["S"],
+            "start_pdf_page_number": 1,
+            "end_pdf_page_number": 1,
+            "text": "synthetic",
+            "text_sha256": "sha256:" + "b" * 64,
+        }
+        return {"results": [row, row]}
+
+    monkeypatch.setattr("medlearn_vault.composition.search_index", fake_search)
+    attached = attach_retrieval(context, Path("unused.sqlite3"))
+    assert calls == [("A B", 2), ("Second", 2), ("Third", 2)]
+    assert [item.chunk_id for item in attached.retrieved_sources] == ["shared", "second"]
+
+
+def test_retrieval_limit_digest_and_warning_outcomes(tmp_path: Path) -> None:
+    index = _index(tmp_path, "alpha first", "alpha second", "alpha third")
+    context = _context_with_concepts("alpha")
+    first = attach_retrieval(context, index, retrieval_limit=1)
+    second = attach_retrieval(context, index, retrieval_limit=1)
+    assert len(first.retrieved_sources) == 1 and first.retrieval_digest == second.retrieval_digest
+    no_concepts = attach_retrieval(_context_with_concepts(), index)
+    assert {item.code for item in no_concepts.warnings} >= {"SOURCE_QUERY_UNAVAILABLE"}
+    no_matches = attach_retrieval(_context_with_concepts("missing"), index)
+    assert {item.code for item in no_matches.warnings} >= {"SOURCE_NOT_FOUND"}
+
+
+def test_retrieval_index_failure_and_cli_payload_are_safe(tmp_path: Path) -> None:
+    template = tmp_path / "template.md"
+    template.write_text("# Template", encoding="utf-8")
+    output = tmp_path / "preview.md"
+    missing = tmp_path / "missing.sqlite3"
+    result = CliRunner().invoke(
+        app,
+        [
+            "compose",
+            "preview",
+            "--intake",
+            str(FIXTURE),
+            "--template",
+            str(template),
+            "--index",
+            str(missing),
+            "--output",
+            str(output),
+        ],
+    )
+    assert result.exit_code == 1 and "COMPOSITION_SOURCE_INDEX_FAILED" in result.stdout
+    assert "Traceback" not in result.stdout
+    index = _index(tmp_path / "good", "alpha private synthetic text")
+    intake = tmp_path / "intake.json"
+    intake.write_text(json.dumps(json.loads(FIXTURE.read_text(encoding="utf-8"))), encoding="utf-8")
+    payload = json.loads(intake.read_text(encoding="utf-8"))
+    payload["draft"]["concept_mentions"] = [
+        {"surface_text": "alpha", "evidence_message_ids": ["message:user-001"]}
+    ]
+    intake.write_text(json.dumps(payload), encoding="utf-8")
+    result = CliRunner().invoke(
+        app,
+        [
+            "compose",
+            "preview",
+            "--intake",
+            str(intake),
+            "--template",
+            str(template),
+            "--index",
+            str(index),
+            "--output",
+            str(output),
+            "--json",
+        ],
+    )
+    assert result.exit_code == 0
+    summary = json.loads(result.stdout)
+    assert summary["retrieval_count"] == 1 and summary["retrieval_digest"]
+    assert "private synthetic text" not in result.stdout and str(index) not in result.stdout
+
+
+def test_retrieval_uses_at_most_two_results_per_concept(tmp_path: Path) -> None:
+    index = _index(tmp_path, "alpha one", "alpha two", "alpha three")
+    attached = attach_retrieval(_context_with_concepts("alpha"), index)
+    assert len(attached.retrieved_sources) == 2
+
+
+def test_retrieval_limit_is_a_global_cap(tmp_path: Path) -> None:
+    index = _index(tmp_path, "alpha beta one", "alpha beta two", "alpha beta three")
+    attached = attach_retrieval(_context_with_concepts("alpha", "beta"), index, 1)
+    assert len(attached.retrieved_sources) == 1
+
+
+def test_retrieval_digest_is_deterministic(tmp_path: Path) -> None:
+    index = _index(tmp_path, "alpha stable")
+    context = _context_with_concepts("alpha")
+    assert (
+        attach_retrieval(context, index).retrieval_digest
+        == attach_retrieval(context, index).retrieval_digest
+    )
+
+
+def test_retrieval_no_concepts_warns_without_search(tmp_path: Path) -> None:
+    attached = attach_retrieval(_context_with_concepts(), tmp_path / "not-opened.sqlite3")
+    assert {issue.code for issue in attached.warnings} >= {"SOURCE_QUERY_UNAVAILABLE"}
+
+
+def test_retrieval_zero_matches_warns(tmp_path: Path) -> None:
+    index = _index(tmp_path, "alpha only")
+    attached = attach_retrieval(_context_with_concepts("unmatched"), index)
+    assert {issue.code for issue in attached.warnings} >= {"SOURCE_NOT_FOUND"}
+
+
+def test_compose_without_index_keeps_preview_without_source_context(tmp_path: Path) -> None:
+    template = tmp_path / "template.md"
+    template.write_text("# Template", encoding="utf-8")
+    output = tmp_path / "preview.md"
+    result = CliRunner().invoke(
+        app,
+        [
+            "compose",
+            "preview",
+            "--intake",
+            str(FIXTURE),
+            "--template",
+            str(template),
+            "--output",
+            str(output),
+            "--json",
+        ],
+    )
+    assert result.exit_code == 0
+    assert "## Retrieved source context" not in output.read_text(encoding="utf-8")
+    assert json.loads(result.stdout)["retrieval_count"] == 0
+
+
+def test_cli_retrieval_limit_validation_has_no_traceback(tmp_path: Path) -> None:
+    template = tmp_path / "template.md"
+    template.write_text("# Template", encoding="utf-8")
+    result = CliRunner().invoke(
+        app,
+        [
+            "compose",
+            "preview",
+            "--intake",
+            str(FIXTURE),
+            "--template",
+            str(template),
+            "--output",
+            str(tmp_path / "preview.md"),
+            "--retrieval-limit",
+            "13",
+        ],
+    )
+    assert result.exit_code == 2 and "Traceback" not in result.stdout
