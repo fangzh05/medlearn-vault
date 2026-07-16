@@ -1,5 +1,13 @@
 # MedLearn Vault
 
+## Local source search
+
+`medlearn sources index --input-root <chunked-root> --output <index.sqlite3>`
+builds a private local SQLite index from existing chunking outputs; `medlearn
+sources search QUERY --index <index.sqlite3>` provides deterministic lexical
+search. It has no network, semantic, embedding, or publication behavior. See
+[local source search](docs/local-source-search.md).
+
 ## Deterministic chapter-aware chunking
 
 `medlearn sources chunk --input-root <source-root> --output-root <output-root>`

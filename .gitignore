@@ -20,3 +20,4 @@ coverage/
 plugins/medlearn/.app.json
 **/.obsidian/plugins/remotely-save/data.json
 /wheelhouse/
+*.sqlite3
