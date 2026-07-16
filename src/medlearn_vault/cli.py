@@ -219,17 +219,14 @@ def normalize_command(
     try:
         files, unknown_sources = normalize_input(input_root, output_root, exclusions, force)
         failed = sum("error_code" in item for item in files)
-        if unknown_sources:
-            for item in files:
-                if "warning_codes" in item:
-                    item["warning_codes"] = sorted(
-                        set(item["warning_codes"]) | {"UNKNOWN_EXCLUSION_SOURCE"}
-                    )
+        batch_warnings = ["UNKNOWN_EXCLUSION_SOURCE"] if unknown_sources else []
         payload = {
             "discovered_count": len(files),
             "succeeded_count": len(files) - failed,
-            "warning_count": sum(bool(x.get("warning_codes")) for x in files),
+            "warning_count": sum(bool(x.get("warning_codes")) for x in files) + len(batch_warnings),
             "failed_count": failed,
+            "warning_codes": batch_warnings,
+            "unknown_exclusion_source_count": len(unknown_sources),
             "sources": files,
         }
         typer.echo(

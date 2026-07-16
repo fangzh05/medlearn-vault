@@ -73,6 +73,20 @@ def _safe_relative(value: object) -> str:
     return value
 
 
+def _safe_basename(value: object) -> str:
+    if (
+        not isinstance(value, str)
+        or not value
+        or "\x00" in value
+        or "/" in value
+        or "\\" in value
+        or ":" in value
+        or value in {".", ".."}
+    ):
+        raise NormalizationError("NORMALIZATION_INPUT_INVALID")
+    return value
+
+
 def _clean(text: str) -> str:
     lines = [
         x.rstrip(" \t")
@@ -153,9 +167,11 @@ def _load(src: Path) -> tuple[list[dict[str, Any]], dict[str, Any], bytes, bytes
         raise NormalizationError("NORMALIZATION_INPUT_INVALID") from exc
     if not all(isinstance(x, dict) for x in rows) or not isinstance(report, dict):
         raise NormalizationError("NORMALIZATION_INPUT_INVALID")
-    if [r.get("pdf_page_number") for r in rows] != list(range(1, len(rows) + 1)) or report.get(
-        "total_pages"
-    ) != len(rows):
+    if (
+        [r.get("pdf_page_number") for r in rows] != list(range(1, len(rows) + 1))
+        or type(report.get("total_pages")) is not int
+        or report.get("total_pages") != len(rows)
+    ):
         raise NormalizationError("NORMALIZATION_PAGE_SEQUENCE_INVALID")
     keys = ("source_relative_path", "source_sha256", "source_file", "extraction_version")
     for key in keys:
@@ -163,7 +179,8 @@ def _load(src: Path) -> tuple[list[dict[str, Any]], dict[str, Any], bytes, bytes
             raise NormalizationError("NORMALIZATION_SOURCE_IDENTITY_MISMATCH")
     if rows[0].get("extraction_version") != "1":
         raise NormalizationError("NORMALIZATION_UNSUPPORTED_EXTRACTION_VERSION")
-    _safe_relative(rows[0]["source_relative_path"])
+    _safe_relative(rows[0].get("source_relative_path"))
+    _safe_basename(rows[0].get("source_file"))
     if not isinstance(rows[0]["source_sha256"], str) or not re.fullmatch(
         r"sha256:[0-9a-f]{64}", rows[0]["source_sha256"]
     ):
@@ -174,6 +191,8 @@ def _load(src: Path) -> tuple[list[dict[str, Any]], dict[str, Any], bytes, bytes
         if (
             not isinstance(text, str)
             or "\x00" in text
+            or type(r.get("pdf_page_number")) is not int
+            or type(r.get("char_count")) is not int
             or r.get("char_count") != len(text)
             or status not in {"text", "empty"}
             or (status == "empty" and text)
@@ -185,6 +204,95 @@ def _load(src: Path) -> tuple[list[dict[str, Any]], dict[str, Any], bytes, bytes
 
 def _edge_number(line: str) -> bool:
     return bool(re.fullmatch(r"(?:[-— ]*\d+[-— ]*|第\d+页|\d+\s*/\s*\d+)", line.strip()))
+
+
+def _disjoint_edge_zones(nonempty: list[int]) -> tuple[list[int], list[int]]:
+    """Return at most three line positions per edge without overlapping ownership."""
+    top: list[int] = []
+    bottom: list[int] = []
+    last = len(nonempty) - 1
+    for position, index in enumerate(nonempty):
+        top_distance = position
+        bottom_distance = last - position
+        if top_distance > 2 and bottom_distance > 2:
+            continue
+        # Ties belong to the top edge, so one physical line has one owner.
+        (top if top_distance <= bottom_distance else bottom).append(index)
+    return top, bottom
+
+
+def _summary(report: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: report[key]
+        for key in (
+            "source_relative_path",
+            "total_pages",
+            "included_pages",
+            "excluded_pages",
+            "empty_pages",
+            "normalized_total_characters",
+            "normalization_status",
+            "warning_codes",
+        )
+    }
+
+
+def _remove_tree(path: Path) -> None:
+    if path.exists():
+        shutil.rmtree(path)
+
+
+def _write_transaction(out: Path, files: dict[str, bytes], force: bool) -> None:
+    """Commit a complete output directory, preserving recoverable old output on failure."""
+    expected = set(files)
+    try:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        if out.exists():
+            same = (
+                out.is_dir()
+                and {p.name for p in out.iterdir()} == expected
+                and all(
+                    (out / name).is_file() and (out / name).read_bytes() == body
+                    for name, body in files.items()
+                )
+            )
+            if same:
+                return
+            if not force:
+                raise NormalizationError("NORMALIZATION_OUTPUT_CONFLICT")
+        stage = Path(tempfile.mkdtemp(prefix=".medlearn-stage-", dir=out.parent))
+    except NormalizationError:
+        raise
+    except OSError as exc:
+        raise NormalizationError("NORMALIZATION_OUTPUT_WRITE_FAILED") from exc
+
+    backup = out.parent / (".medlearn-backup-" + stage.name.rsplit("-", 1)[-1])
+    committed = False
+    try:
+        for name, body in files.items():
+            with (stage / name).open("wb") as handle:
+                handle.write(body)
+                handle.flush()
+                os.fsync(handle.fileno())
+        if out.exists():
+            os.replace(out, backup)
+        try:
+            os.replace(stage, out)
+            committed = True
+        except OSError:
+            if backup.exists():
+                os.replace(backup, out)
+            raise
+        if backup.exists():
+            _remove_tree(backup)
+    except OSError as exc:
+        # A failed restore must retain the backup: it is the only old output.
+        if not committed:
+            try:
+                _remove_tree(stage)
+            except OSError:
+                pass
+        raise NormalizationError("NORMALIZATION_OUTPUT_WRITE_FAILED") from exc
 
 
 def normalize_source(
@@ -200,7 +308,8 @@ def normalize_source(
     if len(included) >= 5:
         for r in included:
             ls = [x for x in _clean(r["text"]).split("\n") if x.strip()]
-            for zone, part in (("top", ls[:3]), ("bottom", ls[-3:])):
+            top, bottom = _disjoint_edge_zones(list(range(len(ls))))
+            for zone, part in (("top", [ls[i] for i in top]), ("bottom", [ls[i] for i in bottom])):
                 for line in set(_canonical(x) for x in part if 2 <= len(_canonical(x)) <= 160):
                     zones[zone][line] = zones[zone].get(line, 0) + 1
     threshold = max(5, (len(included) * 3 + 4) // 5)
@@ -219,15 +328,19 @@ def normalize_source(
             lines = _clean(rawtext).split("\n") if _clean(rawtext) else []
             non = [i for i, x in enumerate(lines) if x.strip()]
             remove = set()
-            for zone, idxs in (("top", non[:3]), ("bottom", non[-3:])):
+            top, bottom = _disjoint_edge_zones(non)
+            for zone, idxs in (("top", top), ("bottom", bottom)):
                 for i in idxs:
-                    if len(non) > 1 and (
-                        _canonical(lines[i]) in repeated[zone] or _edge_number(lines[i])
-                    ):
+                    # Repetition alone is weak evidence on sparse pages.  Only the
+                    # outermost line is eligible; page numbers remain explicit edge
+                    # removals at either edge.
+                    outermost = i == (idxs[0] if zone == "top" else idxs[-1])
+                    repeated_line = outermost and _canonical(lines[i]) in repeated[zone]
+                    if len(non) > 1 and (repeated_line or _edge_number(lines[i])):
                         remove.add(i)
                         head += zone == "top"
                         foot += zone == "bottom"
-            text = "\n".join(x for i, x in enumerate(lines) if i not in remove)
+            text = _clean("\n".join(x for i, x in enumerate(lines) if i not in remove))
             status = "empty" if not text.strip() else "included"
             reason = None
         if "\ufffd" in text:
@@ -269,7 +382,6 @@ def normalize_source(
             "REPLACEMENT_CHARACTERS_REMAIN",
             any("REPLACEMENT_CHARACTERS_REMAIN" in x["warning_codes"] for x in output),
         ),
-        ("NO_REPEATED_HEADER_FOOTER_DETECTED", not (rh + rf)),
     ):
         if cond:
             warnings.append(code)
@@ -299,61 +411,8 @@ def normalize_source(
         "normalization_status": "success_with_warnings" if warnings else "success",
     }
     files = {"normalized-pages.jsonl": pages, "normalization-report.json": _json(rep)}
-    parent = out.parent
-    parent.mkdir(parents=True, exist_ok=True)
-    same = out.exists() and all(
-        (out / n).is_file() and (out / n).read_bytes() == b for n, b in files.items()
-    )
-    if same:
-        return {
-            k: rep[k]
-            for k in (
-                "source_relative_path",
-                "total_pages",
-                "included_pages",
-                "excluded_pages",
-                "empty_pages",
-                "normalized_total_characters",
-                "normalization_status",
-                "warning_codes",
-            )
-        }
-    if out.exists() and not force:
-        raise NormalizationError("NORMALIZATION_OUTPUT_CONFLICT")
-    stage = Path(tempfile.mkdtemp(prefix=".medlearn-stage-", dir=parent))
-    backup = parent / (".medlearn-backup-" + stage.name.rsplit("-", 1)[-1])
-    try:
-        for n, b in files.items():
-            with (stage / n).open("wb") as f:
-                f.write(b)
-                f.flush()
-                os.fsync(f.fileno())
-        if out.exists():
-            os.replace(out, backup)
-        try:
-            os.replace(stage, out)
-        except OSError:
-            if backup.exists():
-                os.replace(backup, out)
-            raise
-        shutil.rmtree(backup, ignore_errors=True)
-    except OSError as exc:
-        shutil.rmtree(stage, ignore_errors=True)
-        shutil.rmtree(backup, ignore_errors=True)
-        raise NormalizationError("NORMALIZATION_OUTPUT_WRITE_FAILED") from exc
-    return {
-        k: rep[k]
-        for k in (
-            "source_relative_path",
-            "total_pages",
-            "included_pages",
-            "excluded_pages",
-            "empty_pages",
-            "normalized_total_characters",
-            "normalization_status",
-            "warning_codes",
-        )
-    }
+    _write_transaction(out, files, force)
+    return _summary(rep)
 
 
 def normalize_input(
