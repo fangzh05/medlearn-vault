@@ -133,6 +133,8 @@ MedLearn Vault is a local-first contract layer for a cross-disciplinary medical 
 
 Fast composition is a separate local draft-note preview: 结构或存储不安全才失败；知识不完整只告警。It never certifies medical correctness or changes the strict approval/publication path.
 
+`medlearn compose preview` can optionally use a local SQLite source index (`--index`) to retrieve context from up to three concept candidates (two results each; default final limit 6). Retrieval is deterministic and local-only; it may warn when queries or matches are unavailable, never certifies correctness, and never publishes or syncs notes. See [fast composition](docs/fast-composition.md).
+
 The repository currently implements:
 
 - permanent medical concept identifiers, matching fingerprints, and external coding identifiers;

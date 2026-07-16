@@ -35,7 +35,12 @@ from medlearn_vault.catalog_update import (
     write_catalog_patch,
 )
 from medlearn_vault.chunking import ChunkingError, chunk_input, validate_config
-from medlearn_vault.composition import build_context, compose_preview, validate_composition
+from medlearn_vault.composition import (
+    attach_retrieval,
+    build_context,
+    compose_preview,
+    validate_composition,
+)
 from medlearn_vault.domain import (
     ChapterDossier,
     ConceptEntity,
@@ -406,6 +411,8 @@ def compose_preview_command(
     current_note: Annotated[Path | None, typer.Option("--current-note")] = None,
     source_job_id: Annotated[str | None, typer.Option("--source-job-id")] = None,
     expected_intake_digest: Annotated[str | None, typer.Option("--expected-intake-digest")] = None,
+    index: Annotated[Path | None, typer.Option("--index")] = None,
+    retrieval_limit: Annotated[int, typer.Option("--retrieval-limit", min=1, max=12)] = 6,
     json_output: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
     """Write a deterministic local preview; this never writes Vault or R2."""
@@ -417,6 +424,8 @@ def compose_preview_command(
             source_job_id=source_job_id,
             expected_intake_digest=expected_intake_digest,
         )
+        if index is not None:
+            context = attach_retrieval(context, index, retrieval_limit)
         result = compose_preview(context)
         output.write_text(result.markdown, encoding="utf-8", newline="\n")
     except (OSError, ValueError) as exc:
@@ -430,6 +439,8 @@ def compose_preview_command(
         "target_path": result.target_path,
         "warning_count": len(result.warnings),
         "isolated_count": len(result.isolated_items),
+        "retrieval_count": len(context.retrieved_sources),
+        "retrieval_digest": context.retrieval_digest,
     }
     if context.source_job_id is not None:
         payload["source_job_id"] = context.source_job_id

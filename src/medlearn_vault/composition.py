@@ -5,14 +5,15 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from dataclasses import dataclass
-from pathlib import PurePosixPath
+from dataclasses import dataclass, replace
+from pathlib import Path, PurePosixPath
 from typing import Literal, Protocol
 
 from pydantic import ValidationError
 
 from medlearn_vault.capture import IntakeEnvelope
 from medlearn_vault.handoff import LearningSegment, MedLearnHandoff
+from medlearn_vault.source_index import SourceIndexError, search_index
 
 
 @dataclass(frozen=True)
@@ -20,6 +21,22 @@ class CompositionIssue:
     severity: Literal["blocker", "warning"]
     code: str
     message: str
+
+
+@dataclass(frozen=True)
+class RetrievedSource:
+    query: str
+    rank: int
+    score: int
+    chunk_id: str
+    source_relative_path: str
+    source_file: str
+    section_id: str
+    section_titles: tuple[str, ...]
+    start_pdf_page_number: int
+    end_pdf_page_number: int
+    text: str
+    text_sha256: str
 
 
 @dataclass(frozen=True)
@@ -40,6 +57,8 @@ class CompositionContext:
     proposed_target_path: str
     template: str
     current_note: str | None
+    retrieved_sources: tuple[RetrievedSource, ...]
+    retrieval_digest: str | None
 
 
 @dataclass(frozen=True)
@@ -87,6 +106,20 @@ class StubNoteComposer:
                 "## Unresolved questions\n"
                 + "\n".join(f"- {x}" for x in context.unresolved_questions)
             )
+        if context.retrieved_sources:
+            source_sections = ["## Retrieved source context"]
+            for number, source in enumerate(context.retrieved_sources, 1):
+                titles = " > ".join(source.section_titles)
+                source_sections.append(
+                    f"### Source {number}\n\n"
+                    f"- Source: `{source.source_relative_path}`\n"
+                    f"- Pages: `{source.start_pdf_page_number}-{source.end_pdf_page_number}`\n"
+                    f"- Section: `{titles}`\n"
+                    f"- Chunk: `{source.chunk_id}`\n"
+                    f"- Retrieval query: `{source.query}`\n\n"
+                    f"```text\n{source.text}\n```"
+                )
+            sections.append("\n\n".join(source_sections))
         if context.current_note:
             sections.append("## Current note\n" + context.current_note.rstrip())
         return "\n\n".join(sections) + "\n"
@@ -264,6 +297,104 @@ def build_context(
         target,
         template,
         current_note,
+        (),
+        None,
+    )
+
+
+def _query_candidates(concepts: tuple[str, ...]) -> tuple[str, ...]:
+    selected: list[str] = []
+    seen: set[str] = set()
+    for concept in concepts:
+        query = " ".join(concept.split())
+        key = query.casefold()
+        if query and key not in seen:
+            selected.append(query)
+            seen.add(key)
+        if len(selected) == 3:
+            break
+    return tuple(selected)
+
+
+def _retrieval_digest(sources: tuple[RetrievedSource, ...]) -> str:
+    value = [
+        {
+            "query": source.query,
+            "chunk_id": source.chunk_id,
+            "source_relative_path": source.source_relative_path,
+            "section_id": source.section_id,
+            "start_pdf_page_number": source.start_pdf_page_number,
+            "end_pdf_page_number": source.end_pdf_page_number,
+            "text_sha256": source.text_sha256,
+            "score": source.score,
+        }
+        for source in sources
+    ]
+    raw = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
+        "utf-8"
+    )
+    return _digest(raw)
+
+
+def attach_retrieval(
+    context: CompositionContext, index: Path, retrieval_limit: int = 6
+) -> CompositionContext:
+    """Attach deterministic local lexical retrieval without changing source-index behavior."""
+    if not 1 <= retrieval_limit <= 12:
+        raise ValueError("INVALID_RETRIEVAL_LIMIT")
+    queries = _query_candidates(context.concept_candidates)
+    warnings = tuple(issue for issue in context.warnings if issue.code != "SOURCE_MISSING")
+    if not queries:
+        return replace(
+            context,
+            warnings=warnings
+            + (
+                CompositionIssue(
+                    "warning", "SOURCE_QUERY_UNAVAILABLE", "no concept query available"
+                ),
+            ),
+        )
+    selected: list[RetrievedSource] = []
+    seen_chunk_ids: set[str] = set()
+    try:
+        for query in queries:
+            result = search_index(index, query, limit=2)
+            for row in result["results"]:
+                chunk_id = row["chunk_id"]
+                if chunk_id in seen_chunk_ids:
+                    continue
+                seen_chunk_ids.add(chunk_id)
+                selected.append(
+                    RetrievedSource(
+                        query=query,
+                        rank=row["rank"],
+                        score=row["score"],
+                        chunk_id=chunk_id,
+                        source_relative_path=row["source_relative_path"],
+                        source_file=row["source_file"],
+                        section_id=row["section_id"],
+                        section_titles=tuple(row["section_titles"]),
+                        start_pdf_page_number=row["start_pdf_page_number"],
+                        end_pdf_page_number=row["end_pdf_page_number"],
+                        text=row["text"],
+                        text_sha256=row["text_sha256"],
+                    )
+                )
+                if len(selected) == retrieval_limit:
+                    break
+            if len(selected) == retrieval_limit:
+                break
+    except SourceIndexError as exc:
+        raise ValueError("COMPOSITION_SOURCE_INDEX_FAILED") from exc
+    sources = tuple(selected)
+    if not sources:
+        warnings += (CompositionIssue("warning", "SOURCE_NOT_FOUND", "no local source matched"),)
+        return replace(context, warnings=warnings)
+    return replace(
+        context,
+        retrieved_sources=sources,
+        retrieval_digest=_retrieval_digest(sources),
+        warnings=warnings,
     )
 
 
