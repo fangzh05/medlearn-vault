@@ -47,7 +47,7 @@ from medlearn_vault.domain import (
 )
 from medlearn_vault.handoff import LearningSegment, MedLearnHandoff
 from medlearn_vault.identifiers import normalize_text
-from medlearn_vault.normalization import NormalizationError, normalize_one
+from medlearn_vault.normalization import NormalizationError, normalize_input
 from medlearn_vault.presentation_publisher import (
     PresentationArtifact,
     PresentationCurrentPointer,
@@ -217,37 +217,17 @@ def normalize_command(
     json_output: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
     try:
-        ex = json.loads(exclusions.read_text(encoding="utf-8")) if exclusions else {"sources": []}
-        mapping = {
-            x["source_relative_path"]: x["excluded_pdf_pages"] for x in ex.get("sources", [])
-        }
-        dirs = sorted(
-            {
-                p.parent
-                for p in input_root.rglob("pages.jsonl")
-                if (p.parent / "report.json").exists()
-            }
-        )
-        if not dirs:
-            raise NormalizationError("NORMALIZATION_INPUT_INVALID")
-        files = []
-        failed = 0
-        for src in dirs:
-            try:
-                files.append(
-                    normalize_one(src, output_root / src.relative_to(input_root), mapping, force)
-                )
-            except NormalizationError as exc:
-                failed += 1
-                files.append(
-                    {
-                        "source_relative_path": src.relative_to(input_root).as_posix(),
-                        "error_code": exc.code,
-                    }
-                )
+        files, unknown_sources = normalize_input(input_root, output_root, exclusions, force)
+        failed = sum("error_code" in item for item in files)
+        if unknown_sources:
+            for item in files:
+                if "warning_codes" in item:
+                    item["warning_codes"] = sorted(
+                        set(item["warning_codes"]) | {"UNKNOWN_EXCLUSION_SOURCE"}
+                    )
         payload = {
-            "discovered_count": len(dirs),
-            "succeeded_count": len(dirs) - failed,
+            "discovered_count": len(files),
+            "succeeded_count": len(files) - failed,
             "warning_count": sum(bool(x.get("warning_codes")) for x in files),
             "failed_count": failed,
             "sources": files,
