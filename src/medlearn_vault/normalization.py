@@ -196,7 +196,7 @@ def normalize_source(
     if ex.pages - set(range(1, len(rows) + 1)):
         raise NormalizationError("NORMALIZATION_INPUT_INVALID")
     included = [r for r in rows if r["pdf_page_number"] not in ex.pages and r["text"].strip()]
-    zones = {"top": {}, "bottom": {}}
+    zones: dict[str, dict[str, int]] = {"top": {}, "bottom": {}}
     if len(included) >= 5:
         for r in included:
             ls = [x for x in _clean(r["text"]).split("\n") if x.strip()]
