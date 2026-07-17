@@ -1,5 +1,3 @@
-worker/src/generated/intake-validator.js text eol=lf
-
-# These fixtures are SHA-256d as transport payloads; their stored bytes are contractual.
-examples/intake/apl-bootstrap-worker-envelope.json -text
-examples/intake/project-handoff-empty.json -text
+templates/medical_note_v1.md text eol=lf
+docs/medical-note-template-specification.md text eol=lf
+examples/medical_note_v1/COPD.md text eol=lf
