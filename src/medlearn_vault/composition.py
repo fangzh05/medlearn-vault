@@ -127,6 +127,24 @@ def _tags_from_frontmatter(frontmatter: str) -> tuple[str, ...]:
     return tuple(line[4:].strip().strip("\"'") for line in match.group(1).splitlines())
 
 
+def _top_level_keys(frontmatter: str) -> tuple[str, ...]:
+    return tuple(
+        match.group(1)
+        for line in frontmatter.splitlines()
+        if (match := re.fullmatch(r"([A-Za-z_][A-Za-z0-9_]*):(?:\s.*)?", line))
+    )
+
+
+def _unique_issues(issues: list[CompositionIssue]) -> tuple[CompositionIssue, ...]:
+    seen: set[str] = set()
+    unique: list[CompositionIssue] = []
+    for issue in issues:
+        if issue.code not in seen:
+            seen.add(issue.code)
+            unique.append(issue)
+    return tuple(unique)
+
+
 @dataclass(frozen=True)
 class CompositionIssue:
     severity: Literal["blocker", "warning"]
@@ -551,24 +569,29 @@ def validate_generated_note(
             "rejected", tuple(blockers), tuple(warnings), context.isolated_items
         )
     frontmatter, body = markdown[4:].split("\n---\n", 1)
+    keys = _top_level_keys(frontmatter)
+    if len(keys) != len(set(keys)):
+        blockers.append(
+            CompositionIssue("blocker", "GENERATED_NOTE_FRONTMATTER_INVALID", "duplicate key")
+        )
     for field in (
-        "medlearn_type:",
-        "template_version:",
-        "canonical_name:",
-        "english_name:",
-        "concept_type:",
-        "aliases:",
-        "external_identifiers:",
-        "primary_discipline:",
-        "related_disciplines:",
-        "body_systems:",
-        "guidelines:",
-        "knowledge_status:",
-        "review_status:",
-        "last_reviewed_at:",
-        "tags:",
+        "medlearn_type",
+        "template_version",
+        "canonical_name",
+        "english_name",
+        "concept_type",
+        "aliases",
+        "external_identifiers",
+        "primary_discipline",
+        "related_disciplines",
+        "body_systems",
+        "guidelines",
+        "knowledge_status",
+        "review_status",
+        "last_reviewed_at",
+        "tags",
     ):
-        if field not in frontmatter:
+        if keys.count(field) != 1:
             blockers.append(CompositionIssue("blocker", "GENERATED_NOTE_FIELD_MISSING", field))
     if "{{" in markdown or "}}" in markdown:
         blockers.append(
@@ -635,6 +658,7 @@ def validate_generated_note(
         warnings.append(CompositionIssue("warning", "SOURCE_NOT_FOUND", "no retrieved source"))
     if context.current_note is None:
         warnings.append(CompositionIssue("warning", "CURRENT_NOTE_NOT_SUPPLIED", "no current note"))
+    warnings = list(_unique_issues(warnings))
     return CompositionValidationResult(
         "rejected" if blockers else ("accepted_with_warnings" if warnings else "accepted"),
         tuple(blockers),

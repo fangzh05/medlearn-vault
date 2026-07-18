@@ -78,3 +78,27 @@ def test_missing_key_and_normalization() -> None:
     with pytest.raises(DeepSeekComposerError, match="DEEPSEEK_API_KEY_MISSING"):
         DeepSeekNoteComposer("x", api_key=None)
     assert normalize_generated_markdown("a\r\n\r\n") == "a\n"
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "C:\\private\\a",
+        "\\\\server\\share",
+        "/Users/a",
+        "/home/a",
+        "/mnt/a",
+        "/tmp/a",
+        "/var/a",
+        "/opt/a",
+        "/srv/a",
+        "file:///x",
+        "sqlite:///x",
+        "medlearn.sqlite3",
+    ],
+)
+def test_documented_private_paths_are_detected(path: str) -> None:
+    from medlearn_vault.composition import validate_generated_note
+
+    assert path
+    assert validate_generated_note(_context(), path).status == "rejected"

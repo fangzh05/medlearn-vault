@@ -9,6 +9,7 @@ from typer.testing import CliRunner
 from medlearn_vault.cli import app
 from medlearn_vault.composition import (
     CompositionContext,
+    _top_level_keys,
     attach_retrieval,
     build_context,
     compose_preview,
@@ -418,3 +419,11 @@ def test_cli_retrieval_limit_validation_has_no_traceback(tmp_path: Path) -> None
         ],
     )
     assert result.exit_code == 2 and "Traceback" not in result.stdout
+
+
+def test_top_level_frontmatter_keys_ignore_nested_values() -> None:
+    text = (
+        'aliases:\n  - "external_identifiers:"\nguidelines:\n'
+        '  - name: GOLD\n    version: 2026\ntags:\n  - "实体/疾病"\n'
+    )
+    assert _top_level_keys(text) == ("aliases", "guidelines", "tags")
