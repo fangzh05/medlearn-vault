@@ -1,5 +1,6 @@
 """Dependency-free checks for Medical Note V1 public assets."""
 
+import hashlib
 import re
 from pathlib import Path
 
@@ -113,3 +114,23 @@ def test_assets_have_distinct_roles() -> None:
     assert "{{规范中文名称}}" in read(TEMPLATE)
     assert "Composer 输出约束" in read(SPEC)
     assert "慢性阻塞性肺疾病" in read(COPD)
+
+
+def test_template_and_specification_sha256_contract() -> None:
+    expected = {
+        TEMPLATE: "61f1d784de1b262a35030270a45d8608d88e909ed866ecb9a2c37bf65691d68a",
+        SPEC: "a575cb5aaf03273937df3639843ae4fc8016d6032570fa7767c91d4a2ae6dee5",
+    }
+    for path, digest in expected.items():
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == digest
+
+
+def test_copd_learner_record_keeps_provenance_separate() -> None:
+    text = read(COPD)
+    learning_start = text.index("## 十六、学习记录")
+    sources_start = text.index("## 十七、证据来源与版本")
+    learning = text[learning_start:sources_start]
+    medical = text[:learning_start]
+    assert "本节仅记录学习表现，不构成医学事实来源" in learning
+    assert "COPD 与吸烟关系不大" not in medical
+    assert "纠正状态" in learning and "已验证" in learning
