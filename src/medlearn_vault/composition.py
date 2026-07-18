@@ -15,6 +15,135 @@ from medlearn_vault.capture import IntakeEnvelope
 from medlearn_vault.handoff import LearningSegment, MedLearnHandoff
 from medlearn_vault.source_index import SourceIndexError, search_index
 
+SECTION_NUMBERS = (
+    "一",
+    "二",
+    "三",
+    "四",
+    "五",
+    "六",
+    "七",
+    "八",
+    "九",
+    "十",
+    "十一",
+    "十二",
+    "十三",
+    "十四",
+    "十五",
+    "十六",
+    "十七",
+)
+SECTION_HEADINGS = tuple(
+    f"## {number}、{title}"
+    for number, title in zip(
+        SECTION_NUMBERS,
+        (
+            "概念边界",
+            "基本信息",
+            "定义与诊断核心",
+            "流行病学与疾病负担",
+            "病因与危险因素",
+            "发病机制与病理生理",
+            "临床表现",
+            "实验室检查与辅助检查",
+            "诊断、分型与严重程度评估",
+            "鉴别诊断",
+            "治疗",
+            "并发症与共病",
+            "预后、随访与预防",
+            "高频考点与易错点",
+            "相关概念",
+            "学习记录",
+            "证据来源与版本",
+        ),
+        strict=True,
+    )
+)
+TAG_VALUES = {
+    "实体": {
+        "疾病",
+        "综合征",
+        "症状",
+        "体征",
+        "检查",
+        "药物",
+        "治疗",
+        "病理过程",
+        "机制",
+        "解剖结构",
+        "病原体",
+        "评分工具",
+        "指南",
+    },
+    "学科": {
+        "内科学/呼吸系统",
+        "内科学/循环系统",
+        "内科学/消化系统",
+        "内科学/泌尿系统",
+        "内科学/血液系统",
+        "内科学/内分泌系统",
+        "内科学/风湿免疫",
+        "外科学/普通外科",
+        "外科学/骨科",
+        "外科学/泌尿外科",
+        "神经病学",
+        "儿科学",
+        "妇产科学",
+        "药理学",
+        "病理学",
+        "病理生理学",
+        "诊断学",
+        "医学影像学",
+        "急诊医学",
+        "重症医学",
+        "肿瘤学",
+    },
+    "系统": {
+        "呼吸系统",
+        "循环系统",
+        "消化系统",
+        "泌尿系统",
+        "血液系统",
+        "神经系统",
+        "内分泌系统",
+        "免疫系统",
+        "运动系统",
+        "生殖系统",
+        "感觉系统",
+        "皮肤",
+        "全身性",
+    },
+    "病程": {"急性", "亚急性", "慢性", "复发性", "进展性", "自限性"},
+    "临床场景": {"急诊", "门诊", "住院", "重症", "围手术期", "筛查", "长期管理"},
+    "指南": {"GOLD", "GINA", "ESC", "AHA", "ACC", "KDIGO", "NCCN", "CSCO", "WHO", "中国指南"},
+}
+
+
+def _tags_from_frontmatter(frontmatter: str) -> tuple[str, ...]:
+    match = re.search(r"^tags:\n((?:  - [^\n]+\n?)*)", frontmatter, re.M)
+    if match is None:
+        return ()
+    return tuple(line[4:].strip().strip("\"'") for line in match.group(1).splitlines())
+
+
+def _top_level_keys(frontmatter: str) -> tuple[str, ...]:
+    return tuple(
+        match.group(1)
+        for line in frontmatter.splitlines()
+        if (match := re.fullmatch(r"([A-Za-z_][A-Za-z0-9_]*):(?:\s.*)?", line))
+    )
+
+
+def _unique_issues(issues: list[CompositionIssue]) -> tuple[CompositionIssue, ...]:
+    seen: set[str] = set()
+    unique: list[CompositionIssue] = []
+    for issue in issues:
+        if issue.code not in seen:
+            seen.add(issue.code)
+            unique.append(issue)
+    return tuple(unique)
+
 
 @dataclass(frozen=True)
 class CompositionIssue:
@@ -417,4 +546,146 @@ def validate_composition(context: CompositionContext) -> CompositionValidationRe
         "accepted_with_warnings" if context.warnings else "accepted",
         warnings=context.warnings,
         isolated_items=context.isolated_items,
+    )
+
+
+def validate_generated_note(
+    context: CompositionContext, markdown: str
+) -> CompositionValidationResult:
+    """Validate deterministic output-contract safety, not medical correctness."""
+    blockers: list[CompositionIssue] = []
+    warnings = list(context.warnings)
+    if not markdown.strip():
+        blockers.append(CompositionIssue("blocker", "GENERATED_NOTE_EMPTY", "empty output"))
+    if markdown.lstrip().startswith("```"):
+        blockers.append(
+            CompositionIssue("blocker", "GENERATED_NOTE_FENCED_OUTPUT", "fenced output")
+        )
+    if not markdown.startswith("---\n") or "\n---\n" not in markdown:
+        blockers.append(
+            CompositionIssue("blocker", "GENERATED_NOTE_FRONTMATTER_INVALID", "frontmatter")
+        )
+        return CompositionValidationResult(
+            "rejected", tuple(blockers), _unique_issues(warnings), context.isolated_items
+        )
+    frontmatter, body = markdown[4:].split("\n---\n", 1)
+    keys = _top_level_keys(frontmatter)
+    if len(keys) != len(set(keys)):
+        blockers.append(
+            CompositionIssue("blocker", "GENERATED_NOTE_FRONTMATTER_INVALID", "duplicate key")
+        )
+    for field in (
+        "medlearn_type",
+        "template_version",
+        "canonical_name",
+        "english_name",
+        "concept_type",
+        "aliases",
+        "external_identifiers",
+        "primary_discipline",
+        "related_disciplines",
+        "body_systems",
+        "guidelines",
+        "knowledge_status",
+        "review_status",
+        "last_reviewed_at",
+        "tags",
+    ):
+        if keys.count(field) != 1:
+            blockers.append(CompositionIssue("blocker", "GENERATED_NOTE_FIELD_MISSING", field))
+    for field, value in {
+        "medlearn_type": "medical_concept_note",
+        "template_version": "1.0.0",
+    }.items():
+        if not re.search(rf"^{field}:\s*[\"']?{value}[\"']?\s*$", frontmatter, re.M):
+            blockers.append(
+                CompositionIssue("blocker", "GENERATED_NOTE_FRONTMATTER_INVALID", field)
+            )
+    concept = re.search(r"^concept_type:\s*[\"']?(.+?)[\"']?\s*$", frontmatter, re.M)
+    if concept is None or concept.group(1) not in {
+        "疾病",
+        "综合征",
+        "症状",
+        "体征",
+        "检查",
+        "药物",
+        "治疗",
+        "病理过程",
+        "机制",
+        "其他",
+    }:
+        blockers.append(
+            CompositionIssue("blocker", "GENERATED_NOTE_FRONTMATTER_INVALID", "concept_type")
+        )
+    if "{{" in markdown or "}}" in markdown:
+        blockers.append(
+            CompositionIssue("blocker", "GENERATED_NOTE_PLACEHOLDER_REMAINS", "placeholder")
+        )
+    title = re.findall(r"^# (.+)$", body, re.M)
+    canonical = re.search(r"^canonical_name:\s*[\"']?(.+?)[\"']?\s*$", frontmatter, re.M)
+    if len(title) != 1 or canonical is None or title[0] != canonical.group(1):
+        blockers.append(CompositionIssue("blocker", "GENERATED_NOTE_H1_INVALID", "title"))
+    h2 = tuple(re.findall(r"^## (?!#).+$", body, re.M))
+    if h2 != SECTION_HEADINGS:
+        blockers.append(
+            CompositionIssue("blocker", "GENERATED_NOTE_SECTION_ORDER_INVALID", "sections")
+        )
+    tags = _tags_from_frontmatter(frontmatter)
+    dimensions = ("实体", "学科", "系统", "病程", "临床场景", "指南")
+    parsed = [tag.split("/", 1) for tag in tags]
+    orders = [
+        dimensions.index(parts[0]) if len(parts) == 2 and parts[0] in dimensions else -1
+        for parts in parsed
+    ]
+    if (
+        not tags
+        or -1 in orders
+        or orders != sorted(orders)
+        or len(tags) != len(set(tags))
+        or sum(parts[0] == "实体" for parts in parsed if len(parts) == 2) != 1
+        or sum(parts[0] == "学科" for parts in parsed if len(parts) == 2) != 1
+        or any(
+            len(parts) != 2 or parts[1] not in TAG_VALUES.get(parts[0], set()) for parts in parsed
+        )
+    ):
+        blockers.append(CompositionIssue("blocker", "GENERATED_NOTE_TAG_INVALID", "tags"))
+    if not re.search(r"^review_status:\s*unreviewed\s*$", frontmatter, re.M) or not re.search(
+        r"^last_reviewed_at:\s*null\s*$", frontmatter, re.M
+    ):
+        blockers.append(
+            CompositionIssue("blocker", "GENERATED_NOTE_REVIEW_STATUS_INVALID", "review fields")
+        )
+    learning_at = body.find("## 十六、学习记录")
+    stable = body if learning_at < 0 else body[:learning_at]
+    if re.search(
+        r"[A-Za-z]:\\|\\\\|/(?:Users|home|mnt|tmp|var|opt|srv)/|file://|medlearn\.sqlite3|sqlite:",
+        markdown,
+        re.I,
+    ):
+        blockers.append(
+            CompositionIssue("blocker", "GENERATED_NOTE_PRIVATE_PATH_LEAK", "private path")
+        )
+    if "Retrieved source context" in markdown or any(
+        item in stable
+        for item in context.misconceptions + context.learner_evidence + context.isolated_items
+    ):
+        blockers.append(
+            CompositionIssue("blocker", "GENERATED_NOTE_ROLE_CONTAMINATION", "role contamination")
+        )
+    if learning_at >= 0 and "已验证" in body[learning_at:]:
+        blockers.append(
+            CompositionIssue(
+                "blocker", "GENERATED_NOTE_UNSUPPORTED_VERIFIED_CORRECTION", "verified"
+            )
+        )
+    if not context.retrieved_sources:
+        warnings.append(CompositionIssue("warning", "SOURCE_NOT_FOUND", "no retrieved source"))
+    if context.current_note is None:
+        warnings.append(CompositionIssue("warning", "CURRENT_NOTE_NOT_SUPPLIED", "no current note"))
+    warnings = list(_unique_issues(warnings))
+    return CompositionValidationResult(
+        "rejected" if blockers else ("accepted_with_warnings" if warnings else "accepted"),
+        tuple(blockers),
+        tuple(warnings),
+        context.isolated_items,
     )

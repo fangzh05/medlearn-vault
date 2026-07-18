@@ -40,6 +40,13 @@ from medlearn_vault.composition import (
     build_context,
     compose_preview,
     validate_composition,
+    validate_generated_note,
+)
+from medlearn_vault.deepseek_composer import (
+    DEFAULT_BASE_URL,
+    DEFAULT_MODEL,
+    DeepSeekComposerError,
+    DeepSeekNoteComposer,
 )
 from medlearn_vault.domain import (
     ChapterDossier,
@@ -413,6 +420,13 @@ def compose_preview_command(
     expected_intake_digest: Annotated[str | None, typer.Option("--expected-intake-digest")] = None,
     index: Annotated[Path | None, typer.Option("--index")] = None,
     retrieval_limit: Annotated[int, typer.Option("--retrieval-limit", min=1, max=12)] = 6,
+    composer: Annotated[str, typer.Option("--composer")] = "stub",
+    prompt: Annotated[Path | None, typer.Option("--prompt")] = None,
+    golden_example: Annotated[Path | None, typer.Option("--golden-example")] = None,
+    model: Annotated[str, typer.Option("--model")] = DEFAULT_MODEL,
+    base_url: Annotated[str, typer.Option("--base-url")] = DEFAULT_BASE_URL,
+    timeout_seconds: Annotated[float, typer.Option("--timeout-seconds", min=1)] = 300,
+    max_tokens: Annotated[int, typer.Option("--max-tokens", min=1024, max=32768)] = 16384,
     json_output: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
     """Write a deterministic local preview; this never writes Vault or R2."""
@@ -426,27 +440,73 @@ def compose_preview_command(
         )
         if index is not None:
             context = attach_retrieval(context, index, retrieval_limit)
-        result = compose_preview(context)
+        if composer == "stub":
+            result = compose_preview(context)
+            validation = validate_composition(context)
+            request_digest = None
+        elif composer == "deepseek":
+            if prompt is None:
+                raise ValueError("DEEPSEEK_PROMPT_REQUIRED")
+            deepseek = DeepSeekNoteComposer(
+                prompt.read_text(encoding="utf-8"),
+                model=model,
+                base_url=base_url,
+                api_key=os.environ.get("DEEPSEEK_API_KEY"),
+                timeout=timeout_seconds,
+                max_tokens=max_tokens,
+                golden_example=(
+                    golden_example.read_text(encoding="utf-8") if golden_example else None
+                ),
+            )
+            result = compose_preview(context, deepseek)
+            validation = validate_generated_note(context, result.markdown)
+            request_digest = deepseek.request_digest
+            if validation.blockers:
+                _sync_output(
+                    {
+                        "status": "rejected",
+                        "error_code": validation.blockers[0].code,
+                        "blocker_count": len(validation.blockers),
+                        "blocker_codes": [x.code for x in validation.blockers],
+                        "warning_count": len(validation.warnings),
+                        "warning_codes": [x.code for x in validation.warnings],
+                    },
+                    json_output,
+                )
+                raise typer.Exit(1)
+        else:
+            raise ValueError("UNSUPPORTED_COMPOSER")
         output.write_text(result.markdown, encoding="utf-8", newline="\n")
-    except (OSError, ValueError) as exc:
+    except typer.Exit:
+        raise
+    except (OSError, ValueError, DeepSeekComposerError) as exc:
         code = "COMPOSITION_OUTPUT_WRITE_FAILED" if isinstance(exc, OSError) else str(exc)
         _sync_output({"status": "rejected", "error_code": code}, json_output)
         raise typer.Exit(1) from exc
-    validation = validate_composition(context)
     payload: dict[str, object] = {
         "status": validation.status,
+        "composer": composer,
         "source_record_id": context.source_record_id,
         "target_path": result.target_path,
-        "warning_count": len(result.warnings),
+        "warning_count": len(validation.warnings),
+        "blocker_count": len(validation.blockers),
         "isolated_count": len(result.isolated_items),
         "retrieval_count": len(context.retrieved_sources),
         "retrieval_digest": context.retrieval_digest,
     }
+    if composer == "deepseek":
+        payload.update(
+            {
+                "model": model,
+                "request_digest": request_digest,
+                "output_sha256": hashlib.sha256(result.markdown.encode("utf-8")).hexdigest(),
+            }
+        )
     if context.source_job_id is not None:
         payload["source_job_id"] = context.source_job_id
     if json_output:
-        payload["warning_codes"] = [item.code for item in result.warnings]
-        payload["blocker_codes"] = []
+        payload["warning_codes"] = [item.code for item in validation.warnings]
+        payload["blocker_codes"] = [item.code for item in validation.blockers]
     _sync_output(payload, json_output)
 
 

@@ -1153,6 +1153,6 @@ def test_publish_vault_workflow_is_main_only_and_scoped() -> None:
 # ── version ──────────────────────────────────────────────────────────
 
 
-def test_package_version_is_0_22_1() -> None:
+def test_package_version_is_0_23_0() -> None:
     from medlearn_vault import __version__ as v
-    assert v == "0.22.1"
+    assert v == "0.23.0"
