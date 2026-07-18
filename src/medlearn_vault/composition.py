@@ -593,6 +593,30 @@ def validate_generated_note(
     ):
         if keys.count(field) != 1:
             blockers.append(CompositionIssue("blocker", "GENERATED_NOTE_FIELD_MISSING", field))
+    for field, value in {
+        "medlearn_type": "medical_concept_note",
+        "template_version": "1.0.0",
+    }.items():
+        if not re.search(rf"^{field}:\s*[\"']?{value}[\"']?\s*$", frontmatter, re.M):
+            blockers.append(
+                CompositionIssue("blocker", "GENERATED_NOTE_FRONTMATTER_INVALID", field)
+            )
+    concept = re.search(r"^concept_type:\s*[\"']?(.+?)[\"']?\s*$", frontmatter, re.M)
+    if concept is None or concept.group(1) not in {
+        "疾病",
+        "综合征",
+        "症状",
+        "体征",
+        "检查",
+        "药物",
+        "治疗",
+        "病理过程",
+        "机制",
+        "其他",
+    }:
+        blockers.append(
+            CompositionIssue("blocker", "GENERATED_NOTE_FRONTMATTER_INVALID", "concept_type")
+        )
     if "{{" in markdown or "}}" in markdown:
         blockers.append(
             CompositionIssue("blocker", "GENERATED_NOTE_PLACEHOLDER_REMAINS", "placeholder")

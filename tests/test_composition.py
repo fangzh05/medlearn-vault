@@ -434,7 +434,7 @@ def test_top_level_frontmatter_keys_ignore_nested_values() -> None:
 
 def valid_medical_note(extra: str = "") -> str:
     frontmatter = """---
-medlearn_type: medical_note
+medlearn_type: medical_concept_note
 template_version: "1.0.0"
 canonical_name: COPD
 english_name: Chronic obstructive pulmonary disease

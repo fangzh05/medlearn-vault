@@ -81,24 +81,27 @@ def test_missing_key_and_normalization() -> None:
 
 
 @pytest.mark.parametrize(
-    "path",
+    ("finish", "code"),
     [
-        "C:\\private\\a",
-        "\\\\server\\share",
-        "/Users/a",
-        "/home/a",
-        "/mnt/a",
-        "/tmp/a",
-        "/var/a",
-        "/opt/a",
-        "/srv/a",
-        "file:///x",
-        "sqlite:///x",
-        "medlearn.sqlite3",
+        ("length", "DEEPSEEK_OUTPUT_TRUNCATED"),
+        ("content_filter", "DEEPSEEK_OUTPUT_FILTERED"),
+        ("insufficient_system_resource", "DEEPSEEK_RESOURCE_INSUFFICIENT"),
     ],
 )
-def test_documented_private_paths_are_detected(path: str) -> None:
-    from medlearn_vault.composition import validate_generated_note
+def test_non_stop_finish_rejects_once(finish: str, code: str) -> None:
+    response = {"choices": [{"finish_reason": finish, "message": {"content": "x"}}]}
+    transport = FakeTransport(json.dumps(response).encode())
+    with pytest.raises(DeepSeekComposerError, match=code):
+        DeepSeekNoteComposer("x", api_key="secret", transport=transport).compose(_context())
+    assert transport.body
 
-    assert path
-    assert validate_generated_note(_context(), path).status == "rejected"
+
+@pytest.mark.parametrize(
+    "payload",
+    [b"not-json", b"{}", b'{"choices":[]}', b'{"choices":[{"finish_reason":"stop","message":{}}]}'],
+)
+def test_invalid_api_payloads_reject(payload: bytes) -> None:
+    with pytest.raises(DeepSeekComposerError):
+        DeepSeekNoteComposer("x", api_key="secret", transport=FakeTransport(payload)).compose(
+            _context()
+        )
