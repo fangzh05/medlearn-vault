@@ -15,6 +15,11 @@ from medlearn_vault.capture import IntakeEnvelope
 from medlearn_vault.handoff import LearningSegment, MedLearnHandoff
 from medlearn_vault.source_index import SourceIndexError, search_index
 
+SECTION_NUMBERS = (
+    "一", "二", "三", "四", "五", "六", "七", "八", "九", "十", "十一", "十二", "十三",
+    "十四", "十五", "十六", "十七",
+)
+
 
 @dataclass(frozen=True)
 class CompositionIssue:
@@ -417,4 +422,106 @@ def validate_composition(context: CompositionContext) -> CompositionValidationRe
         "accepted_with_warnings" if context.warnings else "accepted",
         warnings=context.warnings,
         isolated_items=context.isolated_items,
+    )
+
+
+def validate_generated_note(
+    context: CompositionContext, markdown: str
+) -> CompositionValidationResult:
+    """Validate deterministic output-contract safety, not medical correctness."""
+    blockers: list[CompositionIssue] = []
+    warnings = list(context.warnings)
+    if not markdown.strip():
+        blockers.append(CompositionIssue("blocker", "GENERATED_NOTE_EMPTY", "empty output"))
+    if markdown.lstrip().startswith("```"):
+        blockers.append(
+            CompositionIssue("blocker", "GENERATED_NOTE_FENCED_OUTPUT", "fenced output")
+        )
+    if not markdown.startswith("---\n") or "\n---\n" not in markdown:
+        blockers.append(
+            CompositionIssue("blocker", "GENERATED_NOTE_FRONTMATTER_INVALID", "frontmatter")
+        )
+        return CompositionValidationResult(
+            "rejected", tuple(blockers), tuple(warnings), context.isolated_items
+        )
+    frontmatter, body = markdown[4:].split("\n---\n", 1)
+    for field in (
+        "medlearn_type:",
+        "template_version:",
+        "canonical_name:",
+        "english_name:",
+        "concept_type:",
+        "aliases:",
+        "external_identifiers:",
+        "primary_discipline:",
+        "related_disciplines:",
+        "body_systems:",
+        "guidelines:",
+        "knowledge_status:",
+        "review_status:",
+        "last_reviewed_at:",
+        "tags:",
+    ):
+        if field not in frontmatter:
+            blockers.append(CompositionIssue("blocker", "GENERATED_NOTE_FIELD_MISSING", field))
+    if "{{" in markdown or "}}" in markdown:
+        blockers.append(
+            CompositionIssue("blocker", "GENERATED_NOTE_PLACEHOLDER_REMAINS", "placeholder")
+        )
+    title = re.findall(r"^# (.+)$", body, re.M)
+    canonical = re.search(r"^canonical_name:\s*[\"']?(.+?)[\"']?\s*$", frontmatter, re.M)
+    if len(title) != 1 or canonical is None or title[0] != canonical.group(1):
+        blockers.append(CompositionIssue("blocker", "GENERATED_NOTE_H1_INVALID", "title"))
+    expected = [f"## {number}、" for number in SECTION_NUMBERS]
+    positions = [body.find(prefix) for prefix in expected]
+    if any(position < 0 for position in positions) or positions != sorted(positions):
+        blockers.append(
+            CompositionIssue("blocker", "GENERATED_NOTE_SECTION_ORDER_INVALID", "sections")
+        )
+    tags = re.findall(r'^  - ["\']?([^\n"\']+)', frontmatter, re.M)
+    prefixes = ("实体/", "学科/", "系统/", "病程/", "临床场景/", "指南/")
+    orders = [
+        next((i for i, prefix in enumerate(prefixes) if tag.startswith(prefix)), -1) for tag in tags
+    ]
+    if (
+        -1 in orders
+        or orders != sorted(orders)
+        or sum(tag.startswith("实体/") for tag in tags) != 1
+        or sum(tag.startswith("学科/") for tag in tags) != 1
+    ):
+        blockers.append(CompositionIssue("blocker", "GENERATED_NOTE_TAG_INVALID", "tags"))
+    if not re.search(r"^review_status:\s*unreviewed\s*$", frontmatter, re.M) or not re.search(
+        r"^last_reviewed_at:\s*null\s*$", frontmatter, re.M
+    ):
+        blockers.append(
+            CompositionIssue("blocker", "GENERATED_NOTE_REVIEW_STATUS_INVALID", "review fields")
+        )
+    learning_at = body.find("## 十六、学习记录")
+    stable = body if learning_at < 0 else body[:learning_at]
+    if re.search(r"[A-Za-z]:\\|/(?:Users|home)/|medlearn\.sqlite3|sqlite:", markdown):
+        blockers.append(
+            CompositionIssue("blocker", "GENERATED_NOTE_PRIVATE_PATH_LEAK", "private path")
+        )
+    if "Retrieved source context" in markdown or any(
+        item in stable
+        for item in context.misconceptions + context.learner_evidence + context.isolated_items
+    ):
+        blockers.append(
+            CompositionIssue("blocker", "GENERATED_NOTE_ROLE_CONTAMINATION", "role contamination")
+        )
+    if learning_at >= 0 and "已验证" in body[learning_at:]:
+        blockers.append(
+            CompositionIssue(
+                "blocker", "GENERATED_NOTE_UNSUPPORTED_VERIFIED_CORRECTION", "verified"
+            )
+        )
+    if not context.retrieved_sources:
+        warnings.append(CompositionIssue("warning", "SOURCE_NOT_FOUND", "no retrieved source"))
+    if context.current_note is None:
+        warnings.append(CompositionIssue("warning", "CURRENT_NOTE_NOT_SUPPLIED", "no current note"))
+    return CompositionValidationResult(
+        "rejected" if blockers else ("accepted_with_warnings" if warnings else "accepted"),
+        tuple(blockers),
+        tuple(warnings),
+        context.isolated_items,
     )
