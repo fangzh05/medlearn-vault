@@ -98,6 +98,7 @@ from medlearn_vault.sync_client import (
     status as sync_status_service,
 )
 from medlearn_vault.sync_models import Manifest, SyncError, SyncState
+from medlearn_vault.web import serve as serve_web
 from medlearn_vault.windows_rollout import (
     install_schedule,
     install_windows,
@@ -147,6 +148,16 @@ app.add_typer(workflow_app, name="workflow")
 app.add_typer(sync_app, name="sync")
 app.add_typer(sources_app, name="sources")
 sync_app.add_typer(sync_schedule_app, name="schedule")
+
+
+@app.command("ui")
+def ui_command(
+    host: Annotated[str, typer.Option("--host")] = "127.0.0.1",
+    port: Annotated[int, typer.Option("--port")] = 8765,
+    no_browser: Annotated[bool, typer.Option("--no-browser")] = False,
+) -> None:
+    """Open the local browser workspace for note composition."""
+    serve_web(host, port, open_browser=not no_browser)
 
 
 def _source_index_error(exc: SourceIndexError, json_output: bool) -> NoReturn:

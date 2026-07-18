@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MedLearn Composer</title>
+  <link rel="stylesheet" href="/app.css" />
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div class="brand"><span class="brand-mark">M</span><span>MedLearn</span><span class="slash">/</span><span class="muted">Composer</span></div>
+      <div class="mode"><span class="dot"></span><span id="modeText">离线 stub 模式</span></div>
+    </header>
+    <section class="workspace">
+      <aside class="rail">
+        <div class="rail-title">生成笔记</div>
+        <div class="step active"><b>01</b><span>输入资料</span></div>
+        <div class="step"><b>02</b><span>生成设置</span></div>
+        <div class="step"><b>03</b><span>预览结果</span></div>
+        <div class="rail-note">本地运行<br/>数据不会自动上传或同步</div>
+      </aside>
+      <section class="form-panel">
+        <div class="section-head"><div><h1>生成一篇医学笔记</h1><p>选择一次学习记录，生成符合 Medical Note V1 的 Obsidian Markdown。</p></div><span class="version">V1.0</span></div>
+        <div class="form-section">
+          <label>学习记录 <span class="required">必选</span></label>
+          <div class="dropzone" data-file="intake"><input id="intake" type="file" accept=".json,application/json" /><div class="file-icon">↥</div><strong id="intakeName">拖入 Intake JSON，或点击选择</strong><small>支持 persisted Intake / Handoff / LearningSegment</small></div>
+        </div>
+        <div class="form-section grid-2">
+          <div class="field"><label for="template">笔记模板 <span class="required">必选</span></label><div class="file-row"><input id="template" type="file" accept=".md,.markdown" /><span class="file-name">默认：templates/medical_note_v1.md</span><span class="choose">选择</span></div></div>
+          <div class="field"><label for="prompt">Composer Prompt <span class="required">DeepSeek 必选</span></label><div class="file-row"><input id="prompt" type="file" accept=".md,.markdown" /><span class="file-name">默认：prompts/deepseek_note_composer_v1.md</span><span class="choose">选择</span></div></div>
+        </div>
+        <div class="form-section grid-2">
+          <div class="field"><label for="index">本地资料索引</label><div class="file-row"><input id="index" type="file" accept=".sqlite3,.db" /><span class="file-name">可选：medlearn.sqlite3</span><span class="choose">选择</span></div></div>
+          <div class="field"><label for="current_note">现有笔记</label><div class="file-row"><input id="current_note" type="file" accept=".md,.markdown" /><span class="file-name">可选：用于增量维护</span><span class="choose">选择</span></div></div>
+        </div>
+        <div class="form-section grid-2">
+          <div class="field"><label for="golden_example">黄金样例</label><div class="file-row"><input id="golden_example" type="file" accept=".md,.markdown" /><span class="file-name">可选：只用于风格参考</span><span class="choose">选择</span></div></div>
+          <div class="field"><label for="model">模型</label><select id="model"><option value="deepseek-v4-flash">deepseek-v4-flash</option><option value="deepseek-v4-pro">deepseek-v4-pro</option></select></div>
+        </div>
+        <div class="composer-row"><div class="field grow"><label for="composer">Composer 模式</label><select id="composer"><option value="stub">stub · 离线预览</option><option value="deepseek">DeepSeek · 生成完整笔记</option></select></div><div class="field grow" id="keyWrap" hidden><label for="apiKey">DeepSeek API Key <span class="muted">仅本次使用，不保存</span></label><input id="apiKey" type="password" autocomplete="off" placeholder="sk-..." /></div></div>
+        <div class="actions"><button id="generate" class="primary">生成笔记 <span>↗</span></button><span id="statusText" class="status">准备就绪</span></div>
+        <div id="issues" class="issues" hidden></div>
+      </section>
+      <section class="preview-panel"><div class="preview-head"><div><span class="eyebrow">OUTPUT PREVIEW</span><h2 id="previewTitle">还没有生成笔记</h2></div><button id="save" class="secondary" disabled>保存 Markdown</button></div><div id="meta" class="meta" hidden></div><pre id="preview" class="preview"><span class="placeholder">生成后将在这里显示 Markdown 预览</span></pre></section>
+    </section>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>
