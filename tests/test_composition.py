@@ -8,11 +8,14 @@ from typer.testing import CliRunner
 
 from medlearn_vault.cli import app
 from medlearn_vault.composition import (
+    SECTION_HEADINGS,
     CompositionContext,
+    CompositionIssue,
     _top_level_keys,
     attach_retrieval,
     build_context,
     compose_preview,
+    validate_generated_note,
     validate_target_path,
 )
 from medlearn_vault.handoff import LearningSegment, MedLearnHandoff
@@ -427,3 +430,119 @@ def test_top_level_frontmatter_keys_ignore_nested_values() -> None:
         '  - name: GOLD\n    version: 2026\ntags:\n  - "实体/疾病"\n'
     )
     assert _top_level_keys(text) == ("aliases", "guidelines", "tags")
+
+
+def valid_medical_note(extra: str = "") -> str:
+    frontmatter = """---
+medlearn_type: medical_note
+template_version: "1.0.0"
+canonical_name: COPD
+english_name: Chronic obstructive pulmonary disease
+concept_type: 疾病
+aliases:
+  - "COPD"
+external_identifiers:
+  icd10: []
+primary_discipline: 内科学
+related_disciplines: []
+body_systems: []
+guidelines:
+  - name: "GOLD"
+    version: "2026"
+knowledge_status: active
+review_status: unreviewed
+last_reviewed_at: null
+tags:
+  - "实体/疾病"
+  - "学科/内科学/呼吸系统"
+  - "系统/呼吸系统"
+  - "病程/慢性"
+---
+"""
+    body = "# COPD\n\n" + "\n\n".join(SECTION_HEADINGS) + "\n"
+    return frontmatter + body + extra
+
+
+def _codes(result: object) -> set[str]:
+    return {item.code for item in result.blockers}  # type: ignore[attr-defined]
+
+
+def test_generated_note_fixture_exercises_final_validator() -> None:
+    result = validate_generated_note(
+        build_context(FIXTURE.read_bytes(), template=""), valid_medical_note()
+    )
+    assert not result.blockers
+
+
+@pytest.mark.parametrize(
+    ("mutated", "code"),
+    [
+        (
+            lambda note: note.replace("external_identifiers:\n", "", 1).replace(
+                '"COPD"', '"external_identifiers:"'
+            ),
+            "GENERATED_NOTE_FIELD_MISSING",
+        ),
+        (
+            lambda note: note.replace(
+                "canonical_name: COPD\n", "canonical_name: COPD\ncanonical_name: COPD\n"
+            ),
+            "GENERATED_NOTE_FRONTMATTER_INVALID",
+        ),
+        (
+            lambda note: note.replace("tags:\n", "tags:\ntags:\n", 1),
+            "GENERATED_NOTE_FRONTMATTER_INVALID",
+        ),
+        (lambda note: note.replace('"实体/疾病"', '"实体/不存在"'), "GENERATED_NOTE_TAG_INVALID"),
+        (lambda note: note.replace('"实体/疾病"', '"未知/x"'), "GENERATED_NOTE_TAG_INVALID"),
+        (
+            lambda note: note.replace("## 七、临床表现", "## 七、错误", 1),
+            "GENERATED_NOTE_SECTION_ORDER_INVALID",
+        ),
+    ],
+)
+def test_final_validator_rejects_real_mutations(mutated, code: str) -> None:
+    result = validate_generated_note(
+        build_context(FIXTURE.read_bytes(), template=""), mutated(valid_medical_note())
+    )
+    assert code in _codes(result)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "C:\\a",
+        "\\\\server\\share",
+        "/Users/a",
+        "/home/a",
+        "/mnt/a",
+        "/tmp/a",
+        "/var/a",
+        "/opt/a",
+        "/srv/a",
+        "file:///a",
+        "sqlite:///a",
+        "medlearn.sqlite3",
+    ],
+)
+def test_private_paths_reach_leak_validation(path: str) -> None:
+    result = validate_generated_note(
+        build_context(FIXTURE.read_bytes(), template=""), valid_medical_note(f"\ntext {path}\n")
+    )
+    assert "GENERATED_NOTE_PRIVATE_PATH_LEAK" in _codes(result)
+
+
+def test_generated_warning_codes_are_unique_and_ordered() -> None:
+    context = build_context(FIXTURE.read_bytes(), template="")
+    context = replace(
+        context,
+        warnings=(
+            CompositionIssue("warning", "SOURCE_NOT_FOUND", "a"),
+            CompositionIssue("warning", "SOURCE_NOT_FOUND", "b"),
+        ),
+    )
+    result = validate_generated_note(context, valid_medical_note())
+    assert [issue.code for issue in result.warnings] == [
+        "SOURCE_NOT_FOUND",
+        "CURRENT_NOTE_NOT_SUPPLIED",
+    ]

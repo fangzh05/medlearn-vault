@@ -566,7 +566,7 @@ def validate_generated_note(
             CompositionIssue("blocker", "GENERATED_NOTE_FRONTMATTER_INVALID", "frontmatter")
         )
         return CompositionValidationResult(
-            "rejected", tuple(blockers), tuple(warnings), context.isolated_items
+            "rejected", tuple(blockers), _unique_issues(warnings), context.isolated_items
         )
     frontmatter, body = markdown[4:].split("\n---\n", 1)
     keys = _top_level_keys(frontmatter)
