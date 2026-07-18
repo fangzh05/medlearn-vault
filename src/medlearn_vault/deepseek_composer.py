@@ -16,6 +16,7 @@ from medlearn_vault.composition import CompositionContext
 DEFAULT_BASE_URL = "https://api.deepseek.com/chat/completions"
 DEFAULT_MODEL = "deepseek-v4-flash"
 SUPPORTED_MODELS = ("deepseek-v4-flash", "deepseek-v4-pro")
+MAX_RESPONSE_BYTES = 2_000_000
 
 
 class DeepSeekComposerError(ValueError):
@@ -42,7 +43,13 @@ class UrllibDeepSeekTransport:
         )
         try:
             with urlopen(request, timeout=timeout) as response:  # noqa: S310 - validated HTTPS URL
-                return cast(bytes, response.read())
+                length = response.headers.get("Content-Length")
+                if length is not None and length.isdigit() and int(length) > MAX_RESPONSE_BYTES:
+                    raise DeepSeekComposerError("DEEPSEEK_RESPONSE_TOO_LARGE")
+                data = cast(bytes, response.read(MAX_RESPONSE_BYTES + 1))
+                if len(data) > MAX_RESPONSE_BYTES:
+                    raise DeepSeekComposerError("DEEPSEEK_RESPONSE_TOO_LARGE")
+                return data
         except HTTPError as exc:
             codes = {
                 400: "DEEPSEEK_REQUEST_INVALID",
@@ -56,7 +63,11 @@ class UrllibDeepSeekTransport:
             raise DeepSeekComposerError(codes.get(exc.code, "DEEPSEEK_NETWORK_FAILED")) from None
         except TimeoutError as exc:
             raise DeepSeekComposerError("DEEPSEEK_TIMEOUT") from exc
-        except (URLError, socket.gaierror) as exc:
+        except URLError as exc:
+            if isinstance(exc.reason, TimeoutError) or isinstance(exc.reason, socket.timeout):
+                raise DeepSeekComposerError("DEEPSEEK_TIMEOUT") from exc
+            raise DeepSeekComposerError("DEEPSEEK_NETWORK_FAILED") from exc
+        except socket.gaierror as exc:
             raise DeepSeekComposerError("DEEPSEEK_NETWORK_FAILED") from exc
 
 
@@ -196,6 +207,6 @@ class DeepSeekNoteComposer:
         content = choice.get("message", {}).get("content") if isinstance(choice, dict) else None
         if finish != "stop" or not isinstance(content, str) or not content.strip():
             raise DeepSeekComposerError("DEEPSEEK_OUTPUT_EMPTY")
-        if len(content.encode("utf-8")) > 2_000_000:
+        if len(content.encode("utf-8")) > MAX_RESPONSE_BYTES:
             raise DeepSeekComposerError("DEEPSEEK_RESPONSE_TOO_LARGE")
         return normalize_generated_markdown(content)

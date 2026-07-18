@@ -462,10 +462,23 @@ def compose_preview_command(
             validation = validate_generated_note(context, result.markdown)
             request_digest = deepseek.request_digest
             if validation.blockers:
-                raise ValueError(validation.blockers[0].code)
+                _sync_output(
+                    {
+                        "status": "rejected",
+                        "error_code": validation.blockers[0].code,
+                        "blocker_count": len(validation.blockers),
+                        "blocker_codes": [x.code for x in validation.blockers],
+                        "warning_count": len(validation.warnings),
+                        "warning_codes": [x.code for x in validation.warnings],
+                    },
+                    json_output,
+                )
+                raise typer.Exit(1)
         else:
             raise ValueError("UNSUPPORTED_COMPOSER")
         output.write_text(result.markdown, encoding="utf-8", newline="\n")
+    except typer.Exit:
+        raise
     except (OSError, ValueError, DeepSeekComposerError) as exc:
         code = "COMPOSITION_OUTPUT_WRITE_FAILED" if isinstance(exc, OSError) else str(exc)
         _sync_output({"status": "rejected", "error_code": code}, json_output)
@@ -475,7 +488,8 @@ def compose_preview_command(
         "composer": composer,
         "source_record_id": context.source_record_id,
         "target_path": result.target_path,
-        "warning_count": len(result.warnings),
+        "warning_count": len(validation.warnings),
+        "blocker_count": len(validation.blockers),
         "isolated_count": len(result.isolated_items),
         "retrieval_count": len(context.retrieved_sources),
         "retrieval_digest": context.retrieval_digest,
@@ -491,8 +505,8 @@ def compose_preview_command(
     if context.source_job_id is not None:
         payload["source_job_id"] = context.source_job_id
     if json_output:
-        payload["warning_codes"] = [item.code for item in result.warnings]
-        payload["blocker_codes"] = []
+        payload["warning_codes"] = [item.code for item in validation.warnings]
+        payload["blocker_codes"] = [item.code for item in validation.blockers]
     _sync_output(payload, json_output)
 
 

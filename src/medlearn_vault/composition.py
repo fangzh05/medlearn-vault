@@ -16,9 +16,115 @@ from medlearn_vault.handoff import LearningSegment, MedLearnHandoff
 from medlearn_vault.source_index import SourceIndexError, search_index
 
 SECTION_NUMBERS = (
-    "一", "二", "三", "四", "五", "六", "七", "八", "九", "十", "十一", "十二", "十三",
-    "十四", "十五", "十六", "十七",
+    "一",
+    "二",
+    "三",
+    "四",
+    "五",
+    "六",
+    "七",
+    "八",
+    "九",
+    "十",
+    "十一",
+    "十二",
+    "十三",
+    "十四",
+    "十五",
+    "十六",
+    "十七",
 )
+SECTION_HEADINGS = tuple(
+    f"## {number}、{title}"
+    for number, title in zip(
+        SECTION_NUMBERS,
+        (
+            "概念边界",
+            "基本信息",
+            "定义与诊断核心",
+            "流行病学与疾病负担",
+            "病因与危险因素",
+            "发病机制与病理生理",
+            "临床表现",
+            "实验室检查与辅助检查",
+            "诊断、分型与严重程度评估",
+            "鉴别诊断",
+            "治疗",
+            "并发症与共病",
+            "预后、随访与预防",
+            "高频考点与易错点",
+            "相关概念",
+            "学习记录",
+            "证据来源与版本",
+        ),
+        strict=True,
+    )
+)
+TAG_VALUES = {
+    "实体": {
+        "疾病",
+        "综合征",
+        "症状",
+        "体征",
+        "检查",
+        "药物",
+        "治疗",
+        "病理过程",
+        "机制",
+        "解剖结构",
+        "病原体",
+        "评分工具",
+        "指南",
+    },
+    "学科": {
+        "内科学/呼吸系统",
+        "内科学/循环系统",
+        "内科学/消化系统",
+        "内科学/泌尿系统",
+        "内科学/血液系统",
+        "内科学/内分泌系统",
+        "内科学/风湿免疫",
+        "外科学/普通外科",
+        "外科学/骨科",
+        "外科学/泌尿外科",
+        "神经病学",
+        "儿科学",
+        "妇产科学",
+        "药理学",
+        "病理学",
+        "病理生理学",
+        "诊断学",
+        "医学影像学",
+        "急诊医学",
+        "重症医学",
+        "肿瘤学",
+    },
+    "系统": {
+        "呼吸系统",
+        "循环系统",
+        "消化系统",
+        "泌尿系统",
+        "血液系统",
+        "神经系统",
+        "内分泌系统",
+        "免疫系统",
+        "运动系统",
+        "生殖系统",
+        "感觉系统",
+        "皮肤",
+        "全身性",
+    },
+    "病程": {"急性", "亚急性", "慢性", "复发性", "进展性", "自限性"},
+    "临床场景": {"急诊", "门诊", "住院", "重症", "围手术期", "筛查", "长期管理"},
+    "指南": {"GOLD", "GINA", "ESC", "AHA", "ACC", "KDIGO", "NCCN", "CSCO", "WHO", "中国指南"},
+}
+
+
+def _tags_from_frontmatter(frontmatter: str) -> tuple[str, ...]:
+    match = re.search(r"^tags:\n((?:  - [^\n]+\n?)*)", frontmatter, re.M)
+    if match is None:
+        return ()
+    return tuple(line[4:].strip().strip("\"'") for line in match.group(1).splitlines())
 
 
 @dataclass(frozen=True)
@@ -472,22 +578,28 @@ def validate_generated_note(
     canonical = re.search(r"^canonical_name:\s*[\"']?(.+?)[\"']?\s*$", frontmatter, re.M)
     if len(title) != 1 or canonical is None or title[0] != canonical.group(1):
         blockers.append(CompositionIssue("blocker", "GENERATED_NOTE_H1_INVALID", "title"))
-    expected = [f"## {number}、" for number in SECTION_NUMBERS]
-    positions = [body.find(prefix) for prefix in expected]
-    if any(position < 0 for position in positions) or positions != sorted(positions):
+    h2 = tuple(re.findall(r"^## (?!#).+$", body, re.M))
+    if h2 != SECTION_HEADINGS:
         blockers.append(
             CompositionIssue("blocker", "GENERATED_NOTE_SECTION_ORDER_INVALID", "sections")
         )
-    tags = re.findall(r'^  - ["\']?([^\n"\']+)', frontmatter, re.M)
-    prefixes = ("实体/", "学科/", "系统/", "病程/", "临床场景/", "指南/")
+    tags = _tags_from_frontmatter(frontmatter)
+    dimensions = ("实体", "学科", "系统", "病程", "临床场景", "指南")
+    parsed = [tag.split("/", 1) for tag in tags]
     orders = [
-        next((i for i, prefix in enumerate(prefixes) if tag.startswith(prefix)), -1) for tag in tags
+        dimensions.index(parts[0]) if len(parts) == 2 and parts[0] in dimensions else -1
+        for parts in parsed
     ]
     if (
-        -1 in orders
+        not tags
+        or -1 in orders
         or orders != sorted(orders)
-        or sum(tag.startswith("实体/") for tag in tags) != 1
-        or sum(tag.startswith("学科/") for tag in tags) != 1
+        or len(tags) != len(set(tags))
+        or sum(parts[0] == "实体" for parts in parsed if len(parts) == 2) != 1
+        or sum(parts[0] == "学科" for parts in parsed if len(parts) == 2) != 1
+        or any(
+            len(parts) != 2 or parts[1] not in TAG_VALUES.get(parts[0], set()) for parts in parsed
+        )
     ):
         blockers.append(CompositionIssue("blocker", "GENERATED_NOTE_TAG_INVALID", "tags"))
     if not re.search(r"^review_status:\s*unreviewed\s*$", frontmatter, re.M) or not re.search(
@@ -498,7 +610,11 @@ def validate_generated_note(
         )
     learning_at = body.find("## 十六、学习记录")
     stable = body if learning_at < 0 else body[:learning_at]
-    if re.search(r"[A-Za-z]:\\|/(?:Users|home)/|medlearn\.sqlite3|sqlite:", markdown):
+    if re.search(
+        r"[A-Za-z]:\\|\\\\|/(?:Users|home|mnt|tmp|var|opt|srv)/|file://|medlearn\.sqlite3|sqlite:",
+        markdown,
+        re.I,
+    ):
         blockers.append(
             CompositionIssue("blocker", "GENERATED_NOTE_PRIVATE_PATH_LEAK", "private path")
         )
