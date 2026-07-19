@@ -27,8 +27,18 @@ from medlearn_vault.deepseek_composer import (
     DeepSeekComposerError,
     DeepSeekNoteComposer,
 )
+from medlearn_vault.sync_models import SyncError
+from medlearn_vault.windows_secrets import delete_token, load_token, store_token
 
 WEB_DIR = Path(__file__).with_name("webui")
+_KEY_PATH = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "MedLearn" / "ui-api-key.bin"
+
+
+def _saved_key() -> str | None:
+    try:
+        return load_token(_KEY_PATH)
+    except SyncError:
+        return None
 
 
 def _json_bytes(value: Any) -> bytes:
@@ -49,6 +59,11 @@ def _decode_file(value: dict[str, Any] | None, *, binary: bool = False) -> bytes
 
 
 def compose_from_web(payload: dict[str, Any]) -> dict[str, Any]:
+    # Remove it from the decoded request immediately, including for stub mode.
+    # It then exists only in this stack frame while a DeepSeek request is in progress.
+    api_key = payload.pop("api_key", None)
+    remember_key = payload.pop("remember_api_key", False) is True
+    use_saved_key = payload.pop("use_saved_api_key", False) is True
     intake = _decode_file(payload.get("intake"))
     template = _decode_file(payload.get("template"))
     prompt = _decode_file(payload.get("prompt"))
@@ -88,7 +103,10 @@ def compose_from_web(payload: dict[str, Any]) -> dict[str, Any]:
             else:
                 if not isinstance(prompt, str) or not prompt.strip():
                     raise ValueError("DEEPSEEK_PROMPT_REQUIRED")
-                api_key = payload.get("api_key") or os.environ.get("DEEPSEEK_API_KEY")
+                if isinstance(api_key, str) and api_key and remember_key:
+                    store_token(_KEY_PATH, api_key)
+                elif not isinstance(api_key, str) or not api_key:
+                    api_key = _saved_key() if use_saved_key else None
                 composer = DeepSeekNoteComposer(
                     prompt,
                     model=payload.get("model", DEFAULT_MODEL),
@@ -121,7 +139,7 @@ def compose_from_web(payload: dict[str, Any]) -> dict[str, Any]:
                 "request_digest": request_digest,
                 "output_sha256": output_sha256,
             }
-    except (OSError, ValueError, DeepSeekComposerError) as exc:
+    except (OSError, ValueError, DeepSeekComposerError, SyncError) as exc:
         return {"status": "rejected", "error_code": str(exc), "markdown": None}
 
 
@@ -144,6 +162,9 @@ class _Handler(BaseHTTPRequestHandler):
         if self.path == "/api/health":
             self._send(HTTPStatus.OK, {"status": "ok", "default_composer": "stub"})
             return
+        if self.path == "/api/key/status":
+            self._send(HTTPStatus.OK, {"saved": _saved_key() is not None})
+            return
         if self.path in {"/", "/index.html"}:
             self._send(HTTPStatus.OK, (WEB_DIR / "index.html").read_bytes(), "text/html")
             return
@@ -156,6 +177,10 @@ class _Handler(BaseHTTPRequestHandler):
         self._send(HTTPStatus.NOT_FOUND, {"error_code": "WEB_NOT_FOUND"})
 
     def do_POST(self) -> None:  # noqa: N802
+        if self.path == "/api/key/clear":
+            delete_token(_KEY_PATH)
+            self._send(HTTPStatus.OK, {"saved": False})
+            return
         if self.path != "/api/compose":
             self._send(HTTPStatus.NOT_FOUND, {"error_code": "WEB_NOT_FOUND"})
             return
@@ -180,7 +205,9 @@ class _Handler(BaseHTTPRequestHandler):
         return
 
 
-def serve(host: str = "127.0.0.1", port: int = 8765, *, open_browser: bool = True) -> None:
+def serve(port: int = 8765, *, open_browser: bool = True) -> None:
+    """Serve the UI on loopback only; it is never exposed to the LAN."""
+    host = "127.0.0.1"
     server = ThreadingHTTPServer((host, port), _Handler)
     url = f"http://{host}:{port}/"
     if open_browser:

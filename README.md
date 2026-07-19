@@ -150,7 +150,27 @@ To avoid typing the preview command, start the local UI from the repository root
 medlearn ui
 ```
 
-It opens a browser workspace where you can choose the Intake JSON, Medical Note V1 template, prompt, optional local SQLite index, current note, and golden example. `stub` is the offline default; choosing DeepSeek is an explicit network opt-in. The API key is used only for that request and is not stored in the browser, repository, or logs. Generated Markdown is previewed in the browser and downloaded only when you click “保存 Markdown”. The UI does not publish to Vault, R2, Worker, or Obsidian sync.
+On Windows, after installation you can also double-click
+`启动 MedLearn UI.cmd` in the repository root. The launcher opens the browser
+automatically and keeps a short Chinese error message on screen if startup fails.
+
+It opens a browser workspace where you can choose the Intake JSON, Medical Note V1 template, prompt, optional local SQLite index, current note, and golden example. `stub` is the offline default; choosing DeepSeek is an explicit network opt-in. Generated Markdown is previewed in the browser and downloaded only when you click “保存 Markdown”.
+
+### GPT plugin automatic generation
+
+The MedLearn MCP plugin also provides `generate_medical_note`. A GPT can send
+Markdown to the Worker, which calls DeepSeek with the server-side
+`DEEPSEEK_API_KEY` Cloudflare Secret and writes the generated file to
+`MedLearn/Generated/` in Vault R2. The normal Vault sync then downloads it to
+Obsidian. The API key is never provided to GPT, stored in R2, returned by the
+API, or written to logs. Deploy the Worker after setting the secret:
+
+```powershell
+cd worker
+npx wrangler versions secret put DEEPSEEK_API_KEY
+npm run deploy
+```
+The service is permanently bound to `127.0.0.1`; it cannot be exposed to the LAN. The API key is supplied only in a single loopback request, cleared from the input after that request, and is not read from environment variables or written to browser storage, cookies, URLs, logs, or configuration files.
 
 The repository currently implements:
 

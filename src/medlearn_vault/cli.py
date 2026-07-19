@@ -152,12 +152,11 @@ sync_app.add_typer(sync_schedule_app, name="schedule")
 
 @app.command("ui")
 def ui_command(
-    host: Annotated[str, typer.Option("--host")] = "127.0.0.1",
     port: Annotated[int, typer.Option("--port")] = 8765,
     no_browser: Annotated[bool, typer.Option("--no-browser")] = False,
 ) -> None:
-    """Open the local browser workspace for note composition."""
-    serve_web(host, port, open_browser=not no_browser)
+    """Open the local-only browser workspace for note composition."""
+    serve_web(port, open_browser=not no_browser)
 
 
 def _source_index_error(exc: SourceIndexError, json_output: bool) -> NoReturn:

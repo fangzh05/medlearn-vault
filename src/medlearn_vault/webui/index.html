@@ -38,7 +38,7 @@
           <div class="field"><label for="golden_example">黄金样例</label><div class="file-row"><input id="golden_example" type="file" accept=".md,.markdown" /><span class="file-name">可选：只用于风格参考</span><span class="choose">选择</span></div></div>
           <div class="field"><label for="model">模型</label><select id="model"><option value="deepseek-v4-flash">deepseek-v4-flash</option><option value="deepseek-v4-pro">deepseek-v4-pro</option></select></div>
         </div>
-        <div class="composer-row"><div class="field grow"><label for="composer">Composer 模式</label><select id="composer"><option value="stub">stub · 离线预览</option><option value="deepseek">DeepSeek · 生成完整笔记</option></select></div><div class="field grow" id="keyWrap" hidden><label for="apiKey">DeepSeek API Key <span class="muted">仅本次使用，不保存</span></label><input id="apiKey" type="password" autocomplete="off" placeholder="sk-..." /></div></div>
+        <div class="composer-row"><div class="field grow"><label for="composer">Composer 模式</label><select id="composer"><option value="stub">stub · 离线预览</option><option value="deepseek">DeepSeek · 生成完整笔记</option></select></div><div class="field grow" id="keyWrap" hidden><label for="apiKey">DeepSeek API Key <span id="keyStatus" class="muted">仅本次使用</span></label><input id="apiKey" type="password" autocomplete="off" placeholder="sk-..." /><label><input id="rememberKey" type="checkbox" /> 记住此设备</label> <button id="clearKey" type="button" hidden>清除已保存密钥</button></div></div>
         <div class="actions"><button id="generate" class="primary">生成笔记 <span>↗</span></button><span id="statusText" class="status">准备就绪</span></div>
         <div id="issues" class="issues" hidden></div>
       </section>

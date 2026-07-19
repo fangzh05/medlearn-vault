@@ -1,6 +1,19 @@
 const state = { files: {}, output: "" };
 const $ = (id) => document.getElementById(id);
 
+let savedKey = false;
+async function refreshKeyStatus() {
+  const response = await fetch("/api/key/status");
+  savedKey = (await response.json()).saved;
+  $("keyStatus").textContent = savedKey ? "已安全保存（不会显示明文）" : "仅本次使用";
+  $("clearKey").hidden = !savedKey;
+}
+refreshKeyStatus().catch(() => {});
+$("clearKey").addEventListener("click", async () => {
+  await fetch("/api/key/clear", { method: "POST" });
+  await refreshKeyStatus();
+});
+
 async function readFile(input) {
   const file = input.files[0];
   if (!file) return null;
@@ -57,6 +70,8 @@ $("generate").addEventListener("click", async () => {
       composer,
       model: $("model").value,
       api_key: $("apiKey").value || null,
+      remember_api_key: $("rememberKey").checked,
+      use_saved_api_key: savedKey && !$("apiKey").value,
       retrieval_limit: 6,
     };
     if (composer === "deepseek" && !payload.prompt) throw Error("请选择 Prompt 文件");
@@ -83,12 +98,15 @@ $("generate").addEventListener("click", async () => {
       result.output_sha256 ? `output ${result.output_sha256.slice(0, 18)}…` : "",
     ].filter(Boolean).map((x) => `<span>${x}</span>`).join("");
     status.textContent = "生成完成";
+    if (composer === "deepseek" && $("rememberKey").checked) await refreshKeyStatus();
   } catch (error) {
     status.textContent = "未生成";
     issues.innerHTML = `<strong>无法生成</strong><br>${String(error.message || error).replaceAll("<", "&lt;")}`;
     issues.hidden = false;
     $("previewTitle").textContent = "还没有生成笔记";
   } finally {
+    // Keep the key out of browser storage and discard it as soon as this request ends.
+    $("apiKey").value = "";
     button.disabled = false;
   }
 });
