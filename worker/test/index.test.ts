@@ -46,7 +46,7 @@ class Bucket {
 
   async put(
     key: string, value: string | ArrayBuffer,
-    options?: { onlyIf?: { etagMatches?: string } | Headers },
+    options?: { onlyIf?: { etagMatches?: string } | Headers; httpMetadata?: { contentType?: string } },
   ) {
     if (this.failNextPrefix && key.startsWith(this.failNextPrefix)) {
       this.failNextPrefix = undefined;
@@ -57,7 +57,7 @@ class Bucket {
     if (condition instanceof Headers && condition.get("If-None-Match") === "*" && current) return null;
     if (!(condition instanceof Headers) && condition?.etagMatches && current?.etag !== condition.etagMatches) return null;
     const bytes = typeof value === "string" ? new TextEncoder().encode(value) : new Uint8Array(value.slice(0));
-    const stored = { bytes, etag: `"etag-${++this.revision}"` };
+    const stored = { bytes, etag: `"etag-${++this.revision}"`, contentType: options?.httpMetadata?.contentType };
     this.objects.set(key, stored);
     return { key, etag: stored.etag, httpEtag: `"${stored.etag}"` };
   }
@@ -1016,6 +1016,25 @@ function setupVaultEnv(syncToken = "sync-secret-that-is-at-least-32-bytes") {
 
 describe("vault read API", () => {
   const syncToken = "sync-secret-that-is-at-least-32-bytes";
+
+  it("generates a note, records it in R2, and exposes it through Vault sync", async () => {
+    const { vaultBucket, env: noteEnv } = setupVaultEnv(syncToken);
+    noteEnv.DEEPSEEK_API_KEY = "server-secret";
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ choices: [{ message: { content: "# 自动笔记\n" } }] }), { status: 200 })));
+    const created = await handle(request("/v1/notes", {
+      method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ title: "COPD", markdown: "原始笔记" }),
+    }), noteEnv);
+    expect(created.status).toBe(201);
+    const result = await created.json<{ path: string }>();
+    const manifest = await handle(request("/v1/vault/manifest", { headers: vaultAuth(syncToken) }), noteEnv);
+    expect(manifest.status).toBe(200);
+    expect((await manifest.json<{ artifacts: { path: string }[] }>()).artifacts.map(item => item.path)).toContain(result.path);
+    const downloaded = await handle(request(`/v1/vault/files?path=${encodeURIComponent(result.path)}`, { headers: vaultAuth(syncToken) }), noteEnv);
+    expect(downloaded.status).toBe(200);
+    expect(await downloaded.text()).toBe("# 自动笔记\n");
+    expect(vaultBucket.text(result.path)).toBe("# 自动笔记\n");
+  });
 
   // ── auth ──────────────────────────────────────────────────────────
 

@@ -23,6 +23,7 @@ export interface Env {
   MEDLEARN_SYNC_TOKEN?: string;
   GITHUB_ACTIONS_DISPATCH_TOKEN?: string;
   MEDLEARN_WORK_DISPATCH_MODE?: string;
+  DEEPSEEK_API_KEY?: string;
 }
 
 type DispatchMode = "github" | "persist_only";
@@ -743,6 +744,30 @@ async function routeV1(request: Request, env: Config, url: URL): Promise<Respons
   return reply(404, { error: "NOT_FOUND" });
 }
 
+async function createGeneratedNote(request: Request, env: Env): Promise<Response> {
+  if (!(await authorized(request, env.MEDLEARN_INGEST_TOKEN ?? ""))) return reply(401, { error: "UNAUTHORIZED" });
+  if (!env.VAULT_BUCKET || !env.DEEPSEEK_API_KEY) return reply(503, { error: "NOTE_GENERATION_MISCONFIGURED" });
+  if (request.headers.get("content-type")?.split(";", 1)[0] !== "application/json") return reply(415, { error: "INVALID_CONTENT_TYPE" });
+  const body = await request.arrayBuffer();
+  if (body.byteLength > MAX_BODY) return reply(413, { error: "BODY_TOO_LARGE" });
+  let input: { markdown?: unknown; title?: unknown };
+  try { input = JSON.parse(new TextDecoder().decode(body)); } catch { return reply(400, { error: "INVALID_JSON" }); }
+  if (typeof input.markdown !== "string" || !input.markdown.trim() || input.markdown.length > 500_000) return reply(400, { error: "INVALID_MARKDOWN" });
+  const title = typeof input.title === "string" && /^[\w\-\u4e00-\u9fff]{1,80}$/.test(input.title) ? input.title : "note";
+  const api = await fetch("https://api.deepseek.com/chat/completions", { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${env.DEEPSEEK_API_KEY}` }, body: JSON.stringify({ model: "deepseek-chat", messages: [{ role: "system", content: "Generate a concise medical learning note in Markdown." }, { role: "user", content: input.markdown }] }) });
+  if (!api.ok) return reply(502, { error: "NOTE_GENERATION_FAILED" });
+  let generated: string;
+  try { generated = ((await api.json()) as { choices?: Array<{ message?: { content?: unknown } }> }).choices?.[0]?.message?.content as string; } catch { return reply(502, { error: "NOTE_GENERATION_FAILED" }); }
+  if (typeof generated !== "string" || !generated.trim()) return reply(502, { error: "NOTE_GENERATION_FAILED" });
+  const id = await sha256(body);
+  const path = `MedLearn/Generated/${title}-${id.slice(0, 16)}.md`;
+  const bytes = new TextEncoder().encode(generated);
+  await env.VAULT_BUCKET.put(path, bytes, { httpMetadata: { contentType: "text/markdown; charset=utf-8" } });
+  const record = { path, media_type: "text/markdown; charset=utf-8", content_digest: `sha256:${await sha256(bytes)}`, byte_length: bytes.byteLength };
+  await env.VAULT_BUCKET.put(`v1/generated/${id}.json`, canonicalJsonBytes(record), { httpMetadata: { contentType: "application/json; charset=utf-8" } });
+  return reply(201, { status: "generated", path });
+}
+
 // ── Vault read-only types ────────────────────────────────────────────
 
 interface VaultReceiptArtifact {
@@ -1042,7 +1067,19 @@ async function visibleManifest(bucket: R2Bucket): Promise<{ manifest: VaultManif
     } catch { return { manifest: { manifest_version: "0.2.0", artifacts: [] }, error: "INVALID_PRESENTATION_RECEIPT" }; }
   }
   const legacy = await listAllReceipts(bucket);
-  return legacy.error ? { manifest: { manifest_version: "0.1.0", artifacts: [] }, error: legacy.error } : buildManifest(legacy.receipts);
+  if (legacy.error) return { manifest: { manifest_version: "0.1.0", artifacts: [] }, error: legacy.error };
+  const base = buildManifest(legacy.receipts);
+  if (base.error) return base;
+  const generated = await bucket.list({ prefix: "v1/generated/" });
+  for (const item of generated.objects) {
+    const stored = await bucket.get(item.key);
+    if (!stored) return { manifest: { manifest_version: "0.1.0", artifacts: [] }, error: "VAULT_STORAGE_UNAVAILABLE" };
+    const value = await stored.json<VaultReceiptArtifact>();
+    if (!value.path.startsWith("MedLearn/Generated/") || value.media_type !== "text/markdown; charset=utf-8" || !DIGEST_RE.test(value.content_digest)) return { manifest: { manifest_version: "0.1.0", artifacts: [] }, error: "INVALID_GENERATED_NOTE" };
+    base.manifest.artifacts.push(value);
+  }
+  base.manifest.artifacts.sort((a, b) => a.path.localeCompare(b.path));
+  return base;
 }
 
 function validateFilePath(path: string): string | null {
@@ -1197,6 +1234,10 @@ export async function handle(request: Request, env: Env): Promise<Response> {
       console.error(JSON.stringify({ stage: "vault_route", error_code: "VAULT_STORAGE_FAILURE" }));
       return secure(reply(503, { error: "VAULT_STORAGE_UNAVAILABLE" }));
     }
+  }
+  if (request.method === "POST" && url.pathname === "/v1/notes") {
+    try { return secure(await createGeneratedNote(request, env)); }
+    catch { return secure(reply(503, { error: "NOTE_GENERATION_UNAVAILABLE" })); }
   }
 
   const configured = config(env);
