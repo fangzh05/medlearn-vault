@@ -615,6 +615,14 @@ function mcpTool(): Record<string, unknown> {
   };
 }
 
+function mcpNoteTool(): Record<string, unknown> {
+  return {
+    name: "generate_medical_note", title: "Generate and sync a medical Markdown note",
+    description: "Generate a medical learning note from supplied Markdown and save it for Obsidian sync.",
+    inputSchema: { type: "object", additionalProperties: false, required: ["title", "markdown"], properties: { title: { type: "string", minLength: 1, maxLength: 80 }, markdown: { type: "string", minLength: 1, maxLength: 500000 } } },
+  };
+}
+
 function authChallenge(metadataUrl: string): string {
   return `Bearer resource_metadata="${metadataUrl}", error="insufficient_scope", error_description="${MCP_SCOPE} is required"`;
 }
@@ -678,15 +686,24 @@ async function routeMcp(request: Request, env: Env): Promise<Response> {
   if (call.method === "initialize") return notification ? notify() : reply(200, { jsonrpc: "2.0", id, result: { protocolVersion: "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: "medlearn-work", version: "0.15.0" }, instructions: MCP_INSTRUCTIONS } });
   if (call.method === "notifications/initialized") return notify();
   if (call.method === "ping") return notification ? notify() : reply(200, { jsonrpc: "2.0", id, result: {} });
-  if (call.method === "tools/list") return notification ? notify() : reply(200, { jsonrpc: "2.0", id, result: { tools: [mcpTool()] } });
+  if (call.method === "tools/list") return notification ? notify() : reply(200, { jsonrpc: "2.0", id, result: { tools: [mcpTool(), mcpNoteTool()] } });
   if (call.method !== "tools/call") return mcpError(id, "HANDOFF_INVALID_JSON");
   if (notification) return notify();
   const oauth = oauthConfig(env);
   const metadataUrl = oauth ? `${oauth.resource}/.well-known/oauth-protected-resource` : "";
   if (!(await accessTokenPayload(request, env))) return mcpAuthError(id, metadataUrl);
+  const params = call.params as Record<string, unknown> | undefined;
+  if (params?.name === "generate_medical_note" && typeof params.arguments === "object" && params.arguments !== null) {
+    const args = params.arguments as Record<string, unknown>;
+    if (Object.keys(args).length !== 2 || typeof args.title !== "string" || typeof args.markdown !== "string") return mcpError(id, "NOTE_SCHEMA_INVALID");
+    const internal = new Request("https://medlearn.invalid/v1/notes", { method: "POST", headers: { authorization: `Bearer ${env.MEDLEARN_INGEST_TOKEN ?? ""}`, "content-type": "application/json" }, body: JSON.stringify(args) });
+    const generated = await createGeneratedNote(internal, env);
+    if (!generated.ok) return mcpError(id, "NOTE_GENERATION_FAILED", -32603);
+    const result = await generated.json<{ status: string; path: string }>();
+    return reply(200, { jsonrpc: "2.0", id, result: { content: [{ type: "text", text: JSON.stringify(result) }], structuredContent: result } });
+  }
   const configured = workConfig(env);
   if (!configured) return mcpError(id, "SERVICE_MISCONFIGURED", -32603);
-  const params = call.params as Record<string, unknown> | undefined;
   if (!params || params.name !== "submit_learning_handoff" || typeof params.arguments !== "object" || params.arguments === null)
     return mcpError(id, "HANDOFF_SCHEMA_INVALID");
   const argumentsValue = params.arguments as Record<string, unknown>;

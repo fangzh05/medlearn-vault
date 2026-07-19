@@ -526,13 +526,13 @@ describe("Chat Project Source MCP handoff", () => {
     expect((await batch.json<{ error: { code: number } }>()).error.code).toBe(-32600);
   });
 
-  it("exposes only submit_learning_handoff and validates the shared schema", async () => {
+  it("exposes handoff and note-generation tools", async () => {
     const ajv = new Ajv({ strict: false });
     addFormats(ajv);
     expect(ajv.compile(handoffSchema)(handoff())).toBe(true);
     const response = await handle(mcp("tools/list"), env);
     const body = await response.json<{ result: { tools: { name: string; inputSchema: object }[] } }>();
-    expect(body.result.tools.map((tool) => tool.name)).toEqual(["submit_learning_handoff"]);
+    expect(body.result.tools.map((tool) => tool.name)).toEqual(["submit_learning_handoff", "generate_medical_note"]);
     expect(ajv.compile(body.result.tools[0].inputSchema)( { handoff: handoff() } )).toBe(true);
     expect(body.result.tools[0]).toMatchObject({ annotations: { readOnlyHint: false, openWorldHint: false, destructiveHint: false }, securitySchemes: [{ type: "oauth2", scopes: ["medlearn:handoff:submit"] }] });
   });
