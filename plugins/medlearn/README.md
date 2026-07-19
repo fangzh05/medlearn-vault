@@ -1,11 +1,19 @@
 # MedLearn Plugin
 
-MedLearn Plugin directly invokes the single authenticated
-`submit_learning_handoff` MCP tool. The normal user command is:
+MedLearn Plugin invokes authenticated MCP tools. The normal user command is:
 
 ```text
 @MedLearn 存档当前学习对话
 ```
+
+For automatic note generation and Obsidian sync, ask:
+
+```text
+@MedLearn 把这篇笔记生成医学笔记并同步到 Obsidian
+```
+
+The plugin calls `generate_medical_note`; the Worker uses its Cloudflare
+`DEEPSEEK_API_KEY` Secret and saves the result under `MedLearn/Generated/`.
 
 There is no separate Skill layer. The Plugin instructions define invocation
 behavior; the Worker remains the enforceable security and validation boundary.
